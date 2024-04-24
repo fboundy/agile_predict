@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% for forecast in forecast_list %}
+<div class="forecast-entry">
+  <h2><a href="{{ forecast.get_absolute_url }}">{{ forecast.name }}</a></h2> <!-- new here!!! -->
+
+</div>
+{% endfor %}
+{% endblock content %}
