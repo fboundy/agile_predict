@@ -1,17 +1,12 @@
 from django.shortcuts import render
 
 # Create your views here.
-from django.views.generic import ListView, DetailView, TemplateView
+from django.views.generic import TemplateView
 from .models import Forecasts, ForecastData, PriceHistory
 import plotly.graph_objects as go
 
 
-class ForecastsListView(ListView):
-    model = Forecasts
-    template_name = "home.html"
-
-
-class Graph(TemplateView):
+class GraphView(TemplateView):
     template_name = "graph.html"
 
     def get_context_data(self, **kwargs):
@@ -33,7 +28,7 @@ class Graph(TemplateView):
             # f = Forecasts.objects.latest("created_at")
             d = ForecastData.objects.filter(forecast=f)[: (48 * 7)]
 
-            context = super(Graph, self).get_context_data(**kwargs)
+            context = super(GraphView, self).get_context_data(**kwargs)
 
             x = [a.date_time for a in d]
 
@@ -56,7 +51,7 @@ class Graph(TemplateView):
         legend = dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 
         layout = go.Layout(
-            title="Agile Forecast",
+            title="Agile Forecast - NW England (Area G)",
             yaxis={"title": "Agile Price [p/kWh]"},
             legend=legend,
             width=1000,

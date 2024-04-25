@@ -1,7 +1,6 @@
 from django.urls import path
-from .views import ForecastsListView, Graph
+from .views import GraphView
 
 urlpatterns = [
-    path("", ForecastsListView.as_view(), name="home"),
-    path("graph", Graph.as_view(), name="graph"),
+    path("", GraphView.as_view(), name="graph"),
 ]

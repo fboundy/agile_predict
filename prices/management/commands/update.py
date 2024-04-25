@@ -457,21 +457,14 @@ class Command(BaseCommand):
         fc = get_latest_forecast()
         print(fc)
 
-        # recent = pd.Timestamp.now(tz="GB") - pd.Timedelta("14d")
-        # fig, ax = plt.subplots(1, 1, figsize=(16, 6), layout="tight")
-        # prices["day_ahead"].loc[recent:].plot(ax=ax)
-        # X = hist.drop("demand_source", axis=1)
         X = hist
         y = prices["day_ahead"].loc[hist.index]
 
         print(X)
         print(y)
 
-        # model = LGBMRegressor(n_estimators=200, num_leaves=32)
         model = xg.XGBRegressor(objective="reg:squarederror", booster="dart")
         model.fit(X, y)
-        # train_y = pd.Series(index=hist.index, data=model.predict(X))
-        # train_y.loc[recent:].plot(ax=ax)
 
         cols = X.columns
         fc["day_ahead"] = model.predict(fc[cols])
@@ -480,7 +473,7 @@ class Command(BaseCommand):
         print(fc[["agile_pred", "agile_actual"]])
         fc.drop(["time", "day_of_week", "day_of_year", "day_ahead"], axis=1, inplace=True)
 
-        f = Forecasts(name=pd.Timestamp.now(tz="GB").strftime("%Y-%m-%d %H:%M %z"))
+        f = Forecasts(name=pd.Timestamp.now(tz="GB").strftime("%Y-%m-%d %H:%M"))
         f.save()
 
         fc["forecast"] = f
