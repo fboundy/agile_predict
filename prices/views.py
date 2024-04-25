@@ -1,15 +1,23 @@
 from django.shortcuts import render
+import pandas as pd
 
 # Create your views here.
 from django.views.generic import TemplateView
 from .models import Forecasts, ForecastData, PriceHistory
 import plotly.graph_objects as go
 
+from django.core.management import call_command
+
 
 class GraphView(TemplateView):
     template_name = "graph.html"
 
     def get_context_data(self, **kwargs):
+        f = Forecasts.objects.latest("created_at")
+
+        if (((pd.Timestamp.now(tz="GB") - pd.Timestamp(f.created_at)).total_seconds()) / 3600) > 6:
+            call_command("update")
+
         data = []
         p = PriceHistory.objects.all().order_by("-date_time")[: 48 * 7]
         # p = PriceHistory.objects.all()

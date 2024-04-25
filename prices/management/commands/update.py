@@ -11,7 +11,6 @@ from datetime import datetime
 from django.core.management.base import BaseCommand
 from ...models import History, PriceHistory, Forecasts, ForecastData
 
-import matplotlib.pyplot as plt
 
 OCTOPUS_PRODUCT_URL = r"https://api.octopus.energy/v1/products/"
 
@@ -78,7 +77,7 @@ def get_history_from_model():
         df = pd.DataFrame(list(History.objects.all().values()))
         df["time"] = df["date_time"].dt.hour + df["date_time"].dt.minute / 60
         df["day_of_week"] = df["date_time"].dt.day_of_week.astype(int)
-        df["day_of_year"] = df["date_time"].dt.day_of_year.astype(int)
+        # df["day_of_year"] = df["date_time"].dt.day_of_year.astype(int)
         df.index = pd.to_datetime(df["date_time"])
         df.index = df.index.tz_convert("GB")
         df.drop(["id", "date_time"], axis=1, inplace=True)
@@ -237,7 +236,7 @@ def get_latest_forecast():
     df["date_time"] = df.index
     df["time"] = df["date_time"].dt.hour + df["date_time"].dt.minute / 60
     df["day_of_week"] = df["date_time"].dt.day_of_week.astype(int)
-    df["day_of_year"] = df["date_time"].dt.day_of_year.astype(int)
+    # df["day_of_year"] = df["date_time"].dt.day_of_year.astype(int)
 
     df.index = df.index.tz_convert("GB")
     df.drop(["date_time", "NATIONALDEMAND"], axis=1, inplace=True)
@@ -457,8 +456,8 @@ class Command(BaseCommand):
         fc = get_latest_forecast()
         print(fc)
 
-        X = hist
-        y = prices["day_ahead"].loc[hist.index]
+        X = hist.iloc[-48 * 28 :]
+        y = prices["day_ahead"].loc[X.index]
 
         print(X)
         print(y)
@@ -471,7 +470,8 @@ class Command(BaseCommand):
         fc["agile_pred"] = day_ahead_to_agile(fc["day_ahead"]).astype(float).round(2)
         fc["agile_actual"] = prices["agile"].loc[fc.index[0] :]
         print(fc[["agile_pred", "agile_actual"]])
-        fc.drop(["time", "day_of_week", "day_of_year", "day_ahead"], axis=1, inplace=True)
+        # fc.drop(["time", "day_of_week", "day_of_year", "day_ahead"], axis=1, inplace=True)
+        fc.drop(["time", "day_of_week", "day_ahead"], axis=1, inplace=True)
 
         f = Forecasts(name=pd.Timestamp.now(tz="GB").strftime("%Y-%m-%d %H:%M"))
         f.save()

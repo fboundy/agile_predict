@@ -12,6 +12,7 @@ class PriceHistoryAPIView(generics.ListAPIView):
 
 
 class PriceForecastAPIView(generics.ListAPIView):
-    # queryset = Forecasts.objects.all()
-    queryset = [Forecasts.objects.latest("created_at")]
+    ids = [f.id for f in Forecasts.objects.all().order_by("-created_at")[:3]]
+
+    queryset = Forecasts.objects.filter(id__in=ids)
     serializer_class = PriceForecastSerializer

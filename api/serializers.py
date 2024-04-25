@@ -12,7 +12,7 @@ class PriceHistorySerializer(serializers.ModelSerializer):
 class DataSerializer(serializers.ModelSerializer):
     class Meta:
         model = ForecastData
-        fields = ["date_time", "agile_pred", "agile_actual"]
+        fields = ["date_time", "agile_pred"]
 
 
 class PriceForecastSerializer(serializers.ModelSerializer):
