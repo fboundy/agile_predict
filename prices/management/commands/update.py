@@ -7,6 +7,7 @@ from http import HTTPStatus
 from requests.exceptions import HTTPError
 from urllib import parse
 from datetime import datetime
+from sklearn.metrics import mean_squared_error as MSE
 
 from django.core.management.base import BaseCommand
 from ...models import History, PriceHistory, Forecasts, ForecastData
@@ -459,11 +460,21 @@ class Command(BaseCommand):
         X = hist.iloc[-48 * 28 :]
         y = prices["day_ahead"].loc[X.index]
 
-        print(X)
-        print(y)
+        model = xg.XGBRegressor(
+            objective="reg:squarederror",
+            booster="dart",
+            # max_depth=0,
+            gamma=0.3,
+            eval_metric="rmse",
+        )
 
-        model = xg.XGBRegressor(objective="reg:squarederror", booster="dart", max_depth=0)
-        model.fit(X, y)
+        model.fit(X, y, verbose=True)
+        model_day_ahead = pd.Series(index=y.index, data=model.predict(X))
+
+        model_agile = day_ahead_to_agile(model_day_ahead)
+        rmse = MSE(model_agile, prices["agile"].loc[X.index]) ** 0.5
+
+        print(f"RMS Error: {rmse: 0.2f} p/kWh")
 
         cols = X.columns
         fc["day_ahead"] = model.predict(fc[cols])
