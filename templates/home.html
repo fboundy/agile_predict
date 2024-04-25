@@ -1,10 +1,37 @@
 {% extends "base.html" %}
 
 {% block content %}
-{% for forecast in forecast_list %}
+{% for forecast in object_list %}
 <div class="forecast-entry">
-  <h2><a href="{{ forecast.get_absolute_url }}">{{ forecast.name }}</a></h2> <!-- new here!!! -->
-
+  <h3><a href="{{ forecast.get_absolute_url }}">{{ forecast.name }}</a></h3>
 </div>
 {% endfor %}
+
+<canvas id="myChart"></canvas>
+The chart should go here:
+<script>
+  var ctx = document.getElementById('myChart').getContext('2d');
+  var chart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+          labels: {{ chart_data|safe }}.map(item => item.country),
+          datasets: [{
+              label: 'Total Net Worth',
+              data: {{ chart_data|safe }}.map(item => item.total_net_worth),
+              backgroundColor: 'rgba(54, 162, 235, 0.2)',
+              borderColor: 'rgba(54, 162, 235, 1)',
+              borderWidth: 1    
+          }]
+      },
+      options: {
+          scales: {
+              y: {
+                  beginAtZero: true
+              }
+          }
+      }
+  });
+</script>
+
 {% endblock content %}
+

@@ -1,15 +1,71 @@
 from django.shortcuts import render
 
 # Create your views here.
-from django.views.generic import ListView, DetailView
-from .models import Forecasts, ForecastData
+from django.views.generic import ListView, DetailView, TemplateView
+from .models import Forecasts, ForecastData, PriceHistory
+import plotly.graph_objects as go
 
 
-class ForecastListView(ListView):
+class ForecastsListView(ListView):
     model = Forecasts
     template_name = "home.html"
 
 
-class ForecastDetailView(DetailView):
-    model = ForecastData
-    template_name = "detail.html"
+class Graph(TemplateView):
+    template_name = "graph.html"
+
+    def get_context_data(self, **kwargs):
+        data = []
+        p = PriceHistory.objects.all().order_by("-date_time")[: 48 * 7]
+        # p = PriceHistory.objects.all()
+
+        data = data + [
+            go.Scatter(
+                x=[a.date_time for a in p],
+                y=[a.agile for a in p],
+                marker={"symbol": 104, "size": 1, "color": "black"},
+                mode="lines",
+                name="Actual",
+            )
+        ]
+
+        for f in Forecasts.objects.all().order_by("-created_at")[:3]:
+            # f = Forecasts.objects.latest("created_at")
+            d = ForecastData.objects.filter(forecast=f)[: (48 * 7)]
+
+            context = super(Graph, self).get_context_data(**kwargs)
+
+            x = [a.date_time for a in d]
+
+            data = data + [
+                go.Scatter(
+                    x=x,
+                    y=[a.agile_pred for a in d],
+                    marker={"symbol": 104, "size": 10},
+                    mode="lines",
+                    name=f.name,
+                )
+            ]
+        # trace2 = go.Scatter(
+        #     x=x,
+        #     y=[a.agile_actual for a in d],
+        #     marker={"color": "blue", "symbol": 104, "size": 10},
+        #     mode="lines",
+        #     name="Actual",
+        # )
+        legend = dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+
+        layout = go.Layout(
+            title="Agile Forecast",
+            yaxis={"title": "Agile Price [p/kWh]"},
+            legend=legend,
+            width=1000,
+        )
+        figure = go.Figure(
+            data=data,
+            layout=layout,
+        )
+
+        context["graph"] = figure.to_html()
+
+        return context

@@ -1,0 +1,26 @@
+from rest_framework import serializers
+from prices.models import PriceHistory, ForecastData, Forecasts
+
+
+class PriceHistorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PriceHistory
+        fields = ["date_time", "agile", "day_ahead"]
+        depth = 1
+
+
+class DataSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ForecastData
+        fields = ["date_time", "agile_pred", "agile_actual"]
+
+
+class PriceForecastSerializer(serializers.ModelSerializer):
+    # data = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
+    # data = serializers.SlugRelatedField(many=True, read_only=True, slug_field="agile")
+    data = DataSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Forecasts
+        fields = ["name", "created_at", "data"]
+        depth = 1

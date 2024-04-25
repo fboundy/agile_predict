@@ -142,8 +142,8 @@ def get_latest_history(start):
             "params": {"offset": 254110 + delta},
             "record_path": ["result", "records"],
             "date_col": "DATETIME",
-            "cols": ["WIND", "SOLAR"],
-            "rename": ["wind", "solar"],
+            "cols": ["SOLAR"],
+            "rename": ["solar"],
         },
         {
             "url": "https://archive-api.open-meteo.com/v1/archive",
@@ -193,8 +193,8 @@ def get_latest_forecast():
             "url": "https://api.nationalgrideso.com/api/3/action/datastore_search?resource_id=db6c038f-98af-4570-ab60-24d71ebd0ae5&limit=1000",
             "record_path": ["result", "records"],
             "tz": "UTC",
-            "cols": ["EMBEDDED_WIND_FORECAST", "EMBEDDED_SOLAR_FORECAST"],
-            "rename": ["wind", "solar"],
+            "cols": ["EMBEDDED_SOLAR_FORECAST"],
+            "rename": ["solar"],
             "date_col": "DATE_GMT",
             "time_col": "TIME_GMT",
         },
@@ -234,7 +234,6 @@ def get_latest_forecast():
 
     df = pd.concat([DataSet(**x).download() for x in forecast_data], axis=1)
     df["demand"] = df[["demand", "NATIONALDEMAND"]].mean(axis=1)
-    df["wind"] = df["wind"] + df["bm_wind"]
     df["date_time"] = df.index
     df["time"] = df["date_time"].dt.hour + df["date_time"].dt.minute / 60
     df["day_of_week"] = df["date_time"].dt.day_of_week.astype(int)
@@ -445,7 +444,8 @@ class Command(BaseCommand):
         day_ahead = day_ahead_to_agile(agile, reverse=True)
 
         new_prices = pd.concat([day_ahead, agile], axis=1)
-        new_prices = new_prices[new_prices.index > prices.index[-1]]
+        if len(prices) > 0:
+            new_prices = new_prices[new_prices.index > prices.index[-1]]
         print(new_prices)
         if len(new_prices) > 0:
             print(new_prices)
@@ -457,10 +457,11 @@ class Command(BaseCommand):
         fc = get_latest_forecast()
         print(fc)
 
-        recent = pd.Timestamp.now(tz="GB") - pd.Timedelta("14d")
-        fig, ax = plt.subplots(1, 1, figsize=(16, 6), layout="tight")
-        prices["day_ahead"].loc[recent:].plot(ax=ax)
-        X = hist.drop("demand_source", axis=1)
+        # recent = pd.Timestamp.now(tz="GB") - pd.Timedelta("14d")
+        # fig, ax = plt.subplots(1, 1, figsize=(16, 6), layout="tight")
+        # prices["day_ahead"].loc[recent:].plot(ax=ax)
+        # X = hist.drop("demand_source", axis=1)
+        X = hist
         y = prices["day_ahead"].loc[hist.index]
 
         print(X)
@@ -474,10 +475,10 @@ class Command(BaseCommand):
 
         cols = X.columns
         fc["day_ahead"] = model.predict(fc[cols])
-        fc["agile"] = day_ahead_to_agile(fc["day_ahead"])
-        # fc["day_ahead"].plot(ax=ax)
-        print(fc[["day_ahead", "agile"]])
-        fc.drop(["time", "day_of_week", "day_of_year"], axis=1, inplace=True)
+        fc["agile_pred"] = day_ahead_to_agile(fc["day_ahead"]).astype(float).round(2)
+        fc["agile_actual"] = prices["agile"].loc[fc.index[0] :]
+        print(fc[["agile_pred", "agile_actual"]])
+        fc.drop(["time", "day_of_week", "day_of_year", "day_ahead"], axis=1, inplace=True)
 
         f = Forecasts(name=pd.Timestamp.now(tz="GB").strftime("%Y-%m-%d %H:%M %z"))
         f.save()
