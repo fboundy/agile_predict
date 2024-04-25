@@ -16,8 +16,6 @@ class DataSerializer(serializers.ModelSerializer):
 
 
 class PriceForecastSerializer(serializers.ModelSerializer):
-    # data = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
-    # data = serializers.SlugRelatedField(many=True, read_only=True, slug_field="agile")
     data = DataSerializer(many=True, read_only=True)
 
     class Meta:

@@ -462,7 +462,7 @@ class Command(BaseCommand):
         print(X)
         print(y)
 
-        model = xg.XGBRegressor(objective="reg:squarederror", booster="dart")
+        model = xg.XGBRegressor(objective="reg:squarederror", booster="dart", max_depth=0)
         model.fit(X, y)
 
         cols = X.columns

@@ -15,11 +15,16 @@ class GraphView(TemplateView):
     def get_context_data(self, **kwargs):
         f = Forecasts.objects.latest("created_at")
 
-        if (((pd.Timestamp.now(tz="GB") - pd.Timestamp(f.created_at)).total_seconds()) / 3600) > 6:
+        # hour_now = pd.Timestamp.now(tz="GB").hour
+        # hour_updated = pd.Timestamp(f.created_at).hour
+        # updated_today = pd.Timestamp(f.created_at).day == pd.Timestamp.now(tz="GB").day
+
+        # if (hour_now >= 10 and not updated_today) or (hour_now >= 16 and hour_updated < 16):
+        if (pd.Timestamp.now(tz="GB") - f.created_at).total_seconds() / 3600 > 1:
             call_command("update")
 
         data = []
-        p = PriceHistory.objects.all().order_by("-date_time")[: 48 * 7]
+        p = PriceHistory.objects.all().order_by("-date_time")[: 48 * 3]
         # p = PriceHistory.objects.all()
 
         data = data + [
