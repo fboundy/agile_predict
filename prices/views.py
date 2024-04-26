@@ -2,23 +2,32 @@ from django.shortcuts import render
 import pandas as pd
 
 # Create your views here.
-from django.views.generic import TemplateView
+from django.views.generic import TemplateView, FormView
 from .models import Forecasts, PriceHistory, AgileData
 import plotly.graph_objects as go
 
 from django.core.management import call_command
 from config.settings import GLOBAL_SETTINGS
 from .management.commands.update import day_ahead_to_agile
+from .forms import RegionForm
 
 
 regions = GLOBAL_SETTINGS["REGIONS"]
 
 
-class GraphView(TemplateView):
+class GraphFormView(FormView):
+    form_class = RegionForm
     template_name = "graph.html"
 
-    def get_context_data(self, **kwargs):
-        region = kwargs.get("region", "G")
+    def form_valid(self, form):
+        # This method is called when valid form data has been POSTed.
+        # It should return an HttpResponse.
+        context = self.get_context_data(form=form)
+        region = form.cleaned_data["region"]
+
+        # print(form.cleaned_data)
+        context["region"] = region
+
         f = Forecasts.objects.latest("created_at")
 
         # hour_now = pd.Timestamp.now(tz="GB").hour
@@ -34,11 +43,12 @@ class GraphView(TemplateView):
         # p = PriceHistory.objects.all()
 
         day_ahead = pd.Series(index=[a.date_time for a in p], data=[a.day_ahead for a in p])
-        agile = day_ahead_to_agile(day_ahead, region=region)
 
+        agile = day_ahead_to_agile(day_ahead, region=region).sort_index()
+        # print(agile.iloc[-20:])
         data = data + [
             go.Scatter(
-                x=agile.index,
+                x=agile.index.tz_convert("GB"),
                 y=agile,
                 marker={"symbol": 104, "size": 1, "color": "black"},
                 mode="lines",
@@ -50,31 +60,31 @@ class GraphView(TemplateView):
             # f = Forecasts.objects.latest("created_at")
             d = AgileData.objects.filter(forecast=f, region=region)[: (48 * 7)]
 
-            context = super(GraphView, self).get_context_data(**kwargs)
-
             x = [a.date_time for a in d]
+            y = [a.agile_pred for a in d]
+
+            df = pd.Series(index=x, data=y).sort_index()
+            df.index = df.index.tz_convert("GB")
 
             data = data + [
                 go.Scatter(
-                    x=x,
-                    y=[a.agile_pred for a in d],
+                    x=df.index,
+                    y=y,
                     marker={"symbol": 104, "size": 10},
                     mode="lines",
                     name=f.name,
                 )
             ]
-        # trace2 = go.Scatter(
-        #     x=x,
-        #     y=[a.agile_actual for a in d],
-        #     marker={"color": "blue", "symbol": 104, "size": 10},
-        #     mode="lines",
-        #     name="Actual",
-        # )
+
         legend = dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 
         layout = go.Layout(
             title=f"Agile Forecast - {regions[region]['name']} | Region {region}",
             yaxis={"title": "Agile Price [p/kWh]"},
+            xaxis={
+                "title": "Date/Time (UTC)",
+                # "tickformat": "%d-%b %H:%M %Z",
+            },
             legend=legend,
             width=1000,
         )
@@ -86,4 +96,5 @@ class GraphView(TemplateView):
         context["graph"] = figure.to_html()
         context["region"] = region
 
-        return context
+        return self.render_to_response(context=context)
+        # return context

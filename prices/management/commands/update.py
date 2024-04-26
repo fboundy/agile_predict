@@ -378,6 +378,7 @@ def get_agile(start=pd.Timestamp("2023-07-01"), tz="GB", region="G"):
 
 
 def day_ahead_to_agile(df, reverse=False, region="G"):
+    df.index = df.index.tz_convert("GB")
     x = pd.DataFrame(df).set_axis(["In"], axis=1)
     x["Out"] = x["In"]
     x["Peak"] = (x.index.hour >= 16) & (x.index.hour < 19)
@@ -443,6 +444,7 @@ class Command(BaseCommand):
             start = prices.index[-1] + pd.Timedelta("30min")
 
         agile = get_agile(start=start)
+
         day_ahead = day_ahead_to_agile(agile, reverse=True)
 
         new_prices = pd.concat([day_ahead, agile], axis=1)

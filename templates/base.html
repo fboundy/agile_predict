@@ -12,7 +12,16 @@
             <h1>Agile Predict v{{APP_VERSION_NUMBER}}</a></h1>
         </header>
         <div style="width: 100%; overflow: hidden;">
-            <div style="width: 200px; float: left;"> </div>
+            <div style="width: 200px; float: left;"> 
+
+                Select your DNO region:<p>
+                   <form action="." method="post">
+                    {% csrf_token %}
+                    {{ form }}
+                    <input type="submit" value="Submit">
+                </form>
+            </div>
+            
             <div style="margin-left: 220px;">
                 {% block content %}
                 {% endblock content %}
@@ -31,7 +40,8 @@
         </div>    
         <h2 style="margin-left: 20px";"margin-right: 20px">API Access</h2>    
         <div style="margin-left: 20px";"margin-right: 20px";>
-            RESTful API access to the three most recent price forecasts is available via <a href="http://prices.fly.dev/api">prices.fly.dev/api</a>
+            RESTful API access to the three most recent price forecasts is available via <a href="http://prices.fly.dev/api">prices.fly.dev/api</a> for all regions
+            or via <a href="http://prices.fly.dev/api/{REGION}">prices.fly.dev/api/{REGION}</a> for a given region.
         </div>
         <h2 style="margin-left: 20px";"margin-right: 20px">Development</h2>    
         <div style="margin-left: 20px";"margin-right: 20px";>
