@@ -10,8 +10,6 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
-APP_VERSION_NUMBER = "1.1.0"
-
 from pathlib import Path
 
 from environs import Env
@@ -157,3 +155,80 @@ STORAGES = {
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CSRF_TRUSTED_ORIGINS = ["https://*.fly.dev"]
+
+# AGILE_FACTORS = {
+#     "import": {
+#         "A": (0.21, 0, 13),
+#         "B": (0.20, 0, 14),
+#         "C": (0.20, 0, 12),
+#         "D": (0.22, 0, 13),
+#         "E": (0.21, 0, 12),
+#         "F": (0.21, 0, 12),
+#         "G": (0.21, 0, 12),
+#         "H": (0.21, 0, 12),
+#         "J": (0.22, 0, 12),
+#         "K": (0.22, 0, 12),
+#     },
+# }
+
+
+GLOBAL_SETTINGS = {
+    "REGIONS": {
+        "A": {
+            "name": "Eastern England",
+            "factors": (0.21, 13),
+        },
+        "B": {
+            "name": "East Midlands",
+            "factors": (0.20, 14),
+        },
+        "C": {
+            "name": "London",
+            "factors": (0.20, 12),
+        },
+        "D": {
+            "name": "Merseyside and Northern Wales",
+            "factors": (0.22, 13),
+        },
+        "E": {
+            "name": "West Midlands",
+            "factors": (0.21, 11),
+        },
+        "F": {
+            "name": "North Eastern England",
+            "factors": (0.21, 12),
+        },
+        "G": {
+            "name": "North Western England",
+            "factors": (0.21, 12),
+        },
+        "H": {
+            "name": "Southern England",
+            "factors": (0.21, 12),
+        },
+        "J": {
+            "name": "South Eastern England",
+            "factors": (0.22, 12),
+        },
+        "K": {
+            "name": "Southern Wales",
+            "factors": (0.22, 12),
+        },
+        "L": {
+            "name": "South Western England",
+            "factors": (0.23, 11),
+        },
+        "M": {
+            "name": "Yorkshire",
+            "factors": (0.20, 13),
+        },
+        "N": {
+            "name": "Southern Scotland",
+            "factors": (0.21, 13),
+        },
+        "P": {
+            "name": "Northern Scotland",
+            "factors": (0.24, 12),
+        },
+    },
+}

@@ -3,16 +3,22 @@ import pandas as pd
 
 # Create your views here.
 from django.views.generic import TemplateView
-from .models import Forecasts, ForecastData, PriceHistory
+from .models import Forecasts, PriceHistory, AgileData
 import plotly.graph_objects as go
 
 from django.core.management import call_command
+from config.settings import GLOBAL_SETTINGS
+from .management.commands.update import day_ahead_to_agile
+
+
+regions = GLOBAL_SETTINGS["REGIONS"]
 
 
 class GraphView(TemplateView):
     template_name = "graph.html"
 
     def get_context_data(self, **kwargs):
+        region = kwargs.get("area", "G")
         f = Forecasts.objects.latest("created_at")
 
         # hour_now = pd.Timestamp.now(tz="GB").hour
@@ -27,10 +33,13 @@ class GraphView(TemplateView):
         p = PriceHistory.objects.all().order_by("-date_time")[: 48 * 3]
         # p = PriceHistory.objects.all()
 
+        day_ahead = pd.Series(index=[a.date_time for a in p], data=[a.day_ahead for a in p])
+        agile = day_ahead_to_agile(day_ahead, area=region)
+
         data = data + [
             go.Scatter(
-                x=[a.date_time for a in p],
-                y=[a.agile for a in p],
+                x=agile.index,
+                y=agile,
                 marker={"symbol": 104, "size": 1, "color": "black"},
                 mode="lines",
                 name="Actual",
@@ -39,7 +48,7 @@ class GraphView(TemplateView):
 
         for f in Forecasts.objects.all().order_by("-created_at")[:3]:
             # f = Forecasts.objects.latest("created_at")
-            d = ForecastData.objects.filter(forecast=f)[: (48 * 7)]
+            d = AgileData.objects.filter(forecast=f, region=region)[: (48 * 7)]
 
             context = super(GraphView, self).get_context_data(**kwargs)
 
@@ -64,7 +73,7 @@ class GraphView(TemplateView):
         legend = dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 
         layout = go.Layout(
-            title="Agile Forecast - NW England (Area G)",
+            title=f"Agile Forecast - {regions[region]['name']} Area {region}",
             yaxis={"title": "Agile Price [p/kWh]"},
             legend=legend,
             width=1000,
@@ -75,5 +84,6 @@ class GraphView(TemplateView):
         )
 
         context["graph"] = figure.to_html()
+        context["region"] = region
 
         return context

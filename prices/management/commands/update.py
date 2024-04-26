@@ -10,6 +10,7 @@ from datetime import datetime
 from sklearn.metrics import mean_squared_error as MSE
 
 from django.core.management.base import BaseCommand
+from config.settings import GLOBAL_SETTINGS
 from ...models import History, PriceHistory, Forecasts, ForecastData, AgileData
 
 
@@ -26,40 +27,41 @@ RETRY_CODES = [
     HTTPStatus.GATEWAY_TIMEOUT,
 ]
 
-AGILE_FACTORS = {
-    "import": {
-        "A": (0.21, 0, 13),
-        "B": (0.20, 0, 14),
-        "C": (0.20, 0, 12),
-        "D": (0.22, 0, 13),
-        "E": (0.21, 0, 12),
-        "F": (0.21, 0, 12),
-        "G": (0.21, 0, 12),
-        "H": (0.21, 0, 12),
-        "J": (0.22, 0, 12),
-        "K": (0.22, 0, 12),
-        "L": (0.23, 0, 11),
-        "M": (0.20, 0, 13),
-        "N": (0.21, 0, 13),
-        "P": (0.24, 0, 12),
-    },
-    "export": {
-        "A": (0.095, 1.09, 7.04),
-        "B": (0.094, 0.78, 6.27),
-        "C": (0.095, 1.30, 5.93),
-        "D": (0.097, 1.26, 5.97),
-        "E": (0.094, 0.77, 6.50),
-        "F": (0.095, 0.87, 4.88),
-        "G": (0.096, 1.10, 5.89),
-        "H": (0.094, 0.93, 7.05),
-        "J": (0.094, 1.09, 7.41),
-        "K": (0.094, 0.97, 5.46),
-        "L": (0.093, 0.83, 7.14),
-        "M": (0.096, 0.72, 5.78),
-        "N": (0.097, 0.90, 3.85),
-        "P": (0.096, 1.36, 2.68),
-    },
-}
+regions = GLOBAL_SETTINGS["REGIONS"]
+# AGILE_FACTORS = {
+#     "import": {
+#         "A": (0.21, 0, 13),
+#         "B": (0.20, 0, 14),
+#         "C": (0.20, 0, 12),
+#         "D": (0.22, 0, 13),
+#         "E": (0.21, 0, 12),
+#         "F": (0.21, 0, 12),
+#         "G": (0.21, 0, 12),
+#         "H": (0.21, 0, 12),
+#         "J": (0.22, 0, 12),
+#         "K": (0.22, 0, 12),
+#         "L": (0.23, 0, 11),
+#         "M": (0.20, 0, 13),
+#         "N": (0.21, 0, 13),
+#         "P": (0.24, 0, 12),
+#     },
+#     "export": {
+#         "A": (0.095, 1.09, 7.04),
+#         "B": (0.094, 0.78, 6.27),
+#         "C": (0.095, 1.30, 5.93),
+#         "D": (0.097, 1.26, 5.97),
+#         "E": (0.094, 0.77, 6.50),
+#         "F": (0.095, 0.87, 4.88),
+#         "G": (0.096, 1.10, 5.89),
+#         "H": (0.094, 0.93, 7.05),
+#         "J": (0.094, 1.09, 7.41),
+#         "K": (0.094, 0.97, 5.46),
+#         "L": (0.093, 0.83, 7.14),
+#         "M": (0.096, 0.72, 5.78),
+#         "N": (0.097, 0.90, 3.85),
+#         "P": (0.096, 1.36, 2.68),
+#     },
+# }
 
 
 def _oct_time(d):
@@ -380,11 +382,11 @@ def day_ahead_to_agile(df, reverse=False, area="G"):
     x["Out"] = x["In"]
     x["Peak"] = (x.index.hour >= 16) & (x.index.hour < 19)
     if reverse:
-        x.loc[x["Peak"], "Out"] -= AGILE_FACTORS["import"][area][2]
-        x["Out"] /= AGILE_FACTORS["import"][area][0]
+        x.loc[x["Peak"], "Out"] -= regions[area]["factors"][1]
+        x["Out"] /= regions[area]["factors"][0]
     else:
-        x["Out"] *= AGILE_FACTORS["import"][area][0]
-        x.loc[x["Peak"], "Out"] += AGILE_FACTORS["import"][area][2]
+        x["Out"] *= regions[area]["factors"][0]
+        x.loc[x["Peak"], "Out"] += regions[area]["factors"][1]
 
     if reverse:
         name = "day_ahead"

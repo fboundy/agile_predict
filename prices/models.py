@@ -1,4 +1,5 @@
 from django.db import models
+from django.urls import reverse
 
 # class Forecast(models.Model):
 #     name = models.CharField(unique=True, max_length=64)
@@ -32,6 +33,10 @@ class AgileData(models.Model):
     forecast = models.ForeignKey(Forecasts, related_name="prices", on_delete=models.CASCADE)
     region = models.CharField(max_length=1)
     agile_pred = models.FloatField()
+    date_time = models.DateTimeField()
+
+    def get_absolute_url(self):
+        return reverse("graph", kwargs={"area": self.region})
 
 
 class History(models.Model):
