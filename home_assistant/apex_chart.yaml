@@ -1,0 +1,75 @@
+type: custom:apexcharts-card
+apex_config: null
+header:
+  show: true
+  show_states: true
+  colorize_states: true
+graph_span: 7d
+yaxis:
+  - id: price
+    decimals: 0
+    apex_config:
+      tickAmount: 8
+stacked: false
+span:
+  start: day
+series:
+  - entity: sensor.octopus_energy_electricity_19m*******_************_current_rate
+    name: Actual Agile Import (current rate)
+    transform: return x * 100;
+    show:
+      in_chart: false
+    unit: p/kWh
+  - entity: >-
+      event.octopus_energy_electricity_19m*******_************_current_day_rates
+    yaxis_id: price
+    name: Actual Agile Import (current day)
+    color: yellow
+    opacity: 1
+    stroke_width: 2
+    extend_to: now
+    type: column
+    unit: p/kWh
+    data_generator: |
+      return entity.attributes.rates.map((entry) => {
+         return [new Date(entry.start), entry.value_inc_vat*100];
+       });     
+    offset: '-15min'
+    show:
+      in_header: false
+      legend_value: false
+      offset_in_name: false
+  - entity: event.octopus_energy_electricity_19m*******_************_next_day_rates
+    yaxis_id: price
+    name: Actual Agile Import (next day)
+    color: yellow
+    opacity: 1
+    stroke_width: 2
+    type: column
+    unit: p/kWh
+    data_generator: |
+      return entity.attributes.rates.map((entry) => {
+         return [new Date(entry.start), entry.value_inc_vat*100];
+       });     
+    offset: '-15min'
+    show:
+      in_header: false
+      legend_value: false
+      offset_in_name: false
+  - entity: sensor.agile_predict
+    yaxis_id: price
+    name: Predicted Agile
+    color: red
+    opacity: 1
+    stroke_width: 3
+    extend_to: now
+    unit: p/kWh
+    data_generator: |
+      return entity.attributes.prices.map((entry) => {
+         return [new Date(entry.date_time), entry.agile_pred];
+       });     
+    offset: '-15min'
+    show:
+      in_header: false
+      legend_value: false
+      offset_in_name: false

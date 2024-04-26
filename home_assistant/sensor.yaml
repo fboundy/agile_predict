@@ -1,0 +1,12 @@
+sensor:
+  - platform: rest
+    resource: https://prices.fly.dev/api/G
+    scan_interval: 900
+    name: Agile Predict
+    value_template: "{{ value_json[0]['name']}}"
+    json_attributes_path: "$[0]"
+    json_attributes:
+      - "created_at"
+      - "prices"
+
+      
