@@ -28,6 +28,12 @@ class PriceHistory(models.Model):
     agile = models.FloatField()
 
 
+class AgileData(models.Model):
+    forecast = models.ForeignKey(Forecasts, related_name="data", on_delete=models.CASCADE)
+    region = models.CharField(_(""), max_length=1)
+    agile_pred = models.FloatField()
+
+
 class History(models.Model):
     date_time = models.DateTimeField(unique=True)
     # wind = models.FloatField()
