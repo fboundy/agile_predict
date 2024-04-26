@@ -63,7 +63,7 @@ class GraphFormView(FormView):
             x = [a.date_time for a in d]
             y = [a.agile_pred for a in d]
 
-            df = pd.Series(index=x, data=y).sort_index()
+            df = pd.Series(index=pd.to_datetime(x), data=y).sort_index()
             df.index = df.index.tz_convert("GB")
 
             data = data + [
