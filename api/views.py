@@ -56,7 +56,7 @@ class HA_PriceForecastRegionAPIView(generics.ListAPIView):
         """
         region = self.kwargs["region"]
 
-        ids = [f.id for f in Forecasts.objects.all().order_by("-created_at")[:3]]
+        ids = [f.id for f in Forecasts.objects.all().order_by("-created_at")[:1]]
 
         queryset = Forecasts.objects.filter(id__in=ids)
         return queryset
