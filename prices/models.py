@@ -30,7 +30,7 @@ class PriceHistory(models.Model):
 
 class AgileData(models.Model):
     forecast = models.ForeignKey(Forecasts, related_name="data", on_delete=models.CASCADE)
-    region = models.CharField(_(""), max_length=1)
+    region = models.CharField(max_length=1)
     agile_pred = models.FloatField()
 
 
@@ -48,8 +48,8 @@ class History(models.Model):
 class ForecastData(models.Model):
     forecast = models.ForeignKey(Forecasts, related_name="data", on_delete=models.CASCADE)
     date_time = models.DateTimeField()
-    agile_pred = models.FloatField()
-    agile_actual = models.FloatField(null=True)
+    # agile_pred = models.FloatField()
+    # agile_actual = models.FloatField(null=True)
     # wind = models.FloatField()
     bm_wind = models.FloatField()
     solar = models.FloatField()
