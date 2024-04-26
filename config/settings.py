@@ -10,7 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
-APP_VERSION_NUMBER = "1.0.0"
+APP_VERSION_NUMBER = "1.1.0"
 
 from pathlib import Path
 

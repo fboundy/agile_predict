@@ -10,7 +10,7 @@ from datetime import datetime
 from sklearn.metrics import mean_squared_error as MSE
 
 from django.core.management.base import BaseCommand
-from ...models import History, PriceHistory, Forecasts, ForecastData
+from ...models import History, PriceHistory, Forecasts, ForecastData, AgileData
 
 
 OCTOPUS_PRODUCT_URL = r"https://api.octopus.energy/v1/products/"
@@ -478,14 +478,29 @@ class Command(BaseCommand):
 
         cols = X.columns
         fc["day_ahead"] = model.predict(fc[cols])
-        fc["agile_pred"] = day_ahead_to_agile(fc["day_ahead"]).astype(float).round(2)
-        fc["agile_actual"] = prices["agile"].loc[fc.index[0] :]
-        print(fc[["agile_pred", "agile_actual"]])
+
+        ag = pd.concat(
+            [
+                pd.DataFrame(
+                    index=fc.index,
+                    data={
+                        "region": area,
+                        "agile_pred": day_ahead_to_agile(fc["day_ahead"], area=area).astype(float).round(2),
+                    },
+                )
+                for area in AGILE_FACTORS["import"]
+            ]
+        )
+
+        # fc["agile_actual"] = prices["agile"].loc[fc.index[0] :]
+        # print(fc[["agile_pred", "agile_actual"]])
         # fc.drop(["time", "day_of_week", "day_of_year", "day_ahead"], axis=1, inplace=True)
-        fc.drop(["time", "day_of_week", "day_ahead"], axis=1, inplace=True)
+        fc.drop(["time", "day_of_week"], axis=1, inplace=True)
 
         f = Forecasts(name=pd.Timestamp.now(tz="GB").strftime("%Y-%m-%d %H:%M"))
         f.save()
 
         fc["forecast"] = f
+        ag["forecast"] = f
         df_to_Model(fc, ForecastData)
+        df_to_Model(ag, AgileData)
