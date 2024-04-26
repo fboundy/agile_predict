@@ -18,7 +18,7 @@ class GraphView(TemplateView):
     template_name = "graph.html"
 
     def get_context_data(self, **kwargs):
-        region = kwargs.get("area", "G")
+        region = kwargs.get("region", "G")
         f = Forecasts.objects.latest("created_at")
 
         # hour_now = pd.Timestamp.now(tz="GB").hour
@@ -34,7 +34,7 @@ class GraphView(TemplateView):
         # p = PriceHistory.objects.all()
 
         day_ahead = pd.Series(index=[a.date_time for a in p], data=[a.day_ahead for a in p])
-        agile = day_ahead_to_agile(day_ahead, area=region)
+        agile = day_ahead_to_agile(day_ahead, region=region)
 
         data = data + [
             go.Scatter(
@@ -73,7 +73,7 @@ class GraphView(TemplateView):
         legend = dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 
         layout = go.Layout(
-            title=f"Agile Forecast - {regions[region]['name']} Area {region}",
+            title=f"Agile Forecast - {regions[region]['name']} | Region {region}",
             yaxis={"title": "Agile Price [p/kWh]"},
             legend=legend,
             width=1000,

@@ -36,7 +36,7 @@ class AgileData(models.Model):
     date_time = models.DateTimeField()
 
     def get_absolute_url(self):
-        return reverse("graph", kwargs={"area": self.region})
+        return reverse("graph", kwargs={"region": self.region})
 
 
 class History(models.Model):

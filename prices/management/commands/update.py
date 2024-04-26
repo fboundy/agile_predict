@@ -344,14 +344,14 @@ class DataSet:
         return df
 
 
-def get_agile(start=pd.Timestamp("2023-07-01"), tz="GB", area="G"):
+def get_agile(start=pd.Timestamp("2023-07-01"), tz="GB", region="G"):
     start = pd.Timestamp(start).tz_convert("UTC")
     product = "AGILE-22-08-31"
     df = pd.DataFrame()
     url = f"{OCTOPUS_PRODUCT_URL}{product}"
 
     end = pd.Timestamp.now(tz="UTC").normalize() + pd.Timedelta("48h")
-    code = f"E-1R-{product}-{area}"
+    code = f"E-1R-{product}-{region}"
     url = url + f"/electricity-tariffs/{code}/standard-unit-rates/"
 
     x = []
@@ -377,16 +377,16 @@ def get_agile(start=pd.Timestamp("2023-07-01"), tz="GB", area="G"):
     return df.rename("agile")
 
 
-def day_ahead_to_agile(df, reverse=False, area="G"):
+def day_ahead_to_agile(df, reverse=False, region="G"):
     x = pd.DataFrame(df).set_axis(["In"], axis=1)
     x["Out"] = x["In"]
     x["Peak"] = (x.index.hour >= 16) & (x.index.hour < 19)
     if reverse:
-        x.loc[x["Peak"], "Out"] -= regions[area]["factors"][1]
-        x["Out"] /= regions[area]["factors"][0]
+        x.loc[x["Peak"], "Out"] -= regions[region]["factors"][1]
+        x["Out"] /= regions[region]["factors"][0]
     else:
-        x["Out"] *= regions[area]["factors"][0]
-        x.loc[x["Peak"], "Out"] += regions[area]["factors"][1]
+        x["Out"] *= regions[region]["factors"][0]
+        x.loc[x["Peak"], "Out"] += regions[region]["factors"][1]
 
     if reverse:
         name = "day_ahead"
@@ -486,11 +486,11 @@ class Command(BaseCommand):
                 pd.DataFrame(
                     index=fc.index,
                     data={
-                        "region": area,
-                        "agile_pred": day_ahead_to_agile(fc["day_ahead"], area=area).astype(float).round(2),
+                        "region": region,
+                        "agile_pred": day_ahead_to_agile(fc["day_ahead"], region=region).astype(float).round(2),
                     },
                 )
-                for area in AGILE_FACTORS["import"]
+                for region in regions
             ]
         )
 
