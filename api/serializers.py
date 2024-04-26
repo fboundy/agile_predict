@@ -50,32 +50,10 @@ class FilteredDataSerializer(serializers.ModelSerializer):
 class PriceForecastRegionSerializer(serializers.ModelSerializer):
     prices = FilteredDataSerializer(many=True, read_only=True)
 
-    class Meta:
-        model = Forecasts
-        fields = ["name", "created_at", "prices"]
-        depth = 1
-
-
-# These are the serilizers for the Home Assistant view
-class HA_FilteredListSerializer(serializers.ListSerializer):
-
     def to_representation(self, data):
-        data = data.filter(region=self.context["region"])
-        list_of_dicts = super(HA_FilteredListSerializer, self).to_representation(data)
-        y = {k: [d[k] for d in list_of_dicts] for k in list_of_dicts[0].keys()}
-        print(y)
-        return y
-
-
-class HA_FilteredDataSerializer(serializers.ModelSerializer):
-    class Meta:
-        list_serializer_class = HA_FilteredListSerializer
-        model = AgileData
-        fields = ["date_time", "agile_pred"]
-
-
-class HA_PriceForecastRegionSerializer(serializers.ModelSerializer):
-    prices = HA_FilteredDataSerializer(many=True, read_only=True)
+        x = super(PriceForecastRegionSerializer, self).to_representation(data)
+        x["name"] = f"Region | {self.context['region']} {x['name']}"
+        return x
 
     class Meta:
         model = Forecasts
