@@ -156,23 +156,10 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CSRF_TRUSTED_ORIGINS = ["https://*.fly.dev"]
 
-# AGILE_FACTORS = {
-#     "import": {
-#         "A": (0.21, 0, 13),
-#         "B": (0.20, 0, 14),
-#         "C": (0.20, 0, 12),
-#         "D": (0.22, 0, 13),
-#         "E": (0.21, 0, 12),
-#         "F": (0.21, 0, 12),
-#         "G": (0.21, 0, 12),
-#         "H": (0.21, 0, 12),
-#         "J": (0.22, 0, 12),
-#         "K": (0.22, 0, 12),
-#     },
-# }
-
 
 GLOBAL_SETTINGS = {
+    "UPDATE_TIME": "09:00",
+    "AGILE_RELEASE_TIME": "16:00",
     "REGIONS": {
         "A": {
             "name": "Eastern England",

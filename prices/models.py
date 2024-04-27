@@ -1,26 +1,13 @@
 from django.db import models
 from django.urls import reverse
 
-# class Forecast(models.Model):
-#     name = models.CharField(unique=True, max_length=64)
-#     # source = models.CharField(max_length=32)
-#     # source = models.CharField(max_length=32, choices=DataSource.choices)
-
 
 class Forecasts(models.Model):
     name = models.CharField(unique=True, max_length=64)
-    # forecast = models.ForeignKey(Forecast, on_delete=CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    # expired = models.BooleanField(default=False)
     def __str__(self):
         return self.name
-
-
-# class TSValue(models.Model):
-#     version = models.ForeignKey(TSVersion, on_delete=CASCADE)
-#     time = models.DateTimeField()
-#     value = models.FloatField()
 
 
 class PriceHistory(models.Model):
