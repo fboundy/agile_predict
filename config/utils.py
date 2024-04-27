@@ -28,23 +28,26 @@ regions = GLOBAL_SETTINGS["REGIONS"]
 
 
 def update_if_required():
-    f = Forecasts.objects.latest("created_at")
-    p = PriceHistory.objects.latest("date_time")
-
-    updated_today = pd.Timestamp(f.created_at).day == pd.Timestamp.now(tz="GB").day
-    agile_ends_today = p.date_time.day == pd.Timestamp.now(tz="GB").day
-
-    print (f"Models updated today: {updated_today}")
-    print (f"Agile ends today: {agile_ends_today}")
-    print (f"After UPDATE_TIME: {pd.Timestamp.now(tz='GB') >= pd.Timestamp(GLOBAL_SETTINGS['UPDATE_TIME'], tz='GB')}")
-    print (f"After AGILE RELEASE TIME: {pd.Timestamp.now(tz="GB") >= pd.Timestamp(GLOBAL_SETTINGS['AGILE_RELEASE_TIME'], tz='GB')}")
-
-    if (pd.Timestamp.now(tz="GB") >= pd.Timestamp(GLOBAL_SETTINGS["UPDATE_TIME"], tz="GB")) and not updated_today:
+    if Forecasts.objects.count() ==0 or PriceHistory.objects.count()==0 or ForecastData.objects.count()==0 or AgileData.objects.count==0:
         call_command("update")
-    elif (
-        (pd.Timestamp.now(tz="GB") >= pd.Timestamp(GLOBAL_SETTINGS["AGILE_RELEASE_TIME"], tz="GB")) and agile_ends_today
-    ):
-        call_command("latest_agile")
+    else:
+        f = Forecasts.objects.latest("created_at")
+        p = PriceHistory.objects.latest("date_time")
+
+        updated_today = pd.Timestamp(f.created_at).day == pd.Timestamp.now(tz="GB").day
+        agile_ends_today = p.date_time.day == pd.Timestamp.now(tz="GB").day
+
+        print (f"Models updated today: {updated_today}")
+        print (f"Agile ends today: {agile_ends_today}")
+        print (f"After UPDATE_TIME: {pd.Timestamp.now(tz='GB') >= pd.Timestamp(GLOBAL_SETTINGS['UPDATE_TIME'], tz='GB')}")
+        print (f"After AGILE RELEASE TIME: {pd.Timestamp.now(tz="GB") >= pd.Timestamp(GLOBAL_SETTINGS['AGILE_RELEASE_TIME'], tz='GB')}")
+
+        if (pd.Timestamp.now(tz="GB") >= pd.Timestamp(GLOBAL_SETTINGS["UPDATE_TIME"], tz="GB")) and not updated_today:
+            call_command("update")
+        elif (
+            (pd.Timestamp.now(tz="GB") >= pd.Timestamp(GLOBAL_SETTINGS["AGILE_RELEASE_TIME"], tz="GB")) and agile_ends_today
+        ):
+            call_command("latest_agile")
 
 
 def _oct_time(d):
