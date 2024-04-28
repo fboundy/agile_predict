@@ -58,21 +58,37 @@ def _oct_time(d):
         day=pd.Timestamp(d).day,
     )
 
+def queryset_to_df(queryset):
+    df = pd.DataFrame(list(queryset.values()))
+    df["time"] = df["date_time"].dt.hour + df["date_time"].dt.minute / 60
+    df["day_of_week"] = df["date_time"].dt.day_of_week.astype(int)
+    # df["day_of_year"] = df["date_time"].dt.day_of_year.astype(int)
+    df.index = pd.to_datetime(df["date_time"])
+    df.index = df.index.tz_convert("GB")
+    df.drop(["id", "date_time"], axis=1, inplace=True)
 
-def get_history_from_model():
+    return df
+
+def get_history_from_model():   
     if History.objects.count() == 0:
         df = pd.DataFrame()
     else:
-        df = pd.DataFrame(list(History.objects.all().values()))
-        df["time"] = df["date_time"].dt.hour + df["date_time"].dt.minute / 60
-        df["day_of_week"] = df["date_time"].dt.day_of_week.astype(int)
-        # df["day_of_year"] = df["date_time"].dt.day_of_year.astype(int)
-        df.index = pd.to_datetime(df["date_time"])
-        df.index = df.index.tz_convert("GB")
-        df.drop(["id", "date_time"], axis=1, inplace=True)
+        queryset = History.objects.all()
+        df = queryset_to_df(queryset=queryset)
 
     return df.sort_index()
 
+def get_forecast_from_model(forecast):
+    if Forecasts.objects.count() == 0:
+        df = pd.DataFrame()
+    else:
+        queryset = ForecastData.objects.filter(forecast=forecast)
+        if queryset.count() > 0:
+            df = queryset_to_df(queryset=queryset)
+        else:
+            df = pd.DataFrame()
+    
+    return df.sort_index()
 
 def get_latest_history(start):
     delta = int((pd.Timestamp(start) - pd.Timestamp("2023-07-01", tz="GB")).total_seconds() / 1800)

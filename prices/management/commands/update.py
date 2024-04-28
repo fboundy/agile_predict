@@ -64,6 +64,16 @@ class Command(BaseCommand):
         X = hist.iloc[-48 * 28 :]
         y = prices["day_ahead"].loc[X.index]
 
+        cols = X.columns
+
+        for f in Forecasts.objects.all():
+            df = get_forecast_from_model(forecast=f).loc[: prices.index[-1]]
+            print(f"{f.id:3d}:, {df.index[0].strftime('%d-%b %H:%M')} - {df.index[-1].strftime('%d-%b %H:%M')}")
+            print(prices.loc[df.index])
+            print(df.columns)
+            X = pd.concat([X, df[cols]])
+            y = pd.concat([y, prices["day_ahead"].loc[df.index]])
+
         model = xg.XGBRegressor(
             objective="reg:squarederror",
             booster="dart",
@@ -80,7 +90,6 @@ class Command(BaseCommand):
 
         print(f"RMS Error: {rmse: 0.2f} p/kWh")
 
-        cols = X.columns
         fc["day_ahead"] = model.predict(fc[cols])
 
         ag = pd.concat(
@@ -102,12 +111,12 @@ class Command(BaseCommand):
         fc.drop(["time", "day_of_week"], axis=1, inplace=True)
 
         f = Forecasts(name=pd.Timestamp.now(tz="GB").strftime("%Y-%m-%d %H:%M"))
-        try:
-            f.save()
 
-            fc["forecast"] = f
-            ag["forecast"] = f
-            df_to_Model(fc, ForecastData)
-            df_to_Model(ag, AgileData)
-        except:
-            pass
+        f.save()
+
+        fc["forecast"] = f
+        ag["forecast"] = f
+        df_to_Model(fc, ForecastData)
+        df_to_Model(ag, AgileData)
+        for f in Forecasts.objects.all():
+            print(f.name)
