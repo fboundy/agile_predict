@@ -3,7 +3,7 @@ import pandas as pd
 
 # Create your views here.
 from django.views.generic import TemplateView, FormView
-from .models import Forecasts, PriceHistory, AgileData
+from .models import Forecasts, PriceHistory, AgileData, ForecastData
 import plotly.graph_objects as go
 
 from django.core.management import call_command
@@ -19,14 +19,8 @@ class GraphFormView(FormView):
     form_class = RegionForm
     template_name = "graph.html"
 
-    def form_valid(self, form):
-        context = self.get_context_data(form=form)
-        region = form.cleaned_data["region"]
-        forecasts_to_plot = form.cleaned_data["forecasts_to_plot"]
-
+    def update_chart(self, context, region, forecasts_to_plot):
         context["region"] = region
-
-        update_if_required()
 
         data = []
         p = PriceHistory.objects.all().order_by("-date_time")[: 48 * 3]
@@ -46,25 +40,25 @@ class GraphFormView(FormView):
 
         for f in Forecasts.objects.filter(id__in=forecasts_to_plot).order_by("-created_at"):
             d = AgileData.objects.filter(forecast=f, region=region)[: (48 * 7)]
+            if len(d) > 0:
+                # d = AgileData.objects.filter(forecast=f, region=region)
 
-            x = [a.date_time for a in d]
-            y = [a.agile_pred for a in d]
+                x = [a.date_time for a in d]
+                y = [a.agile_pred for a in d]
 
-            df = pd.Series(index=pd.to_datetime(x), data=y).sort_index()
-            try:
+                df = pd.Series(index=pd.to_datetime(x), data=y).sort_index()
                 df.index = df.index.tz_convert("GB")
-            except:
-                pass
+                df = df.loc[agile.index[0] :]
 
-            data = data + [
-                go.Scatter(
-                    x=df.index,
-                    y=y,
-                    marker={"symbol": 104, "size": 10},
-                    mode="lines",
-                    name=f.name,
-                )
-            ]
+                data = data + [
+                    go.Scatter(
+                        x=df.index,
+                        y=df,
+                        marker={"symbol": 104, "size": 10},
+                        mode="lines",
+                        name=f.name,
+                    )
+                ]
 
         legend = dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 
@@ -84,5 +78,29 @@ class GraphFormView(FormView):
         )
 
         context["graph"] = figure.to_html()
+        return context
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        for f in Forecasts.objects.all():
+            q = ForecastData.objects.filter(forecast=f)
+            a = AgileData.objects.filter(forecast=f)
+
+            print(f.name, q.count(), a.count())
+            if q.count() < 600 or a.count() < 8000:
+                f.delete()
+
+        f = Forecasts.objects.latest("created_at")
+        context = self.update_chart(context=context, region="A", forecasts_to_plot=[f.id])
+        return context
+
+    def form_valid(self, form):
+
+        update_if_required()
+        context = self.get_context_data(form=form)
+        region = form.cleaned_data["region"]
+        forecasts_to_plot = form.cleaned_data["forecasts_to_plot"]
+
+        context = self.update_chart(context=context, region=region, forecasts_to_plot=forecasts_to_plot)
 
         return self.render_to_response(context=context)

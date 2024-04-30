@@ -35,6 +35,8 @@ class History(models.Model):
     wind_10m = models.FloatField()
     rad = models.FloatField()
     demand = models.FloatField()
+    # other_gen_capacity = models.FloatField()
+    # intercon_capacity = models.FloatField()
 
 
 class ForecastData(models.Model):
@@ -47,6 +49,8 @@ class ForecastData(models.Model):
     wind_10m = models.FloatField()
     rad = models.FloatField()
     demand = models.FloatField()
+    # other_gen_capacity = models.FloatField()
+    # intercon_capacity = models.FloatField()
 
     # def __str__(self):
     #     return f"{self.date_time.strftime('%Y-%m-%dT%H:%M%Z') {self.agile:5.2f}}"

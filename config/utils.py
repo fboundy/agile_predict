@@ -28,25 +28,34 @@ regions = GLOBAL_SETTINGS["REGIONS"]
 
 
 def update_if_required():
-    if Forecasts.objects.count() ==0 or PriceHistory.objects.count()==0 or ForecastData.objects.count()==0 or AgileData.objects.count==0:
+    time_now = pd.Timestamp.now(tz="GB")
+    if (
+        Forecasts.objects.count() == 0
+        or PriceHistory.objects.count() == 0
+        or ForecastData.objects.count() == 0
+        or AgileData.objects.count == 0
+    ):
         call_command("update")
     else:
         f = Forecasts.objects.latest("created_at")
         p = PriceHistory.objects.latest("date_time")
 
-        updated_today = pd.Timestamp(f.created_at).day == pd.Timestamp.now(tz="GB").day
-        agile_ends_today = p.date_time.day == pd.Timestamp.now(tz="GB").day
+        agile_ends = pd.Timestamp(p.date_time).tz_convert("GB")
+        latest_created = pd.Timestamp(f.created_at).tz_convert("GB")
 
-        print (f"Models updated today: {updated_today}")
-        print (f"Agile ends today: {agile_ends_today}")
-        print (f"After UPDATE_TIME: {pd.Timestamp.now(tz='GB') >= pd.Timestamp(GLOBAL_SETTINGS['UPDATE_TIME'], tz='GB')}")
-        print (f"After AGILE RELEASE TIME: {pd.Timestamp.now(tz="GB") >= pd.Timestamp(GLOBAL_SETTINGS['AGILE_RELEASE_TIME'], tz='GB')}")
+        updated_today = pd.Timestamp(f.created_at).day == time_now.day
+        agile_ends_today = p.date_time.day == time_now.day
 
-        if (pd.Timestamp.now(tz="GB") >= pd.Timestamp(GLOBAL_SETTINGS["UPDATE_TIME"], tz="GB")) and not updated_today:
+        print(f"Models updated: {latest_created}")
+        print(f"Agile ends: {agile_ends}")
+        print(f"Models updated today: {updated_today}")
+        print(f"Agile ends today: {agile_ends_today}")
+        print(f"After UPDATE_TIME: {time_now >= pd.Timestamp(GLOBAL_SETTINGS['UPDATE_TIME'], tz='GB')}")
+        print(f"After AGILE RELEASE TIME: {time_now >= pd.Timestamp(GLOBAL_SETTINGS['AGILE_RELEASE_TIME'], tz='GB')}")
+
+        if (time_now >= pd.Timestamp(GLOBAL_SETTINGS["UPDATE_TIME"], tz="GB")) and not updated_today:
             call_command("update")
-        elif (
-            (pd.Timestamp.now(tz="GB") >= pd.Timestamp(GLOBAL_SETTINGS["AGILE_RELEASE_TIME"], tz="GB")) and agile_ends_today
-        ):
+        elif (time_now >= pd.Timestamp(GLOBAL_SETTINGS["AGILE_RELEASE_TIME"], tz="GB")) and agile_ends_today:
             call_command("latest_agile")
 
 
@@ -57,6 +66,7 @@ def _oct_time(d):
         month=pd.Timestamp(d).month,
         day=pd.Timestamp(d).day,
     )
+
 
 def queryset_to_df(queryset):
     df = pd.DataFrame(list(queryset.values()))
@@ -69,7 +79,8 @@ def queryset_to_df(queryset):
 
     return df
 
-def get_history_from_model():   
+
+def get_history_from_model():
     if History.objects.count() == 0:
         df = pd.DataFrame()
     else:
@@ -77,6 +88,7 @@ def get_history_from_model():
         df = queryset_to_df(queryset=queryset)
 
     return df.sort_index()
+
 
 def get_forecast_from_model(forecast):
     if Forecasts.objects.count() == 0:
@@ -87,8 +99,9 @@ def get_forecast_from_model(forecast):
             df = queryset_to_df(queryset=queryset)
         else:
             df = pd.DataFrame()
-    
+
     return df.sort_index()
+
 
 def get_latest_history(start):
     delta = int((pd.Timestamp(start) - pd.Timestamp("2023-07-01", tz="GB")).total_seconds() / 1800)
