@@ -407,7 +407,11 @@ def day_ahead_to_agile(df, reverse=False, region="G"):
 
 
 def df_to_Model(df, myModel):
+    df = df.dropna()
     for index, row in df.iterrows():
         x = {"date_time": index} | row.to_dict()
         obj = myModel(**x)
-        obj.save()
+        try:
+            obj.save()
+        except:
+            print(f"Unable to save object to database: {x}")

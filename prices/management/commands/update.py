@@ -7,6 +7,8 @@ from ...models import History, PriceHistory, Forecasts, ForecastData, AgileData
 
 from config.utils import *
 
+DAYS_TO_INCLUDE = 7
+
 
 class Command(BaseCommand):
 
@@ -78,7 +80,7 @@ class Command(BaseCommand):
 
             if len(fc) > 0:
 
-                X = hist.iloc[-48 * 28 :]
+                X = hist.iloc[-48 * 56 :]
                 y = prices["day_ahead"].loc[X.index]
 
                 cols = X.columns
@@ -97,7 +99,7 @@ class Command(BaseCommand):
 
                             if len(df) > 0:
                                 rng = np.random.default_rng()
-                                max_len = 13 * 48
+                                max_len = DAYS_TO_INCLUDE * 48
                                 samples = rng.triangular(0, 0, max_len, max_len).astype(int)
                                 samples = samples[samples < len(df)]
                                 print(
@@ -132,7 +134,7 @@ class Command(BaseCommand):
 
                 fc["stdev"] = fc[day_ahead_cols].std(axis=1)
                 day_ahead_cols += ["stdev"]
-                print(fc[day_ahead_cols + ["day_ahead"]].to_string())
+                # print(fc[day_ahead_cols + ["day_ahead"]].to_string())
 
                 fc = fc.drop(day_ahead_cols, axis=1)
 
@@ -162,4 +164,7 @@ class Command(BaseCommand):
                 this_forecast.delete()
 
         for f in Forecasts.objects.all():
-            print(f.name)
+            print(f"{f.id:4d}: {f.name}")
+
+        print(f"Lengths: History: {(len(X) / len(X1)*100):0.1f}%")
+        print(f"       Forecasts: {((len(X1) - len(X))/len(X1)*100):0.1f}%")

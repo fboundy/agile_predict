@@ -23,7 +23,7 @@ class Command(BaseCommand):
             q = ForecastData.objects.filter(forecast=f)
             a = AgileData.objects.filter(forecast=f)
 
-            print(f.name, q.count(), a.count())
+            print(f.id, f.name, q.count(), a.count())
             if q.count() < 600 or a.count() < 8000:
                 f.delete()
             else:

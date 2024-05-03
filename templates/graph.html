@@ -1,11 +1,49 @@
 {% extends "base.html" %}
-
+{% load crispy_forms_tags %}
 {% block content %}
-{% if graph %}
-<div style="width:600;height:500">
-{{ graph|safe }}
+
+
+<div class="container">
+    <div class="row">
+        <div class="col-lg-2">
+            <form method="post">
+                {% csrf_token %}
+                {% crispy form form.helper %} 
+            </form>
+        </div>    
+        
+        <div class="col">
+            {% if graph %}
+                {{ graph|safe }}
+            {% endif %}
+        </div>
+    </div>
+    <div class="row"> 
+        <div class="col-lg">
+            <p>This model forecasts Octopus Agile electricity prices up to 14 days in advance using a Machine Learning model trained
+            on data from the Balancing Mechanism Reporting System (<a href="https://bmrs.elexon.co.uk/">BRMS</a>), National Grid 
+            Electricity Supply Operator (<a href="https://www.nationalgrideso.com/data-portal">NG ESO</a>) and weather data from 
+            <a href="https://open-meteo.com"> open-meteo.com</a><?p>
+
+            <p>Because the app is hosted on a <a href= "http://fly.io">fly.io</a> hobby account the database is only updated when the page
+            is accessed and a daily forecast is run on the first access after 09:00 (UK local time). This may sometimes cause slight delays in loading. </p>
+        
+            <h2> Work in Progress!</h2>    
+        
+            <p>This model is very much work in progress. Use at your own risk. Overall trends are more likely to be accurate than the half-hourly slot details.</P>
+        
+            <h2>API Access</h2>    
+            <p>RESTful API access to the three most recent price forecasts is available via <a href="http://prices.fly.dev/api">prices.fly.dev/api</a> for all regions
+            or via <a href="http://prices.fly.dev/api/{REGION}">prices.fly.dev/api/{REGION}</a> for a given region.</p>
+            
+            <h2>Development</h2>    
+            <p>Contributions to the project are welcome through <a href="https://github.com/fboundy/agile_predict">GitHub</a></p>
+
+            <h2>Home Assistant</h2>
+            <p>The GitHub repo includes the necessary yaml files to import the forecast into a sensor and plot on an ApexCharts card in Home Assistant.</p>
+            </div> 
+    </div>
 </div>
 
-{% endif %}
 {% endblock content %}
 

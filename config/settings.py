@@ -47,6 +47,8 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     # 3rd Party
     "rest_framework",
+    "crispy_forms",
+    "crispy_bootstrap5",
     # Local
     "prices",
     "api",
@@ -157,10 +159,17 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 CSRF_TRUSTED_ORIGINS = ["https://*.fly.dev", "https://*.agilepredict.com"]
 
 
+CRISPY_ALLOWED_TEMPLATE_PACKS = "bootstrap5"  # new
+CRISPY_TEMPLATE_PACK = "bootstrap5"  # new
+
 GLOBAL_SETTINGS = {
     "UPDATE_TIME": "09:00",
     "AGILE_RELEASE_TIME": "16:00",
     "REGIONS": {
+        "X": {
+            "name": "National Average",
+            "factors": (0.2136, 12.21),
+        },
         "A": {
             "name": "Eastern England",
             "factors": (0.21, 13),
