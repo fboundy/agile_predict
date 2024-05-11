@@ -24,7 +24,7 @@ class PriceForecastRegionAPIView(generics.ListAPIView):
     def get_serializer_context(self):
         context = super().get_serializer_context()
         context.update({"request": self.request})
-        context.update({"region": self.kwargs["region"]})
+        context.update({"region": self.kwargs["region"].upper()})
         return context
 
     def get_queryset(self):

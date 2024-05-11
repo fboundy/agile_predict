@@ -15,11 +15,11 @@ class RegionForm(forms.Form):
     )
 
     def __init__(self, region="X", *args, **kwargs):
-        print(f"form region: {region}")
+        # print(f"form region: {region}")
         super(RegionForm, self).__init__(*args, **kwargs)
         self.fields["region"] = forms.ChoiceField(choices=REGION_CHOICES)
-        print((region, GLOBAL_SETTINGS["REGIONS"][region]["name"]))
-        print(self.fields["region"].initial)
+        # print((region, GLOBAL_SETTINGS["REGIONS"][region]["name"]))
+        # print(self.fields["region"].initial)
         self.fields["region"].initial = region, GLOBAL_SETTINGS["REGIONS"][region]["name"]
         self.helper = FormHelper()
         self.helper.layout = Layout(

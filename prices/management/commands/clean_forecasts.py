@@ -19,7 +19,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         delete = options.get("delete", False)
         forecast_days = {}
-        for f in Forecasts.objects.all():
+        for f in Forecasts.objects.all().order_by("-created_at"):
             q = ForecastData.objects.filter(forecast=f)
             a = AgileData.objects.filter(forecast=f)
 

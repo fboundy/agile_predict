@@ -27,36 +27,83 @@ RETRY_CODES = [
 regions = GLOBAL_SETTINGS["REGIONS"]
 
 
+def get_nordpool(start):
+    url = "https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP"
+
+    try:
+        r = requests.get(url)
+        r.raise_for_status()  # Raise an exception for unsuccessful HTTP status codes
+
+    except requests.exceptions.RequestException as e:
+        return
+
+    index = []
+    data = []
+    for row in r.json()["data"]["Rows"]:
+        for column in row:
+            if isinstance(row[column], list):
+                for i in row[column]:
+                    if i["CombinedName"] == "CET/CEST time":
+                        if len(i["Value"]) > 10:
+                            time = f"T{i['Value'][:2]}:00"
+                            # print(time)
+                    else:
+                        if len(i["Name"]) > 8:
+                            try:
+                                # self.log(time, i["Name"], i["Value"])
+                                data.append(float(i["Value"].replace(",", ".")))
+                                index.append(
+                                    pd.Timestamp(
+                                        i["Name"].split("-")[2]
+                                        + "-"
+                                        + i["Name"].split("-")[1]
+                                        + "-"
+                                        + i["Name"].split("-")[0]
+                                        + " "
+                                        + time
+                                    )
+                                )
+                            except:
+                                pass
+
+    price = pd.Series(index=index, data=data).sort_index()
+    price.index = price.index.tz_localize("CET")
+    price.index = price.index.tz_convert("GB")
+    price = price[~price.index.duplicated()]
+    return price.resample("30min").ffill().loc[start:]
+
+
 def update_if_required():
-    time_now = pd.Timestamp.now(tz="GB")
-    if (
-        Forecasts.objects.count() == 0
-        or PriceHistory.objects.count() == 0
-        or ForecastData.objects.count() == 0
-        or AgileData.objects.count == 0
-    ):
-        call_command("update")
-    else:
-        f = Forecasts.objects.latest("created_at")
-        p = PriceHistory.objects.latest("date_time")
+    pass
+    # time_now = pd.Timestamp.now(tz="GB")
+    # if (
+    #     Forecasts.objects.count() == 0
+    #     or PriceHistory.objects.count() == 0
+    #     or ForecastData.objects.count() == 0
+    #     or AgileData.objects.count == 0
+    # ):
+    #     call_command("update")
+    # else:
+    #     f = Forecasts.objects.latest("created_at")
+    #     p = PriceHistory.objects.latest("date_time")
 
-        agile_ends = pd.Timestamp(p.date_time).tz_convert("GB")
-        latest_created = pd.Timestamp(f.created_at).tz_convert("GB")
+    #     agile_ends = pd.Timestamp(p.date_time).tz_convert("GB")
+    #     latest_created = pd.Timestamp(f.created_at).tz_convert("GB")
 
-        updated_today = pd.Timestamp(f.created_at).day == time_now.day
-        agile_ends_today = p.date_time.day == time_now.day
+    #     updated_today = pd.Timestamp(f.created_at).day == time_now.day
+    #     agile_ends_today = p.date_time.day == time_now.day
 
-        print(f"Models updated: {latest_created}")
-        print(f"Agile ends: {agile_ends}")
-        print(f"Models updated today: {updated_today}")
-        print(f"Agile ends today: {agile_ends_today}")
-        print(f"After UPDATE_TIME: {time_now >= pd.Timestamp(GLOBAL_SETTINGS['UPDATE_TIME'], tz='GB')}")
-        print(f"After AGILE RELEASE TIME: {time_now >= pd.Timestamp(GLOBAL_SETTINGS['AGILE_RELEASE_TIME'], tz='GB')}")
+    #     print(f"Models updated: {latest_created}")
+    #     print(f"Agile ends: {agile_ends}")
+    #     print(f"Models updated today: {updated_today}")
+    #     print(f"Agile ends today: {agile_ends_today}")
+    #     print(f"After UPDATE_TIME: {time_now >= pd.Timestamp(GLOBAL_SETTINGS['UPDATE_TIME'], tz='GB')}")
+    #     print(f"After AGILE RELEASE TIME: {time_now >= pd.Timestamp(GLOBAL_SETTINGS['AGILE_RELEASE_TIME'], tz='GB')}")
 
-        if (time_now >= pd.Timestamp(GLOBAL_SETTINGS["UPDATE_TIME"], tz="GB")) and not updated_today:
-            call_command("update")
-        elif (time_now >= pd.Timestamp(GLOBAL_SETTINGS["AGILE_RELEASE_TIME"], tz="GB")) and agile_ends_today:
-            call_command("latest_agile")
+    #     if (time_now >= pd.Timestamp(GLOBAL_SETTINGS["UPDATE_TIME"], tz="GB")) and not updated_today:
+    #         call_command("update")
+    #     elif (time_now >= pd.Timestamp(GLOBAL_SETTINGS["AGILE_RELEASE_TIME"], tz="GB")) and agile_ends_today:
+    #         call_command("latest_agile")
 
 
 def _oct_time(d):
@@ -134,7 +181,7 @@ def get_latest_history(start):
             "url": f"https://data.elexon.co.uk/bmrs/api/v1/datasets/INDO?format=json",
             "params": {
                 "publishDateTimeFrom": (pd.Timestamp.now() - pd.Timedelta("27D")).strftime("%Y-%m-%d"),
-                "publishDateTimeTo": pd.Timestamp.now().strftime("%Y-%m-%d"),
+                "publishDateTimeTo": (pd.Timestamp.now() + pd.Timedelta("1D")).strftime("%Y-%m-%d"),
             },
             "record_path": ["data"],
             "date_col": "startTime",
@@ -159,8 +206,8 @@ def get_latest_history(start):
             "params": {"offset": 254110 + delta},
             "record_path": ["result", "records"],
             "date_col": "DATETIME",
-            "cols": ["SOLAR"],
-            "rename": ["solar"],
+            "cols": ["SOLAR", "WIND"],
+            "rename": ["solar", "total_wind"],
         },
         {
             "url": "https://archive-api.open-meteo.com/v1/archive",
@@ -178,10 +225,26 @@ def get_latest_history(start):
             "cols": ["temperature_2m", "wind_speed_10m", "direct_radiation"],
             "rename": ["temp_2m", "wind_10m", "rad"],
         },
+        {
+            "url": "https://api.open-meteo.com/v1/forecast",
+            "params": {
+                "latitude": 54.0,
+                "longitude": 2.3,
+                "start_date": (pd.Timestamp.now().normalize() - pd.Timedelta("5D")).strftime("%Y-%m-%d"),
+                "end_date": pd.Timestamp.now().normalize().strftime("%Y-%m-%d"),
+                "hourly": ["temperature_2m", "wind_speed_10m", "direct_radiation"],
+            },
+            "record_path": ["hourly"],
+            "date_col": "time",
+            "tz": "UTC",
+            "resample": "30min",
+            "cols": ["temperature_2m", "wind_speed_10m", "direct_radiation"],
+            "rename": ["temp_2m_f", "wind_10m_f", "rad_f"],
+        },
     ]
 
-    hist = pd.concat([DataSet(**x).download() for x in history_data], axis=1)
-    print(hist)
+    hist = pd.concat([DataSet(**x).download() for x in history_data], axis=1).loc[: pd.Timestamp.now(tz="GB")]
+    print(hist.iloc[-48:].to_string())
 
     if isinstance(hist["ND"], pd.DataFrame):
         hist["demand"] = hist["ND"].mean(axis=1)
@@ -189,6 +252,13 @@ def get_latest_history(start):
         hist["demand"] = hist["ND"]
     hist.index = pd.to_datetime(hist.index)
     hist = hist.drop("ND", axis=1).sort_index()
+
+    meteo_cols = ["temp_2m", "wind_10m", "rad"]
+
+    for c in meteo_cols:
+        hist.loc[hist[c].isnull(), c] = hist.loc[hist[c].isnull(), f"{c}_f"]
+
+    hist = hist.drop([f"{c}_f" for c in meteo_cols], axis=1)
 
     return hist.astype(float).dropna()
 
@@ -210,8 +280,8 @@ def get_latest_forecast():
             "url": "https://api.nationalgrideso.com/api/3/action/datastore_search?resource_id=db6c038f-98af-4570-ab60-24d71ebd0ae5&limit=1000",
             "record_path": ["result", "records"],
             "tz": "UTC",
-            "cols": ["EMBEDDED_SOLAR_FORECAST"],
-            "rename": ["solar"],
+            "cols": ["EMBEDDED_SOLAR_FORECAST", "EMBEDDED_WIND_FORECAST"],
+            "rename": ["solar", "emb_wind"],
             "date_col": "DATE_GMT",
             "time_col": "TIME_GMT",
         },
@@ -415,3 +485,15 @@ def df_to_Model(df, myModel):
             obj.save()
         except:
             print(f"Unable to save object to database: {x}")
+
+
+def model_to_df(myModel):
+    df = pd.DataFrame(list(myModel.objects.all().values()))
+    start = pd.Timestamp("2023-07-01", tz="GB")
+    if len(df) > 0:
+        df.index = pd.to_datetime(df["date_time"])
+        df = df.sort_index()
+        df.index = df.index.tz_convert("GB")
+        df.drop(["id", "date_time"], axis=1, inplace=True)
+        start = df.index[-1] + pd.Timedelta("30min")
+    return df, start

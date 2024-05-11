@@ -10,6 +10,12 @@ class Forecasts(models.Model):
         return self.name
 
 
+class Nordpool(models.Model):
+    date_time = models.DateTimeField(unique=True)
+    day_ahead = models.FloatField()
+    agile = models.FloatField()
+
+
 class PriceHistory(models.Model):
     date_time = models.DateTimeField(unique=True)
     day_ahead = models.FloatField()
@@ -20,6 +26,8 @@ class AgileData(models.Model):
     forecast = models.ForeignKey(Forecasts, related_name="prices", on_delete=models.CASCADE)
     region = models.CharField(max_length=1)
     agile_pred = models.FloatField()
+    agile_low = models.FloatField()
+    agile_high = models.FloatField()
     date_time = models.DateTimeField()
 
     def get_absolute_url(self):
@@ -28,7 +36,7 @@ class AgileData(models.Model):
 
 class History(models.Model):
     date_time = models.DateTimeField(unique=True)
-    # wind = models.FloatField()
+    total_wind = models.FloatField()
     bm_wind = models.FloatField()
     solar = models.FloatField()
     temp_2m = models.FloatField()
@@ -45,6 +53,7 @@ class ForecastData(models.Model):
     day_ahead = models.FloatField()
     bm_wind = models.FloatField()
     solar = models.FloatField()
+    emb_wind = models.FloatField()
     temp_2m = models.FloatField()
     wind_10m = models.FloatField()
     rad = models.FloatField()

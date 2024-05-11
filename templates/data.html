@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block content %}
+
+<div class="container">
+    <div class="row">
+       
+        <div class="col">
+            {% if data %}
+                {{ data|safe }}
+            {% endif %}
+        </div>
+    </div>
+    <div class="row"> 
+        <div class="col-lg">
+            <p>This model forecasts Octopus Agile electricity prices up to 14 days in advance using a Machine Learning model trained
+            on data from the Balancing Mechanism Reporting System (<a href="https://bmrs.elexon.co.uk/">BRMS</a>), National Grid 
+            Electricity Supply Operator (<a href="https://www.nationalgrideso.com/data-portal">NG ESO</a>) and weather data from 
+            <a href="https://open-meteo.com"> open-meteo.com</a><?p>
+    </div>
+</div>
+
+{% endblock content %}
+
