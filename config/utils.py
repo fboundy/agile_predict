@@ -243,8 +243,18 @@ def get_latest_history(start):
         },
     ]
 
-    hist = pd.concat([DataSet(**x).download() for x in history_data], axis=1).loc[: pd.Timestamp.now(tz="GB")]
-    print(hist.iloc[-48:].to_string())
+    downloaded_data = []
+    download_errors = []
+
+    for x in history_data:
+        data, e = DataSet(**x).download()
+        if len(data) > 0:
+            downloaded_data += [data]
+        else:
+            download_errors += [e]
+
+    hist = pd.concat(downloaded_data, axis=1).loc[: pd.Timestamp.now(tz="GB")]
+    # print(hist.iloc[-48:].to_string())
 
     if isinstance(hist["ND"], pd.DataFrame):
         hist["demand"] = hist["ND"].mean(axis=1)
@@ -255,12 +265,18 @@ def get_latest_history(start):
 
     meteo_cols = ["temp_2m", "wind_10m", "rad"]
 
-    for c in meteo_cols:
+    for c in [m for m in meteo_cols if m in hist.columns]:
         hist.loc[hist[c].isnull(), c] = hist.loc[hist[c].isnull(), f"{c}_f"]
 
-    hist = hist.drop([f"{c}_f" for c in meteo_cols], axis=1)
+    hist = hist.drop([f"{c}_f" for c in meteo_cols if c in hist.columns], axis=1)
 
-    return hist.astype(float).dropna()
+    all_cols = ["total_wind", "bm_wind", "solar", "demand"] + meteo_cols
+    missing_cols = [c for c in all_cols if c not in hist.columns]
+    if len(missing_cols) > 0:
+        print(f">>> ERROR: No historic data for {missing_cols} ")
+        return pd.DataFrame(), missing_cols
+    else:
+        return hist.astype(float).dropna(), missing_cols
 
 
 def get_latest_forecast():
@@ -319,17 +335,43 @@ def get_latest_forecast():
         },
     ]
 
-    df = pd.concat([DataSet(**x).download() for x in forecast_data], axis=1)
-    df["demand"] = df[["demand", "NATIONALDEMAND"]].mean(axis=1)
-    df["date_time"] = df.index
-    df["time"] = df["date_time"].dt.hour + df["date_time"].dt.minute / 60
-    df["day_of_week"] = df["date_time"].dt.day_of_week.astype(int)
-    # df["day_of_year"] = df["date_time"].dt.day_of_year.astype(int)
+    downloaded_data = []
+    download_errors = []
 
-    df.index = df.index.tz_convert("GB")
-    df.drop(["date_time", "NATIONALDEMAND"], axis=1, inplace=True)
+    for x in forecast_data:
+        data, e = DataSet(**x).download()
+        if len(data) > 0:
+            downloaded_data += [data]
+        else:
+            download_errors += [e]
 
-    return df.sort_index().dropna()
+    df = pd.concat(downloaded_data, axis=1)
+
+    demand_cols = ["demand", "NATIONALDEMAND"]
+    if all([c in df.columns for c in demand_cols]):
+        df["demand"] = df[demand_cols].mean(axis=1)
+        df.drop(["NATIONALDEMAND"], axis=1, inplace=True)
+        missing_cols = []
+    elif "NATIONALDEMAND" not in df.columns:
+        missing_cols = ["NATIONALDEMAND"]
+    else:
+        missing_cols = []
+
+    all_cols = ["emb_wind", "bm_wind", "solar", "demand", "temp_2m", "wind_10m", "rad"]
+    missing_cols += [c for c in all_cols if c not in df.columns]
+    if len(missing_cols) > 0:
+        print(f">>> ERROR: No forecast data for {missing_cols} ")
+        return pd.DataFrame(), missing_cols
+    else:
+        df["date_time"] = pd.to_datetime(df.index)
+        df["time"] = df["date_time"].dt.hour + df["date_time"].dt.minute / 60
+        df["day_of_week"] = df["date_time"].dt.day_of_week.astype(int)
+        # df["day_of_year"] = df["date_time"].dt.day_of_year.astype(int)
+
+        df.index = pd.to_datetime(df.index).tz_convert("GB")
+        df.drop(["date_time"], axis=1, inplace=True)
+
+        return df.sort_index().dropna(), missing_cols
 
 
 class DataSet:
@@ -343,11 +385,12 @@ class DataSet:
         pass
 
     def download(self, tz="GB", params={}):
-        print(self.url)
+        print(f"    {self.url}")
         for n in range(RETRIES):
             try:
                 response = requests.get(url=self.url, params=self.params)
                 response.raise_for_status()
+                code = None
                 break
 
             except HTTPError as exc:
@@ -363,8 +406,9 @@ class DataSet:
         except:
             try:
                 df = pd.DataFrame(response.json()[self.record_path[0]])
-            except:
-                return response.json()
+            except Exception as e:
+                print(f">>> ERROR {e} for URL {self.url}\n>>> with params {self.params}")
+                return pd.DataFrame(), code
 
         try:
             df.index = pd.to_datetime(df[self.date_col])
@@ -420,7 +464,7 @@ class DataSet:
 
         df = df.sort_index()
         df = df[~df.index.duplicated()]
-        return df
+        return df, None
 
 
 def get_agile(start=pd.Timestamp("2023-07-01"), tz="GB", region="G"):
@@ -435,7 +479,7 @@ def get_agile(start=pd.Timestamp("2023-07-01"), tz="GB", region="G"):
 
     x = []
     while end > start:
-        print(start, end)
+        # print(start, end)
         params = {
             "page_size": 1500,
             "order_by": "period",

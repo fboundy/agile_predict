@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% load tz %}
+
+{% block content %}
+
+
+
+<div class="container-lg fluid">
+    <div class="row">
+            <h3>Home Assistant</h3>
+    </div>
+    <div class="row">    
+        <div class="col-lg-3 p-2">
+            <p>The GitHub repo includes the necessary yaml files to import the forecast into a sensor and plot on an ApexCharts card in Home Assistant.</p>
+        </div> 
+        <div class="col-lg-9 p-2">
+            <div class="card">
+                <div class="card-body">
+                    <pre class="chroma">
+                        sensor:
+                        - platform: rest
+                            <span "highlight-color">resource: </span>https://prices.fly.dev/api/G
+                            scan_interval: 3600
+                            name: Agile Predict
+                            value_template: {% verbatim %} "{{ value_json[0]['name']}}"{% endverbatim %} 
+                            json_attributes_path: "$[0]"
+                            json_attributes:
+                            - "created_at"
+                            - "prices"
+        
+                    </pre>
+                    
+              </div>
+          
+        </div>
+    </div>
+</div>
+
+{% endblock content %}

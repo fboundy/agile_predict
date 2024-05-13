@@ -128,7 +128,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = "en-us"
 
-TIME_ZONE = "UTC"
+TIME_ZONE = "GB"
 
 USE_I18N = True
 
@@ -163,6 +163,40 @@ CRISPY_ALLOWED_TEMPLATE_PACKS = "bootstrap5"  # new
 CRISPY_TEMPLATE_PACK = "bootstrap5"  # new
 
 GLOBAL_SETTINGS = {
+    "DATASETS": {
+        "bm_wind": {
+            "name": "Metered Wind",
+            "source": "National Grid ESO",
+        },
+        "demand": {
+            "name": "Demand",
+            "source": "National Grid ESO",
+        },
+        "NATIONALDEMAND": {
+            "name": "Demand (Interim History)",
+            "source": "Elexon BMRS",
+        },
+        "solar": {
+            "name": "Embedded Solar",
+            "source": "National Grid ESO",
+        },
+        "total_wind": {
+            "name": "Total Wind",
+            "source": "National Grid ESO",
+        },
+        "temp_2m": {
+            "name": "Temperature",
+            "source": "Open Meteo",
+        },
+        "wind_10m": {
+            "name": "Wind Speed",
+            "source": "Open Meteo",
+        },
+        "rad": {
+            "name": "Solar Radiation",
+            "source": "Open Meteo",
+        },
+    },
     "UPDATE_TIME": "09:00",
     "AGILE_RELEASE_TIME": "16:00",
     "REGIONS": {

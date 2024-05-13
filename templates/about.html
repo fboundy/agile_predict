@@ -1,0 +1,77 @@
+{% extends "base.html" %} {% load crispy_forms_tags %} {% load tz %} {% block content %}
+
+<div class="container-lg fluid">
+    <div class="row">
+        <div class="col-lg p-4">
+            <div class="card bg-dark-subtle p-3">
+                <h4>About AgilePredict</h4>
+                <p>
+                    This model attempts to forecasts Octopus Agile electricity prices up to 14 days in advance using a
+                    Machine Learning model trained on data from the Balancing Mechanism Reporting System (<a
+                        href="https://bmrs.elexon.co.uk/"
+                        >BRMS</a
+                    >), National Grid Electricity Supply Operator (<a href="https://www.nationalgrideso.com/data-portal"
+                        >NG ESO</a
+                    >) and weather data from<a href="https://open-meteo.com"> open-meteo.com</a>
+                </p>
+
+                <p>
+                    The model runs in Python using the
+                    <a href="https://xgboost.readthedocs.io/en/stable/#">XGBoost</a> Gradient Boosting library,
+                    <a href="https://pandas.pydata.org/">pandas</a> and
+                    <a href="https://www.djangoproject.com/">django</a>. The model is trained on a combination of
+                    historic actual data and historic forecasts together with the actual Agile prices. As more forecasts
+                    are processed the model should <i>learn</i> and improve its predictions.
+                </p>
+
+                <p>
+                    The forecasts should get automatically updated at 6:30, 11:30 and 16:30 daily. For each update the
+                    model is run 50 times to estimate the uncertainty in the prediction. It should be note that this
+                    approach only accounts for the uncertainty in the model and not the uncertainty in the underlying
+                    forecasts or generation, demand and weather.
+                </p>
+                <p>
+                    This model is very much work in progress: use it at your own risk! Overall trends are more likely to
+                    be accurate than the half-hourly slot details.
+                </p>
+            </div>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col-lg-6 fluid p-4">
+            <div class="card bg-dark-subtle p-3">
+                <h4>Supporting the Project</h4>
+                <p>
+                    This is an Open Source project. Contributions are welcome through
+                    <a href="https://github.com/fboundy/agile_predict">GitHub</a>
+                </p>
+                <h4>Don't Buy Me a Coffee...</h4>
+                <p>
+                    If you'd like to support the site financially you can use the Ko-fi link on this page. Feel free to
+                    donate more than £1! All proceeds will go to help support
+                    <a href="https://penrithmrt.org.uk">Penrith Mountain Rescue Team</a>
+                </p>
+                <h4>Octopus Referal Link</h4>
+                <p>
+                    If you would like to join Octopus please use my link, there's £50 credit for both of us if you do:
+                    <a href="https://share.octopus.energy/silk-dream-111"
+                        >https://share.octopus.energy/silk-dream-111</a
+                    >
+                </p>
+            </div>
+        </div>
+        <div class="col-lg-6 p-4">
+            <div class="card bg-secondary p-3">
+                <iframe
+                    id="kofiframe"
+                    src="https://ko-fi.com/fboundy/?hidefeed=true&widget=true&embed=true&preview=true"
+                    style="border: none; width: 100%; padding: 4px; background: #f9f9f9"
+                    height="712"
+                    title="fboundy"
+                ></iframe>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock content %}

@@ -1,49 +1,112 @@
-{% extends "base.html" %}
-{% load crispy_forms_tags %}
-{% block content %}
+{% extends "base.html" %} {% load crispy_forms_tags %} {% load tz %} {% block content %}
 
-
-<div class="container">
+<div class="container-lg fluid">
     <div class="row">
-        <div class="col-lg-2">
-            <form method="post">
-                {% csrf_token %}
-                {% crispy form form.helper %} 
-            </form>
-        </div>    
-        
-        <div class="col">
-            {% if graph %}
-                {{ graph|safe }}
-            {% endif %}
+        <div class="col-lg-2 bg-body">
+            <div class="accordion" id="accordionExample">
+                <div class="accordion-item">
+                    <h2 class="accordion-header" id="headingOne">
+                        <button
+                            class="accordion-button"
+                            type="button"
+                            data-bs-toggle="collapse"
+                            data-bs-target="#collapseOne"
+                            aria-expanded="true"
+                            aria-controls="collapseOne"
+                        >
+                            Options
+                        </button>
+                    </h2>
+                    <div id="collapseOne" class="accordion-collapse collapse show" data-bs-parent="#accordionExample">
+                        <div class="accordion-body">Coming soon...</div>
+                    </div>
+                </div>
+                <div class="accordion-item">
+                    <h2 class="accordion-header" id="headingTwo">
+                        <button
+                            class="accordion-button collapsed"
+                            type="button"
+                            data-bs-toggle="collapse"
+                            data-bs-target="#collapseTwo"
+                            aria-expanded="false"
+                            aria-controls="collapseTwo"
+                        >
+                            Forecasts
+                        </button>
+                    </h2>
+                    <div
+                        id="collapseTwo"
+                        class="accordion-collapse collapse bg-tertiary"
+                        aria-labelledby="headingTwo"
+                        data-bs-parent="#accordionExample"
+                    >
+                        <div class="accordion-body">
+                            <form method="post">{% csrf_token %} {% crispy form form.helper %}</form>
+                        </div>
+                    </div>
+                </div>
+                {% if history_errors or forecast_errors %}
+                <div class="accordion-item">
+                    <h2 class="accordion-header" id="headingTwo">
+                        <button
+                            class="accordion-button collapsed bg-warning-subtle"
+                            type="button"
+                            data-bs-toggle="collapse"
+                            data-bs-target="#collapseThree"
+                            aria-expanded="false"
+                            aria-controls="collapseThree"
+                        >
+                            Warnings
+                        </button>
+                    </h2>
+                    <div
+                        id="collapseThree"
+                        class="accordion-collapse collapse"
+                        aria-labelledby="headingThree"
+                        data-bs-parent="#accordionExample"
+                    >
+                        <div class="accordion-body">
+                            <div class="row">
+                                <p>The following errors were encountered the last time the database was updated:</p>
+                            </div>
+                            {%if history_errors %}
+                            <div class="row bg-primary text-white text-center">
+                                <h5>History Data</h5>
+                            </div>
+                            {% for item in history_errors%}
+                            <div class="row bg-light text-center">
+                                <strong>Date/Time</strong>
+                            </div>
+                            <div class="row text-center">
+                                <p>{{item.date_time}}</p>
+                            </div>
+                            <div class="row bg-light text-center">
+                                <strong>Dataset</strong>
+                            </div>
+                            <div class="row text-center">
+                                <p>{{item.dataset}}</p>
+                            </div>
+                            <div class="row bg-light text-center">
+                                <strong>Source</strong>
+                            </div>
+                            <div class="row text-center">
+                                <p>{{item.source}}</p>
+                            </div>
+                            {% endfor %} {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
         </div>
-    </div>
-    <div class="row"> 
-        <div class="col-lg">
-            <p>This model forecasts Octopus Agile electricity prices up to 14 days in advance using a Machine Learning model trained
-            on data from the Balancing Mechanism Reporting System (<a href="https://bmrs.elexon.co.uk/">BRMS</a>), National Grid 
-            Electricity Supply Operator (<a href="https://www.nationalgrideso.com/data-portal">NG ESO</a>) and weather data from 
-            <a href="https://open-meteo.com"> open-meteo.com</a><?p>
 
-            <p>Because the app is hosted on a <a href= "http://fly.io">fly.io</a> hobby account the database is only updated when the page
-            is accessed and a daily forecast is run on the first access after 09:00 (UK local time). This may sometimes cause slight delays in loading. </p>
-        
-            <h2> Work in Progress!</h2>    
-        
-            <p>This model is very much work in progress. Use at your own risk. Overall trends are more likely to be accurate than the half-hourly slot details.</P>
-        
-            <h2>API Access</h2>    
-            <p>RESTful API access to the three most recent price forecasts is available via <a href="http://prices.fly.dev/api">prices.fly.dev/api</a> for all regions
-            or via <a href="http://prices.fly.dev/api/{REGION}">prices.fly.dev/api/{REGION}</a> for a given region.</p>
-            
-            <h2>Development</h2>    
-            <p>Contributions to the project are welcome through <a href="https://github.com/fboundy/agile_predict">GitHub</a></p>
-
-            <h2>Home Assistant</h2>
-            <p>The GitHub repo includes the necessary yaml files to import the forecast into a sensor and plot on an ApexCharts card in Home Assistant.</p>
-            </div> 
+        <div class="col">
+            <div class="row bg-body text-center">
+                <h2>{{region_name}} {%if region != "X" %} (DNO Region {{region}}) {%endif%}</h2>
+            </div>
+            <div class="row">{% if graph %} {{ graph|safe }} {% endif %}</div>
+        </div>
     </div>
 </div>
 
 {% endblock content %}
-

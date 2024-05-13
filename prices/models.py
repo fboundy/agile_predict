@@ -34,6 +34,12 @@ class AgileData(models.Model):
         return reverse("graph", kwargs={"region": self.region})
 
 
+class UpdateErrors(models.Model):
+    date_time = models.DateTimeField()
+    type = models.CharField(max_length=10)
+    dataset = models.CharField(max_length=32)
+
+
 class History(models.Model):
     date_time = models.DateTimeField(unique=True)
     total_wind = models.FloatField()

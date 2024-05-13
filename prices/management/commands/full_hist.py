@@ -15,7 +15,7 @@ MAX_HIST = 28
 
 class Command(BaseCommand):
     def handle(self, *args, **options):
-        new_hist = get_latest_history(start=pd.Timestamp("2023-07-01", tz="GB"))
+        new_hist, _ = get_latest_history(start=pd.Timestamp("2023-07-01", tz="GB"))
         if len(new_hist) > 0:
             print(new_hist)
             History.objects.all().delete()

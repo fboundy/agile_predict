@@ -1,0 +1,161 @@
+{% extends "base.html" %} {% load crispy_forms_tags %} {% load tz %} {%load static %}{% block content %}
+
+<div class="container">
+    <div class="row mb-3"></div>
+    <div class="row">
+        <div class="col-lg mb-4">
+            <div class="card bg-dark-subtle">
+                <div class="card-body">
+                    <h5 class="card-title">API Access</h5>
+                    <p>
+                        RESTful API access to the three most recent price forecasts is available via
+                        <a href="http://agilepredict.com/api">prices.fly.dev/api</a> for all regions or via
+                        <a href="http://agilepredict/api/{REGION}">prices.fly.dev/api/{REGION}</a> for a given region.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col">
+            <div class="row">
+                <div class="col-lg-6 mb-3 d-flex">
+                    <div class="card bg-dark-subtle">
+                        <div class="card-body d-flex flex-column">
+                            <h5 class="card-title">Home Assistant</h5>
+                            <p>
+                                The GitHub repo includes the necessary yaml files to import the forecast into a sensor
+                                in Home Assistant. Alternatively you can simply copy the code from this page into your
+                                <code>configuration.yaml</code> file.
+                            </p>
+                            <p>
+                                Also included is the YAML required for a custom Lovelace card such as that shown below
+                                which plots the sensor attributes using the
+                                <a href="https://github.com/RomRider/apexcharts-card">Apex Charts Card</a>
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-6 mb-3 d-flex">
+                    <div class="card bg-dark-subtle">
+                        <div class="card-header">Sensor YAML</div>
+                        <div class="card-body d-flex flex-column">
+                            <pre class="card-text mb-3"><code>
+sensor:
+- platform: rest
+    resource: https://prices.fly.dev/api/G
+    scan_interval: 3600
+    name: Agile Predict
+    value_template: {% verbatim %} "{{ value_json[0]['name']}}" {% endverbatim %}
+    json_attributes_path: "$[0]"
+    json_attributes:
+    - "created_at"
+    - "prices"                                
+                            </code>
+                        </pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <div class="card bg-dark-subtle">
+                    <div class="card-header">Apex Chart</div>
+                    <div class="card-body d-flex flex-column">
+                        <img src="{% static 'chart.png' %}" alt="My image" />
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4 mb-3 d-flex">
+            {% comment %}
+            <div class="col-lg-4 mb-3 d-flex align-items-stretch"></div>
+            {% endcomment %}
+            <div class="card bg-dark-subtle">
+                <div class="card-header">Apex Chart YAML</div>
+                <div class="card-body d-flex flex-column">
+                    <pre class="card-text mb-3"><code>
+type: custom:apexcharts-card
+apex_config: null
+header:
+  show: true
+  show_states: true
+  colorize_states: true
+graph_span: 7d
+yaxis:
+  - id: price
+    decimals: 0
+    apex_config:
+      tickAmount: 8
+stacked: false
+span:
+  start: day
+series:
+  - entity: sensor.octopus_energy_electricity_19m*******_************_current_rate
+    name: Actual Agile Import (current rate)
+    transform: return x * 100;
+    show:
+      in_chart: false
+    unit: p/kWh
+  - entity: >-
+      event.octopus_energy_electricity_19m*******_************_current_day_rates
+    yaxis_id: price
+    name: Actual Agile Import (current day)
+    color: yellow
+    opacity: 1
+    stroke_width: 2
+    extend_to: now
+    type: column
+    unit: p/kWh
+    data_generator: |
+      return entity.attributes.rates.map((entry) => {
+         return [new Date(entry.start), entry.value_inc_vat*100];
+       });     
+    offset: '-15min'
+    show:
+      in_header: false
+      legend_value: false
+      offset_in_name: false
+  - entity: event.octopus_energy_electricity_19m*******_************_next_day_rates
+    yaxis_id: price
+    name: Actual Agile Import (next day)
+    color: yellow
+    opacity: 1
+    stroke_width: 2
+    type: column
+    unit: p/kWh
+    data_generator: |
+      return entity.attributes.rates.map((entry) => {
+         return [new Date(entry.start), entry.value_inc_vat*100];
+       });     
+    offset: '-15min'
+    show:
+      in_header: false
+      legend_value: false
+      offset_in_name: false
+  - entity: sensor.agile_predict
+    yaxis_id: price
+    name: Predicted Agile
+    color: red
+    opacity: 1
+    stroke_width: 3
+    extend_to: now
+    unit: p/kWh
+    data_generator: |
+      return entity.attributes.prices.map((entry) => {
+         return [new Date(entry.date_time), entry.agile_pred];
+       });     
+    offset: '-15min'
+    show:
+      in_header: false
+      legend_value: false
+      offset_in_name: false
+                    </code>
+                </pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock content %}
