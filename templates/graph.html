@@ -1,50 +1,19 @@
 {% extends "base.html" %} {% load crispy_forms_tags %} {% load tz %} {% block content %}
 
 <div class="container-lg fluid">
+    <div class="row bg-body text-center">
+        <h3>{{region_name}} {%if region != "X" %} (DNO Region {{region}}) {%endif%}</h3>
+    </div>
     <div class="row">
-        <div class="col-lg-2 bg-body">
+        <div class="col-lg-9">
+            <div class="row">{% if graph %} {{ graph|safe }} {% endif %}</div>
+        </div>
+        <div class="col-lg-3 bg-body">
+            <div class="row">
+                <form method="post">{% csrf_token %} {% crispy form form.helper %}</form>
+            </div>
+
             <div class="accordion" id="accordionExample">
-                <div class="accordion-item">
-                    <h2 class="accordion-header" id="headingOne">
-                        <button
-                            class="accordion-button"
-                            type="button"
-                            data-bs-toggle="collapse"
-                            data-bs-target="#collapseOne"
-                            aria-expanded="true"
-                            aria-controls="collapseOne"
-                        >
-                            Options
-                        </button>
-                    </h2>
-                    <div id="collapseOne" class="accordion-collapse collapse show" data-bs-parent="#accordionExample">
-                        <div class="accordion-body">Coming soon...</div>
-                    </div>
-                </div>
-                <div class="accordion-item">
-                    <h2 class="accordion-header" id="headingTwo">
-                        <button
-                            class="accordion-button collapsed"
-                            type="button"
-                            data-bs-toggle="collapse"
-                            data-bs-target="#collapseTwo"
-                            aria-expanded="false"
-                            aria-controls="collapseTwo"
-                        >
-                            Forecasts
-                        </button>
-                    </h2>
-                    <div
-                        id="collapseTwo"
-                        class="accordion-collapse collapse bg-tertiary"
-                        aria-labelledby="headingTwo"
-                        data-bs-parent="#accordionExample"
-                    >
-                        <div class="accordion-body">
-                            <form method="post">{% csrf_token %} {% crispy form form.helper %}</form>
-                        </div>
-                    </div>
-                </div>
                 {% if history_errors or forecast_errors %}
                 <div class="accordion-item">
                     <h2 class="accordion-header" id="headingTwo">
@@ -98,13 +67,6 @@
                 </div>
                 {% endif %}
             </div>
-        </div>
-
-        <div class="col">
-            <div class="row bg-body text-center">
-                <h2>{{region_name}} {%if region != "X" %} (DNO Region {{region}}) {%endif%}</h2>
-            </div>
-            <div class="row">{% if graph %} {{ graph|safe }} {% endif %}</div>
         </div>
     </div>
 </div>

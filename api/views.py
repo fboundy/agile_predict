@@ -7,8 +7,6 @@ from rest_framework import generics
 from prices.models import Forecasts
 from .serializers import PriceForecastSerializer, PriceForecastRegionSerializer
 
-from config.utils import update_if_required
-
 
 class PriceForecastAPIView(generics.ListAPIView):
     ids = [f.id for f in Forecasts.objects.all().order_by("-created_at")[:3]]

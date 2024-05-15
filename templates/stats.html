@@ -1,0 +1,11 @@
+{% extends "base.html" %} {% block content %}
+
+<div class="container-lg fluid">
+    <div class="row">
+        <div class="col-lg p-4">
+            <div class="row">{% if stats %} {{ stats|safe }} {% endif %}</div>
+        </div>
+    </div>
+</div>
+
+{% endblock content %}

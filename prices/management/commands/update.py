@@ -130,7 +130,7 @@ class Command(BaseCommand):
         if len(new_hist) > 0:
             if debug:
                 print(new_hist)
-            df_to_Model(new_hist, History)
+            df_to_Model(new_hist, History, update=True)
 
         else:
             print("None")
@@ -198,7 +198,7 @@ class Command(BaseCommand):
                         dataset=c,
                     )
                     obj.save()                
-                print("")
+                print(""
 
             else:
                 if debug:

@@ -73,39 +73,6 @@ def get_nordpool(start):
     return price.resample("30min").ffill().loc[start:]
 
 
-def update_if_required():
-    pass
-    # time_now = pd.Timestamp.now(tz="GB")
-    # if (
-    #     Forecasts.objects.count() == 0
-    #     or PriceHistory.objects.count() == 0
-    #     or ForecastData.objects.count() == 0
-    #     or AgileData.objects.count == 0
-    # ):
-    #     call_command("update")
-    # else:
-    #     f = Forecasts.objects.latest("created_at")
-    #     p = PriceHistory.objects.latest("date_time")
-
-    #     agile_ends = pd.Timestamp(p.date_time).tz_convert("GB")
-    #     latest_created = pd.Timestamp(f.created_at).tz_convert("GB")
-
-    #     updated_today = pd.Timestamp(f.created_at).day == time_now.day
-    #     agile_ends_today = p.date_time.day == time_now.day
-
-    #     print(f"Models updated: {latest_created}")
-    #     print(f"Agile ends: {agile_ends}")
-    #     print(f"Models updated today: {updated_today}")
-    #     print(f"Agile ends today: {agile_ends_today}")
-    #     print(f"After UPDATE_TIME: {time_now >= pd.Timestamp(GLOBAL_SETTINGS['UPDATE_TIME'], tz='GB')}")
-    #     print(f"After AGILE RELEASE TIME: {time_now >= pd.Timestamp(GLOBAL_SETTINGS['AGILE_RELEASE_TIME'], tz='GB')}")
-
-    #     if (time_now >= pd.Timestamp(GLOBAL_SETTINGS["UPDATE_TIME"], tz="GB")) and not updated_today:
-    #         call_command("update")
-    #     elif (time_now >= pd.Timestamp(GLOBAL_SETTINGS["AGILE_RELEASE_TIME"], tz="GB")) and agile_ends_today:
-    #         call_command("latest_agile")
-
-
 def _oct_time(d):
     # print(d)
     return datetime(
@@ -520,15 +487,28 @@ def day_ahead_to_agile(df, reverse=False, region="G"):
     return x["Out"].rename(name)
 
 
-def df_to_Model(df, myModel):
+def df_to_Model(df, myModel, update=False):
     df = df.dropna()
     for index, row in df.iterrows():
-        x = {"date_time": index} | row.to_dict()
-        obj = myModel(**x)
-        try:
-            obj.save()
-        except:
-            print(f"Unable to save object to database: {x}")
+        if update:
+            try:
+                obj = myModel.objects.get(date_time=index)
+                for key, value in row.items():
+                    setattr(obj, key, value)
+                obj.save()
+            except myModel.DoesNotExist:
+                new_values = {"date_time": index}
+                new_values.update(row)
+                obj = myModel(**new_values)
+                obj.save()
+        else:
+            try:
+                new_values = {"date_time": index}
+                new_values.update(row)
+                obj = myModel(**new_values)
+                obj.save()
+            except:
+                print(f"Failed to update {myModel} with data for datetime {index}")
 
 
 def model_to_df(myModel):
