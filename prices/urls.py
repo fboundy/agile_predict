@@ -1,7 +1,8 @@
 from django.urls import path
-from .views import GraphFormView, ApiHowToView, GlossaryView, AboutView, StatsView
+from .views import GraphFormView, ApiHowToView, GlossaryView, AboutView, StatsView, ColorView
 
 urlpatterns = [
+    path("color", ColorView.as_view(), name="color"),
     path("stats", StatsView.as_view(), name="api_how_to"),
     path("api_how_to", ApiHowToView.as_view(), name="api_how_to"),
     path("glossary", GlossaryView.as_view(), name="glossary"),

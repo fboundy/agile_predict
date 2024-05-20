@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <link href="https://stackpath.bootstrapcdn.com/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet" />
+        <title>Color Mode Toggle</title>
+        <style>
+            /* Custom styles for light and dark themes */
+            [data-bs-theme="light"] {
+                --bs-body-bg: #ffffff;
+                --bs-body-color: #000000;
+                --bs-navbar-bg: #f8f9fa;
+                --bs-navbar-color: #000000;
+            }
+            [data-bs-theme="dark"] {
+                --bs-body-bg: #343a40;
+                --bs-body-color: #ffffff;
+                --bs-navbar-bg: #343a40;
+                --bs-navbar-color: #ffffff;
+            }
+            body {
+                background-color: var(--bs-body-bg);
+                color: var(--bs-body-color);
+            }
+            .navbar {
+                background-color: var(--bs-navbar-bg);
+                color: var(--bs-navbar-color);
+            }
+        </style>
+    </head>
+    <body data-bs-theme="light">
+        <nav class="navbar navbar-expand-lg">
+            <a class="navbar-brand" href="#">Navbar</a>
+            <div class="dropdown ms-auto">
+                <button
+                    class="btn btn-outline-secondary dropdown-toggle"
+                    type="button"
+                    id="colorModeDropdown"
+                    data-bs-toggle="dropdown"
+                    aria-expanded="false"
+                >
+                    Toggle Color Mode
+                </button>
+                <ul class="dropdown-menu" aria-labelledby="colorModeDropdown">
+                    <li><a class="dropdown-item" href="#" data-theme="light">Light Mode</a></li>
+                    <li><a class="dropdown-item" href="#" data-theme="dark">Dark Mode</a></li>
+                    <li><a class="dropdown-item" href="#" data-theme="system">System Default</a></li>
+                </ul>
+            </div>
+        </nav>
+
+        <div class="container">
+            <h1 class="mt-5">Hello, world!</h1>
+            <p>This is a simple example of how to toggle color modes with Bootstrap 5.3.</p>
+            <!-- Add a div whose content depends on the theme -->
+            <div id="themeDependentContent">
+                <!-- Content will be dynamically updated based on the theme -->
+            </div>
+        </div>
+
+        <script>
+            document.addEventListener("DOMContentLoaded", (event) => {
+                const dropdownItems = document.querySelectorAll(".dropdown-item");
+                const bodyElement = document.body;
+                const themeDependentContent = document.getElementById("themeDependentContent");
+
+                const applyTheme = (theme) => {
+                    if (theme === "system") {
+                        if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+                            bodyElement.setAttribute("data-bs-theme", "dark");
+                        } else {
+                            bodyElement.setAttribute("data-bs-theme", "light");
+                        }
+                    } else {
+                        bodyElement.setAttribute("data-bs-theme", theme);
+                    }
+                };
+
+                // Check localStorage for saved color mode
+                const savedColorMode = localStorage.getItem("colorMode") || "system";
+                applyTheme(savedColorMode);
+
+                dropdownItems.forEach((item) => {
+                    item.addEventListener("click", (event) => {
+                        event.preventDefault();
+                        const selectedTheme = item.getAttribute("data-theme");
+                        localStorage.setItem("colorMode", selectedTheme);
+                        applyTheme(selectedTheme);
+                    });
+                });
+
+                // Listen for system color scheme changes
+                window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
+                    if (localStorage.getItem("colorMode") === "system") {
+                        applyTheme("system");
+                    }
+                });
+
+                // Update the content of themeDependentContent based on the theme
+                const updateThemeDependentContent = () => {
+                    const currentTheme = bodyElement.getAttribute("data-bs-theme");
+                    if (currentTheme === "dark") {
+                        themeDependentContent.textContent = "This is dark theme content.";
+                    } else {
+                        themeDependentContent.textContent = "This is light theme content.";
+                    }
+                };
+
+                // Call the function initially and on theme change
+                updateThemeDependentContent();
+                bodyElement.addEventListener("data-bs-theme-changed", updateThemeDependentContent);
+            });
+        </script>
+
+        <script src="https://code.jquery.com/jquery-3.3.1.slim.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.7/umd/popper.min.js"></script>
+        <script src="https://stackpath.bootstrapcdn.com/bootstrap/5.3.0/js/bootstrap.min.js"></script>
+    </body>
+</html>

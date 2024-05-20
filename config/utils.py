@@ -169,8 +169,12 @@ def get_latest_history(start):
             "rename": ["bm_wind"],
         },
         {
-            "url": "https://api.nationalgrideso.com/api/3/action/datastore_search?resource_id=f93d1835-75bc-43e5-84ad-12472b180a98&limit=1000000&sort=DATETIME",
-            "params": {"offset": 254110 + delta},
+            "url": "https://api.nationalgrideso.com/api/3/action/datastore_search_sql",
+            "params": parse.urlencode(
+                {
+                    "sql": f"""SELECT COUNT(*) OVER () AS _count, * FROM "f93d1835-75bc-43e5-84ad-12472b180a98" WHERE "DATETIME" >= '{pd.Timestamp(start).strftime("%Y-%m-%d")}' ORDER BY "_id" ASC LIMIT 20000"""
+                }
+            ),
             "record_path": ["result", "records"],
             "date_col": "DATETIME",
             "cols": ["SOLAR", "WIND"],

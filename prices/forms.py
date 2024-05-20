@@ -26,7 +26,11 @@ class ForecastForm(forms.Form):
         required=False,
         help_text="Show forecast prices which have now been superseded by the actual Agile prices",
     )
-    show_range_on_most_recent_forecast = forms.BooleanField(initial=True, required=False)
+    show_range_on_most_recent_forecast = forms.BooleanField(
+        initial=True,
+        required=False,
+        help_text="Show the 10% and 90% confidence level spread on the most recent forecast. This reflects the model uncertainty, not the weather uncertainty",
+    )
 
     def __init__(self, *args, **kwargs):
         super(ForecastForm, self).__init__(*args, **kwargs)

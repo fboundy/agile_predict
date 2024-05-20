@@ -19,6 +19,10 @@ class GlossaryView(TemplateView):
     template_name = "base.html"
 
 
+class ColorView(TemplateView):
+    template_name = "color_mode.html"
+
+
 class ApiHowToView(TemplateView):
     template_name = "api_how_to.html"
 
@@ -150,7 +154,7 @@ class GraphFormView(FormView):
         days_to_plot = int(kwargs.get("days_to_plot", 7))
         show_generation_and_demand = kwargs.get("show_generation_and_demand", True)
         show_range = kwargs.get("show_range_on_most_recent_forecast", True)
-        show_overlap = kwargs.get("show_forecast_overlap", True)
+        show_overlap = kwargs.get("show_forecast_overlap", False)
         print(">>> views.py | GraphFormView | update_chart")
         print(forecasts_to_plot)
 
