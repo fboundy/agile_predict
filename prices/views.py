@@ -379,7 +379,7 @@ class GraphFormView(FormView):
                 dict(dtickrange=[None, 86000000], value="%H:%M\n%a %d %b"),
                 dict(dtickrange=[86000000, None], value="%a\n%b %d"),
             ],
-            fixedrange=True,
+            # fixedrange=True,
         )
 
         context["graph"] = figure.to_html(

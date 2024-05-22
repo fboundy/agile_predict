@@ -29,24 +29,18 @@
             }
         </style>
     </head>
+
     <body data-bs-theme="light">
         <nav class="navbar navbar-expand-lg">
-            <a class="navbar-brand" href="#">Navbar</a>
-            <div class="dropdown ms-auto">
-                <button
-                    class="btn btn-outline-secondary dropdown-toggle"
-                    type="button"
-                    id="colorModeDropdown"
-                    data-bs-toggle="dropdown"
-                    aria-expanded="false"
-                >
-                    Toggle Color Mode
-                </button>
-                <ul class="dropdown-menu" aria-labelledby="colorModeDropdown">
-                    <li><a class="dropdown-item" href="#" data-theme="light">Light Mode</a></li>
-                    <li><a class="dropdown-item" href="#" data-theme="dark">Dark Mode</a></li>
-                    <li><a class="dropdown-item" href="#" data-theme="system">System Default</a></li>
-                </ul>
+            <div class="container-fluid">
+                <a class="navbar-brand" href="#">Navbar</a>
+                <div class="dropdown ms-auto">
+                    <ul class="dropdown-menu" aria-labelledby="colorModeDropdown">
+                        <li><a class="dropdown-item1" href="#" data-theme="light">Light Mode</a></li>
+                        <li><a class="dropdown-item1" href="#" data-theme="dark">Dark Mode</a></li>
+                        <li><a class="dropdown-item1" href="#" data-theme="system">System Default</a></li>
+                    </ul>
+                </div>
             </div>
         </nav>
 
@@ -61,43 +55,27 @@
 
         <script>
             document.addEventListener("DOMContentLoaded", (event) => {
-                const dropdownItems = document.querySelectorAll(".dropdown-item");
+                const dropdownItems = document.querySelectorAll(".dropdown-item1");
                 const bodyElement = document.body;
                 const themeDependentContent = document.getElementById("themeDependentContent");
 
+                // Function to apply the selected theme
                 const applyTheme = (theme) => {
+                    // Check if the theme is 'system' and set based on system preference
                     if (theme === "system") {
                         if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
-                            bodyElement.setAttribute("data-bs-theme", "dark");
+                            theme = "dark";
                         } else {
-                            bodyElement.setAttribute("data-bs-theme", "light");
+                            theme = "light";
                         }
-                    } else {
-                        bodyElement.setAttribute("data-bs-theme", theme);
                     }
+                    // Set the data-bs-theme attribute on the body element
+                    bodyElement.setAttribute("data-bs-theme", theme);
+                    // Update the theme-dependent content
+                    updateThemeDependentContent();
                 };
 
-                // Check localStorage for saved color mode
-                const savedColorMode = localStorage.getItem("colorMode") || "system";
-                applyTheme(savedColorMode);
-
-                dropdownItems.forEach((item) => {
-                    item.addEventListener("click", (event) => {
-                        event.preventDefault();
-                        const selectedTheme = item.getAttribute("data-theme");
-                        localStorage.setItem("colorMode", selectedTheme);
-                        applyTheme(selectedTheme);
-                    });
-                });
-
-                // Listen for system color scheme changes
-                window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
-                    if (localStorage.getItem("colorMode") === "system") {
-                        applyTheme("system");
-                    }
-                });
-
-                // Update the content of themeDependentContent based on the theme
+                // Function to update the content of the theme-dependent div
                 const updateThemeDependentContent = () => {
                     const currentTheme = bodyElement.getAttribute("data-bs-theme");
                     if (currentTheme === "dark") {
@@ -107,9 +85,26 @@
                     }
                 };
 
-                // Call the function initially and on theme change
-                updateThemeDependentContent();
-                bodyElement.addEventListener("data-bs-theme-changed", updateThemeDependentContent);
+                // Check localStorage for saved color mode and apply it
+                const savedColorMode = localStorage.getItem("colorMode") || "system";
+                applyTheme(savedColorMode);
+
+                // Event listener for dropdown items to change the theme
+                dropdownItems.forEach((item) => {
+                    item.addEventListener("click", (event) => {
+                        event.preventDefault();
+                        const selectedTheme = item.getAttribute("data-theme");
+                        localStorage.setItem("colorMode", selectedTheme);
+                        applyTheme(selectedTheme);
+                    });
+                });
+
+                // Listen for system color scheme changes and apply the 'system' theme if selected
+                window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+                    if (localStorage.getItem("colorMode") === "system") {
+                        applyTheme("system");
+                    }
+                });
             });
         </script>
 

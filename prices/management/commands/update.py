@@ -115,17 +115,17 @@ class Command(BaseCommand):
 
         new_hist, missing_hist = get_latest_history(start=start)
 
-        if len(missing_hist) > 0:
-            print(">>> ERROR: Unable to update history due to missing columns:", end="")
-            for c in missing_hist:
-                print(c, end="")
-                obj=UpdateErrors(
-                    date_time=pd.Timestamp.now(tz='GB'),
-                    type='History',
-                    dataset=c,
-                )
-                obj.save()
-            print("")
+        # if len(missing_hist) > 0:
+        #     print(">>> ERROR: Unable to update history due to missing columns:", end="")
+        #     for c in missing_hist:
+        #         print(c, end="")
+        #         obj=UpdateErrors(
+        #             date_time=pd.Timestamp.now(tz='GB'),
+        #             type='History',
+        #             dataset=c,
+        #         )
+        #         obj.save()
+        #     print("")
 
         if len(new_hist) > 0:
             if debug:
