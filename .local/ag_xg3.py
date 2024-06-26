@@ -27,7 +27,8 @@ def kde_quantiles(kde, dt, pred, quantiles=(0.1,0.5, 0.9), lim=(0, 150)):
     return results
 
 
-PLOT = False
+PLOT = True
+
 
 # %%
 %%time
@@ -40,19 +41,25 @@ ph = pd.read_hdf(r"forecast.hdf", key="PriceHistory")
 # ff=ff.sort_values('dt1600').drop_duplicates('date').sort_index().drop(['date', 'dt1600'],axis=1)
 ff["ag_start"] = ff["created_at"].dt.normalize() + pd.Timedelta(hours=22)
 ff["ag_end"] = ff["created_at"].dt.normalize() + pd.Timedelta(hours=46)
-ff_train = ff.iloc[:-1].sample(frac=0.8)
+ff_train = ff.iloc[:-1].sample(frac=0.5)
 ff_test = ff.iloc[:-1].drop(ff_train.index)
 df = (
     fd.merge(ff_train, right_index=True, left_on="forecast_id")
     .drop(["id", "forecast_id", "name", "created_at"], axis=1)
     .rename({"day_ahead": "day_ahead_pred"}, axis=1)
 )
+# df = (
+#     df[(df["date_time"] >= df["ag_start"]) & (df["date_time"] < df["ag_end"])]
+#     .groupby("date_time")
+#     .last()
+#     .drop(["ag_start", "ag_end"], axis=1)
+# )
 df = (
     df[(df["date_time"] >= df["ag_start"]) & (df["date_time"] < df["ag_end"])]
-    .groupby("date_time")
-    .last()
     .drop(["ag_start", "ag_end"], axis=1)
-)
+).set_index('date_time')
+
+
 df = (
     df.merge(ph, left_index=True, right_on="date_time")
     .set_index("date_time")
@@ -100,24 +107,41 @@ xlim = (
 )
 
 if PLOT:
-    fig, ax = plt.subplots(14, 2, figsize=(6, 28), sharex=True, sharey="col", layout="tight")
+    # fig, ax = plt.subplots(14, 2, figsize=(12, 28), sharex=True, sharey="col", layout="tight", width_ratios=[1,3])
 
 
-    ax[0, 0].set_xlim(xlim)
-    ax[0, 1].set_xlim(xlim)
-    ax[0, 0].set_ylim(xlim)
+    # ax[0, 0].set_xlim(xlim)
+    # ax[0, 1].set_xlim(xlim)
+    # ax[0, 0].set_ylim(xlim)
+
+    # for dt in range(14):
+    #     x = results[results["dt"].astype(int) == dt]
+    #     print(f"Delta T: {dt:3d} days  Count:{len(x):5d}  ")
+    #     sns.kdeplot(y=x["day_ahead"], x=x["pred"], ax=ax[dt, 0], fill=True)
+    #     for y in range(20, 120, 20):
+    #         pred = np.array([[dt, p, y] for p in range(150)])
+    #         c = np.exp(kde.score_samples(pred)).cumsum()
+    #         c /= c[-1]
+    #         ax[dt, 1].plot(pred[:, 2], c, color=f"C{int(y/20+2)}")
+    #         ax[dt, 1].plot((y,y),(0,1), ls='--', color=f"C{int(y/20+2)}")
+    #     ax[dt,0].plot((0,150),(0,150), color='black', ls='--')
 
     for dt in range(14):
+        fig,ax=plt.subplots(1,2, figsize=(18,6), sharex=True, width_ratios=[1,2])
         x = results[results["dt"].astype(int) == dt]
         print(f"Delta T: {dt:3d} days  Count:{len(x):5d}  ")
-        sns.kdeplot(y=x["day_ahead"], x=x["pred"], ax=ax[dt, 0], fill=True)
-        pred = np.array([[dt, 90, p] for p in range(150)])
-        c = np.exp(kde.score_samples(pred)).cumsum()
-        c /= c[-1]
-        ax[dt, 1].plot(pred[:, 2], c)
-
-
-
+        sns.kdeplot(y=x["day_ahead"], x=x["pred"], ax=ax[0], fill=True)
+        ax[0].plot((10,130),(10,130), color='black', ls='--', lw=1)
+        diag=np.array([[dt, d, d] for d in range(10,130)])
+        c_max = np.max(np.exp(kde.score_samples(diag)))
+        for p in range(10,130):
+            slice=np.array([[dt, p, d] for d in range(10,130)])
+            c = np.exp(kde.score_samples(slice))/c_max
+            ax[0].plot(p+c*5,slice[:,2], color='gray', lw=1)
+            if p % 10 == 0 :
+                ax[1].plot(slice[:,2],c.cumsum()/c.cumsum()[-1], lw=1)
+                
+#%%
 pred_X = (
     fd[fd["forecast_id"] == ff.index[-1]]
     .set_index("date_time")

@@ -11,6 +11,6 @@ class Command(BaseCommand):
 
         hdf = os.path.join(os.getcwd(), ".local", "forecast.hdf")
 
-        for data in [Forecasts, ForecastData, AgileData, PriceHistory]:
+        for data in [Forecasts, ForecastData, PriceHistory]:
             df = pd.DataFrame(list(data.objects.all().values()))
             df.to_hdf(hdf, key=data.__name__, mode="a")

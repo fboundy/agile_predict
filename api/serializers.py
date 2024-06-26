@@ -18,7 +18,7 @@ from prices.models import PriceHistory, AgileData, Forecasts
 class DataSerializer(serializers.ModelSerializer):
     class Meta:
         model = AgileData
-        fields = ["date_time", "agile_pred", "region"]
+        fields = ["date_time", "agile_pred", "agile_low", "agile_high", "region"]
 
 
 class PriceForecastSerializer(serializers.ModelSerializer):
@@ -44,7 +44,7 @@ class FilteredDataSerializer(serializers.ModelSerializer):
     class Meta:
         list_serializer_class = FilteredListSerializer
         model = AgileData
-        fields = ["date_time", "agile_pred"]
+        fields = ["date_time", "agile_pred", "agile_low", "agile_high"]
 
 
 class PriceForecastRegionSerializer(serializers.ModelSerializer):

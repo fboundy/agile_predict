@@ -26,12 +26,6 @@ class PriceForecastRegionAPIView(generics.ListAPIView):
         return context
 
     def get_queryset(self):
-        #     """
-        #     This view should return a list of all the purchases for
-        #     the user as determined by the username portion of the URL.
-        #     """
-        #     update_if_required()
-
         ids = [f.id for f in Forecasts.objects.all().order_by("-created_at")[:3]]
 
         queryset = Forecasts.objects.filter(id__in=ids).order_by("-created_at")
