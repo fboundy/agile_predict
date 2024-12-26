@@ -180,6 +180,8 @@ class GraphFormView(FormView):
         day_ahead = pd.Series(index=[a.date_time for a in p], data=[a.day_ahead for a in p])
         agile = day_ahead_to_agile(day_ahead, region=region).sort_index()
 
+        hover_template_time_price = "%{x|%H:%M}: %{y:.2f}p/kWh"
+
         data = data + [
             go.Scatter(
                 x=agile.loc[:forecast_end].index.tz_convert("GB"),
@@ -187,6 +189,7 @@ class GraphFormView(FormView):
                 marker={"symbol": 104, "size": 1, "color": "white"},
                 mode="lines",
                 name="Actual",
+                hovertemplate=hover_template_time_price
             )
         ]
 
@@ -216,7 +219,8 @@ class GraphFormView(FormView):
                         marker={"symbol": 104, "size": 10},
                         mode="lines",
                         line=dict(width=width),
-                        name=f.name,
+                        name="Prediction",
+                        hovertemplate=hover_template_time_price
                     )
                 ]
 
@@ -355,6 +359,7 @@ class GraphFormView(FormView):
             legend=legend,
             height=height,
             template="plotly_dark",
+            hovermode='x',
         )
 
         figure.update_layout(**layout)
