@@ -74,7 +74,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         debug = options.get("debug", False)
 
-        use_nordpool = options.get("nordpool", False)
+        use_gb60 = options.get("gb60", False)
 
         drop_cols = ["emb_wind"]
         if options.get("no_day_of_week", False):
@@ -152,20 +152,20 @@ class Command(BaseCommand):
             df_to_Model(new_prices, PriceHistory)
             prices = pd.concat([prices, new_prices]).sort_index()
 
-        if use_nordpool:
-            nordpool = pd.DataFrame(get_nordpool(start=prices.index[-1] + pd.Timedelta("30min"))).set_axis(
+        if use_gb60:
+            gb60 = pd.DataFrame(get_gb60(start=prices.index[-1] + pd.Timedelta("30min"))).set_axis(
                 ["day_ahead"], axis=1
             )
-            if len(nordpool)>0:
-                print(f"Hourly day ahead data used for period: {nordpool.index[0].strftime("%d-%b %H:%M")} - {nordpool.index[-1].strftime("%d-%b %H:%M")}")
-            nordpool["agile"] = day_ahead_to_agile(nordpool["day_ahead"])
+            if len(gb60)>0:
+                print(f"Hourly day ahead data used for period: {gb60.index[0].strftime("%d-%b %H:%M")} - {gb60.index[-1].strftime("%d-%b %H:%M")}")
+            gb60["agile"] = day_ahead_to_agile(gb60["day_ahead"])
 
             if debug:
                 print(f"Database prices:\n{prices}")
                 print(f"New prices:\n{prices}")
-                print(f"Nordpool prices:\n{prices}")
+                print(f"GB60 prices:\n{prices}")
 
-            prices = pd.concat([prices, nordpool]).sort_index()
+            prices = pd.concat([prices, gb60]).sort_index()
 
         if debug:
             print(f"Merged prices:\n{prices}")

@@ -27,50 +27,31 @@ RETRY_CODES = [
 regions = GLOBAL_SETTINGS["REGIONS"]
 
 
-def get_nordpool(start):
-    url = "https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP"
+def get_gb60():
+    # url = "https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP"
+    url = "https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices"
+
+    params = {
+        "date": (pd.Timestamp.now() + pd.Timedelta("13h")).strftime("%Y-%m-%d"),
+        "market": "N2EX_DayAhead",
+        "deliveryArea": "UK",
+        "currency": "GBP",
+    }
 
     try:
-        r = requests.get(url)
+        r = requests.get(url, params=params)
         r.raise_for_status()  # Raise an exception for unsuccessful HTTP status codes
 
     except requests.exceptions.RequestException as e:
         return
 
-    index = []
-    data = []
-    for row in r.json()["data"]["Rows"]:
-        for column in row:
-            if isinstance(row[column], list):
-                for i in row[column]:
-                    if i["CombinedName"] == "CET/CEST time":
-                        if len(i["Value"]) > 10:
-                            time = f"T{i['Value'][:2]}:00"
-                            # print(time)
-                    else:
-                        if len(i["Name"]) > 8:
-                            try:
-                                # self.log(time, i["Name"], i["Value"])
-                                data.append(float(i["Value"].replace(",", ".")))
-                                index.append(
-                                    pd.Timestamp(
-                                        i["Name"].split("-")[2]
-                                        + "-"
-                                        + i["Name"].split("-")[1]
-                                        + "-"
-                                        + i["Name"].split("-")[0]
-                                        + " "
-                                        + time
-                                    )
-                                )
-                            except:
-                                pass
-
-    price = pd.Series(index=index, data=data).sort_index()
-    price.index = price.index.tz_localize("CET")
-    price.index = price.index.tz_convert("GB")
-    price = price[~price.index.duplicated()]
-    return price.resample("30min").ffill().loc[start:]
+    price = pd.Series(
+        {
+            pd.Timestamp(row["deliveryStart"]).tz_convert("GB"): float(row["entryPerArea"]["UK"])
+            for row in r.json()["multiAreaEntries"]
+        }
+    )
+    return price
 
 
 def _oct_time(d):
@@ -258,10 +239,18 @@ def get_latest_forecast():
         {
             "url": "https://api.nationalgrideso.com/api/3/action/datastore_search?resource_id=93c3048e-1dab-4057-a2a9-417540583929&limit=1000",
             "record_path": ["result", "records"],
-            "tz": "GB",
+            "tz": "UTC",
             "date_col": "Datetime",
             "cols": ["Wind_Forecast"],
             "rename": ["bm_wind"],
+        },
+        {
+            "url": "https://api.nationalgrideso.com/api/3/action/datastore_search?resource_id=b2f03146-f05d-4824-a663-3a4f36090c71&limit=1000",
+            "record_path": ["result", "records"],
+            "tz": "UTC",
+            "date_col": "Datetime_GMT",
+            "cols": ["Incentive_forecast"],
+            "rename": ["da_wind"],
         },
         {
             "url": "https://api.nationalgrideso.com/api/3/action/datastore_search?resource_id=db6c038f-98af-4570-ab60-24d71ebd0ae5&limit=1000",
@@ -328,6 +317,9 @@ def get_latest_forecast():
     else:
         missing_cols = []
 
+    df.loc[df["da_wind"] > 0, "bm_wind"] = df["da_wind"]
+    df.drop("da_wind", axis=1, inplace=True)
+
     all_cols = ["emb_wind", "bm_wind", "solar", "demand", "temp_2m", "wind_10m", "rad"]
     missing_cols += [c for c in all_cols if c not in df.columns]
     if len(missing_cols) > 0:
@@ -350,6 +342,7 @@ class DataSet:
         self.params = kwargs.pop("params", {})
         self.tz = kwargs.pop("tz", "UTC")
         self.__dict__ = self.__dict__ | kwargs
+
         # self.__dict__ = self.__dict__ | kwargs
 
     def update(self, download_all=False, hdf=None):
@@ -383,7 +376,15 @@ class DataSet:
 
         try:
             df.index = pd.to_datetime(df[self.date_col])
-            df.index = df.index.tz_localize(self.tz)
+            if df.index.tzinfo is None:
+                df.index = df.index.tz_localize(self.tz, ambiguous="infer")
+        except Exception as e:
+            print(f">>> Error: {e}")
+            print(df.index)
+
+        try:
+            df.index = pd.to_datetime(df["Date"]) + (df["Settlement_period"] - 1) * pd.Timedelta("30min")
+            df.index = df.index.tz_localize("UTC")
         except:
             pass
 
@@ -408,9 +409,13 @@ class DataSet:
             pass
 
         try:
-            df = df.resample(self.resample).mean()
-        except:
-            pass
+            if "func" in self.__dict__:
+                df = df.resample(self.resample).aggregate(self.func)
+            elif "resample" in self.__dict__:
+                df = df.resample(self.resample).mean()
+        except Exception as e:
+
+            print(e)
 
         try:
             df = df.interpolate()
@@ -480,6 +485,7 @@ def day_ahead_to_agile(df, reverse=False, region="G"):
         x.loc[x["Peak"], "Out"] -= regions[region]["factors"][1]
         x["Out"] /= regions[region]["factors"][0]
     else:
+        # print(region)
         x["Out"] *= regions[region]["factors"][0]
         x.loc[x["Peak"], "Out"] += regions[region]["factors"][1]
 

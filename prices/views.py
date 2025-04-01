@@ -2,7 +2,7 @@ import pandas as pd
 
 # Create your views here.
 from django.views.generic import TemplateView, FormView
-from .models import Forecasts, PriceHistory, AgileData, ForecastData, History, UpdateErrors
+from .models import Forecasts, PriceHistory, AgileData, ForecastData, History
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -141,11 +141,10 @@ class GraphFormView(FormView):
     template_name = "graph.html"
 
     def get_form_kwargs(self):
-        print(">>> views.py | GraphFormView | get_form_kwargs")
         kwargs = super(GraphFormView, self).get_form_kwargs()
         # kwargs["region"] = self.kwargs.get("region", "X").upper()
         kwargs["prefix"] = "test"
-        print(kwargs)
+        # print(kwargs)
         return kwargs
 
     def update_chart(self, context, **kwargs):
@@ -155,22 +154,22 @@ class GraphFormView(FormView):
         show_generation_and_demand = kwargs.get("show_generation_and_demand", True)
         show_range = kwargs.get("show_range_on_most_recent_forecast", True)
         show_overlap = kwargs.get("show_forecast_overlap", False)
-        print(">>> views.py | GraphFormView | update_chart")
-        print(forecasts_to_plot)
+        # print(">>> views.py | GraphFormView | update_chart")
+        # print(forecasts_to_plot)
 
         first_forecast = Forecasts.objects.filter(id__in=forecasts_to_plot).order_by("-created_at")[0]
-        print(f"First Forecast: {first_forecast}")
+        # print(f"First Forecast: {first_forecast}")
         first_forecast_data = ForecastData.objects.filter(forecast=first_forecast).order_by("date_time")
         forecast_start = first_forecast_data[0].date_time
-        print(f"Forecast Start: {forecast_start}")
+        # print(f"Forecast Start: {forecast_start}")
         if len(first_forecast_data) >= 48 * days_to_plot:
             forecast_end = first_forecast_data[48 * days_to_plot].date_time
         else:
             forecast_end = [d.date_time for d in first_forecast_data][-1]
 
-        print(f"Forecast End: {forecast_end}")
+        # print(f"Forecast End: {forecast_end}")
         price_start = PriceHistory.objects.all().order_by("-date_time")[48 * PRIOR_DAYS].date_time
-        print(f"Price Start: {price_start}")
+        # print(f"Price Start: {price_start}")
 
         start = min(forecast_start, price_start)
 
@@ -264,7 +263,7 @@ class GraphFormView(FormView):
             figure.add_trace(
                 go.Scatter(
                     x=[a.date_time for a in d],
-                    y=[a.demand / 1000 for a in d],
+                    y=[(a.demand + a.solar + a.emb_wind) / 1000 for a in d],
                     line={"color": "cyan", "width": 3},
                     name="Forecast National Demand",
                 ),
@@ -316,7 +315,7 @@ class GraphFormView(FormView):
             figure.add_trace(
                 go.Scatter(
                     x=[a.date_time for a in h],
-                    y=[a.demand / 1000 for a in h],
+                    y=[(a.demand + a.solar + (a.total_wind - a.bm_wind)) / 1000 for a in h],
                     line={"color": "#aaaa77", "width": 2},
                     name="Historic Demand",
                 ),
@@ -369,7 +368,7 @@ class GraphFormView(FormView):
             fixedrange=True,
         )
         figure.update_yaxes(
-            title_text="Power [MW]",
+            title_text="Power [GW]",
             row=2,
             col=1,
             fixedrange=True,
@@ -395,42 +394,33 @@ class GraphFormView(FormView):
                 ]
             }
         )
-        for error_type in ["history", "forecast"]:
-            context[f"{error_type}_errors"] = [
-                {
-                    "date_time": pd.Timestamp(x.date_time).tz_convert("GB"),
-                    "dataset": GLOBAL_SETTINGS["DATASETS"][x.dataset]["name"],
-                    "source": GLOBAL_SETTINGS["DATASETS"][x.dataset]["source"],
-                }
-                for x in list(UpdateErrors.objects.filter(type=error_type.title()))
-            ]
-        print(context["history_errors"])
+
         return context
 
     def get_context_data(self, **kwargs):
-        print(">>>views.py | GraphFormView | get_context_data")
+        # print(">>>views.py | GraphFormView | get_context_data")
         context = super().get_context_data(**kwargs)
         # context["form2"] = OptionsForm()
         f = Forecasts.objects.latest("created_at")
         region = self.kwargs.get("region", "X").upper()
         context["region"] = region
         context["region_name"] = regions.get(region, {"name": ""})["name"]
-        print(context)
+        # print(context)
 
         context = self.update_chart(context=context, forecasts_to_plot=[f.id])
         return context
 
     def form_valid(self, form):
-        print(">>>views.py | GraphFormView | form_valid")
-        print(form.cleaned_data)
+        # print(">>>views.py | GraphFormView | form_valid")
+        # print(form.cleaned_data)
         context = self.get_context_data(form=form)
         context = self.update_chart(context=context, **form.cleaned_data)
 
         return self.render_to_response(context=context)
 
     def form2_valid(self, form):
-        print(">>>views.py | GraphFormView | form_valid")
-        print(form.cleaned_data)
+        # print(">>>views.py | GraphFormView | form_valid")
+        # print(form.cleaned_data)
         context = self.get_context_data(form=form)
         context = self.update_chart(context=context, **form.cleaned_data)
 

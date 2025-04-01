@@ -1,4 +1,4 @@
-ARG PYTHON_VERSION=3.12-slim-bullseye
+ARG PYTHON_VERSION=3.12-slim
 
 FROM python:${PYTHON_VERSION}
 
@@ -22,9 +22,9 @@ RUN set -ex && \
     rm -rf /root/.cache/
 COPY . /code
 
-ENV SECRET_KEY "PL88jvUUVO20Vp2R4N7cZUQQ4USaxRGePClEO632rxaJrhbrKf"
+ENV SECRET_KEY "uZMQT9hFNq6Amj1uzZFkfMW3iS1z8pVStJWNThKVOsSD3RP4KG"
 RUN python manage.py collectstatic --noinput
 
 EXPOSE 8000
 
-CMD ["gunicorn", "--bind", ":8000", "--workers", "2", "config.wsgi"]
+CMD ["gunicorn","--bind",":8000","--workers","2","config.wsgi"]

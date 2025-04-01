@@ -16,4 +16,4 @@ class Command(BaseCommand):
         # print(options)
         for id in options["id"]:
             f = Forecasts.objects.filter(id=id)
-            f.delete()
+            f.using("default").delete()
