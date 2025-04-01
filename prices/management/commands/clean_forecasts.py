@@ -36,21 +36,22 @@ class Command(BaseCommand):
 
         keep = []
         for d in forecast_days:
-            # print(d)
-            t = [f.created_at for f in forecast_days[d]]
-            id = [f.id for f in forecast_days[d]]
-            df = pd.Series(index=t, data=id)
-            df.index = df.index.tz_convert("GB")
+            if (pd.Timestamp.now() - pd.Timestamp(d)).days <= 90:
+                # print(d)
+                t = [f.created_at for f in forecast_days[d]]
+                id = [f.id for f in forecast_days[d]]
+                df = pd.Series(index=t, data=id)
+                df.index = df.index.tz_convert("GB")
 
-            z = df[df.index.hour >= 9]
-            if len(z) > 0:
-                keep.append(z.sort_index().iloc[0])
-            else:
-                keep.append(df.sort_index().iloc[-1])
+                z = df[df.index.hour >= 9]
+                if len(z) > 0:
+                    keep.append(z.sort_index().iloc[0])
+                else:
+                    keep.append(df.sort_index().iloc[-1])
 
         print(keep)
 
         if delete:
             forecasts_to_delete = Forecasts.objects.exclude(id__in=keep)
             print(f"deleting ({forecasts_to_delete})")
-            # forecasts_to_delete.delete()
+            forecasts_to_delete.delete()

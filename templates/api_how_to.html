@@ -8,9 +8,17 @@
                 <div class="card-body">
                     <h5 class="card-title">API Access</h5>
                     <p>
-                        RESTful API access to the three most recent price forecasts is available via
-                        <a href="http://agilepredict.com/api">prices.fly.dev/api</a> for all regions or via
-                        <a href="http://agilepredict/api/{REGION}">prices.fly.dev/api/{REGION}</a> for a given region.
+                        RESTful API access to most recent price forecasts is available via
+                        <a href="https://agilepredict.com/api/{REGION}">https://agilepredict.com/api/{REGION}</a> for a given region.
+                        In addition the following parameters can be used:<br />
+                        <pre><code> 
+   days:           the number of days to download (default = 14) 
+   forecast_count: the number of recent forecasts to download (default = 1, ie the most recent)
+   high_low:       include the high and low estimates (default = True)
+                        </code></pre>
+                        So to download the three most recent forecasts for seven days for NW England (Region G) without 
+                        high and low estimate the URL would be: <a href="https://agilepredict.com/api/G?days=7&forecast_count=3&high_low=False">https://agilepredict.com/api/G?days=7&forecast_count=3&high_low=False</a>
+
                     </p>
                 </div>
             </div>

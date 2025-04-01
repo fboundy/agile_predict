@@ -5,40 +5,30 @@ from config.utils import *
 
 
 class Command(BaseCommand):
-    # def add_arguments(self, parser):
-    #     # Positional arguments
-    #     # parser.add_argument("poll_ids", nargs="+", type=int)
-
-    #     # Named (optional) arguments
-    #     parser.add_argument(
-    #         "--delete",
-    #         action="store_true",
-    #         help="Only keep one forecast per day ",
-    #     )
-
     def handle(self, *args, **options):
-        for h in History.objects.all()[:1]:
-            print(h.date_time)
+        dfs = []
+        for d in pd.date_range("2024-10-01", "2024-10-14"):
             data = {
-                "url": "https://data.elexon.co.uk/bmrs/api/v1/forecast/availability/daily/history",
+                "url": f"https://data.elexon.co.uk/bmrs/api/v1/datasets/FOU2T14D?format=json",
                 "params": {
-                    "publishTime": (h.date_time - pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
-                    "level": "fuelType",
+                    "publishDate": pd.Timestamp(d).strftime("%Y-%m-%d"),
+                    "fuelType": "NUCLEAR",
                 },
                 "record_path": ["data"],
-                "cols": "ND",
+                "cols": ["forecastDate", "fuelType", "outputUsable", "publishTime"],
+                "date_col": "forecastDate",
+                "resample": "30min",
+                "func": "ffill",
+                "tz": "UTC",
             }
 
-            cap = DataSet(**data).download()
-            cap = cap[cap["forecastDate"] == h.date_time.strftime("%Y-%m-%d")].set_index("fuelType")["outputUsable"]
+            df, _ = DataSet(**data).download()
+            # dfs += [DataSet(**data).download()]
 
-            intercon_capacity = cap[cap.index.str.contains("^INT")].sum()
-            other_gen_capacity = cap.sum() - intercon_capacity - cap.loc["WIND"]
-            h.intercon_capacity = intercon_capacity
-            h.other_gen_capacity = other_gen_capacity
-            h.save()
-
-        for f in Forecasts.objects.all()[:1]:
-            print(f.name)
-            d = ForecastData.objects.filter(forecast=f).order_by("date_time")
-            print(d[0].date_time)
+            # print
+            # df = pd.concat(dfs)
+            print(df)
+        # for f in Forecasts.objects.all():
+        #     print(f.name)
+        #     d = ForecastData.objects.filter(forecast=f).order_by("date_time")
+        #     print(d[0].date_time)

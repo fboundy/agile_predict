@@ -10,12 +10,6 @@ class Forecasts(models.Model):
         return self.name
 
 
-class Nordpool(models.Model):
-    date_time = models.DateTimeField(unique=True)
-    day_ahead = models.FloatField()
-    agile = models.FloatField()
-
-
 class PriceHistory(models.Model):
     date_time = models.DateTimeField(unique=True)
     day_ahead = models.FloatField()
@@ -32,12 +26,6 @@ class AgileData(models.Model):
 
     def get_absolute_url(self):
         return reverse("graph", kwargs={"region": self.region})
-
-
-class UpdateErrors(models.Model):
-    date_time = models.DateTimeField()
-    type = models.CharField(max_length=10)
-    dataset = models.CharField(max_length=32)
 
 
 class History(models.Model):
