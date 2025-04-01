@@ -179,6 +179,9 @@ class GraphFormView(FormView):
         day_ahead = pd.Series(index=[a.date_time for a in p], data=[a.day_ahead for a in p])
         agile = day_ahead_to_agile(day_ahead, region=region).sort_index()
 
+        hover_template_time_price = "%{x|%H:%M}<br>%{y:.2f}p/kWh"
+        hover_template_price = "%{y:.2f}p/kWh"
+
         data = data + [
             go.Scatter(
                 x=agile.loc[:forecast_end].index.tz_convert("GB"),
@@ -186,6 +189,7 @@ class GraphFormView(FormView):
                 marker={"symbol": 104, "size": 1, "color": "white"},
                 mode="lines",
                 name="Actual",
+                hovertemplate=hover_template_price,
             )
         ]
 
@@ -215,7 +219,8 @@ class GraphFormView(FormView):
                         marker={"symbol": 104, "size": 10},
                         mode="lines",
                         line=dict(width=width),
-                        name=f.name,
+                        name="Prediction",
+                        hovertemplate=hover_template_price,
                     )
                 ]
 
@@ -229,6 +234,7 @@ class GraphFormView(FormView):
                             line=dict(width=1, color="red"),
                             name="Low",
                             showlegend=False,
+                            hovertemplate=hover_template_price
                         ),
                         go.Scatter(
                             x=df.index,
@@ -240,6 +246,7 @@ class GraphFormView(FormView):
                             showlegend=False,
                             fill="tonexty",
                             fillcolor="rgba(255,127,127,0.5)",
+                            hovertemplate=hover_template_price,
                         ),
                     ]
                 width = 1
@@ -354,6 +361,7 @@ class GraphFormView(FormView):
             legend=legend,
             height=height,
             template="plotly_dark",
+            hovermode='x',
         )
 
         figure.update_layout(**layout)
@@ -375,8 +383,8 @@ class GraphFormView(FormView):
         )
         figure.update_xaxes(
             tickformatstops=[
-                dict(dtickrange=[None, 86000000], value="%H:%M\n%a %d %b"),
-                dict(dtickrange=[86000000, None], value="%a\n%b %d"),
+                dict(dtickrange=[None, 86000000], value="%H:%M<br>%a %d %b"),
+                dict(dtickrange=[86000000, None], value="%H:%M<br>%a %d %b"),
             ],
             # fixedrange=True,
         )
