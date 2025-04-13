@@ -4,6 +4,8 @@ from sklearn.neighbors import KernelDensity
 from sklearn.model_selection import train_test_split
 
 import numpy as np
+import os
+import logging
 
 from django.core.management.base import BaseCommand
 from ...models import History, PriceHistory, Forecasts, ForecastData, AgileData
@@ -51,6 +53,14 @@ class Command(BaseCommand):
         )
 
         parser.add_argument(
+            "--min_fd",
+        )
+
+        parser.add_argument(
+            "--min_ad",
+        )
+
+        parser.add_argument(
             "--no_day_of_week",
             action="store_true",
         )
@@ -79,7 +89,29 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        # Setup logging
+        local_dir = os.path.join(os.getcwd(), ".local")
+        os.makedirs(local_dir, exist_ok=True)
+        log_file = os.path.join(local_dir, "train_forecast.log")
+
+        logger = logging.getLogger(__name__)
+        logger.setLevel(logging.INFO)
+
+        file_handler = logging.FileHandler(log_file)
+        console_handler = logging.StreamHandler()
+
+        formatter = logging.Formatter("%(asctime)s %(levelname)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+        file_handler.setFormatter(formatter)
+        console_handler.setFormatter(formatter)
+
+        if not logger.handlers:
+            logger.addHandler(file_handler)
+            logger.addHandler(console_handler)
+
         debug = options.get("debug", False)
+
+        min_fd = int(options.get("min_fd", 600) or 600)
+        min_ad = int(options.get("min_ad", 0) or 0)
 
         no_ranges = options.get("no_ranges", False)
 
@@ -102,16 +134,16 @@ class Command(BaseCommand):
             a = AgileData.objects.filter(forecast=f)
 
             if debug:
-                print(f.id, f.name, q.count(), a.count())
-            if q.count() < 600 or a.count() < 8000:
+                logger.info(f"{f.id} {f.name} {q.count()} {a.count()}")
+            if q.count() < min_fd or a.count() < min_ad:
                 f.delete()
 
         # hist = get_history_from_model()
 
         # if debug:
-        #     print("Getting history from model")
-        #     print("Database History:")
-        #     print(hist)
+        #     logger.info("Getting history from model")
+        #     logger.info("Database History:")
+        #     logger.info(hist)
         # start = pd.Timestamp("2023-07-01", tz="GB")
         # if len(hist) > 48:
         #     hist = hist.iloc[:-48]
@@ -122,27 +154,29 @@ class Command(BaseCommand):
         #     hist = pd.DataFrame()
 
         # if debug:
-        #     print(f"New data from {start.strftime(TIME_FORMAT)}:")
+        #     logger.info(f"New data from {start.strftime(TIME_FORMAT)}:")
 
-        # print("Loading new history:")
+        # logger.info("Loading new history:")
         # new_hist, missing_hist = get_latest_history(start=start)
 
         # if len(new_hist) > 0:
         #     if debug:
-        #         print(new_hist)
+        #         logger.info(new_hist)
         #     df_to_Model(new_hist, History, update=True)
 
         # else:
-        #     print("None")
+        #     logger.info("None")
 
         # hist = pd.concat([hist, new_hist]).sort_index()
 
         if debug:
-            print("Getting Historic Prices")
+            logger.info("Getting Historic Prices")
 
         prices, start = model_to_df(PriceHistory)
-        agile = get_agile(start=start)
+        if debug:
+            logger.info(f"Prices\n{prices}")
 
+        agile = get_agile(start=start)
         day_ahead = day_ahead_to_agile(agile, reverse=True)
 
         new_prices = pd.concat([day_ahead, agile], axis=1)
@@ -150,10 +184,10 @@ class Command(BaseCommand):
             new_prices = new_prices[new_prices.index > prices.index[-1]]
 
         if debug:
-            print(new_prices)
+            logger.info(f"New Prices\n{new_prices}")
 
         if len(new_prices) > 0:
-            print(new_prices)
+            logger.info(new_prices)
             df_to_Model(new_prices, PriceHistory)
             prices = pd.concat([prices, new_prices]).sort_index()
 
@@ -161,7 +195,7 @@ class Command(BaseCommand):
         gb60 = get_gb60()
 
         if debug:
-            print(f"GB60:\n{gb60}")
+            logger.info(f"GB60:\n{gb60}")
 
         gb60 = gb60.resample("30min").ffill().loc[agile_end + pd.Timedelta("30min") :]
 
@@ -173,13 +207,13 @@ class Command(BaseCommand):
             prices = pd.concat([prices, gb60]).sort_index()
 
         if debug:
-            print(f"Merged prices:\n{prices}")
+            logger.info(f"Merged prices:\n{prices}")
 
         if drop_last > 0:
-            print(f"drop_last: {drop_last}")
-            print(f"len: {len(prices)} last:{prices.index[-1]}")
+            logger.info(f"drop_last: {drop_last}")
+            logger.info(f"len: {len(prices)} last:{prices.index[-1]}")
             prices = prices.iloc[:-drop_last]
-            print(f"len: {len(prices)} last:{prices.index[-1]}")
+            logger.info(f"len: {len(prices)} last:{prices.index[-1]}")
 
         new_name = pd.Timestamp.now(tz="GB").strftime("%Y-%m-%d %H:%M")
         if new_name not in [f.name for f in Forecasts.objects.all()]:
@@ -191,27 +225,23 @@ class Command(BaseCommand):
             base_forecasts = base_forecasts.filter(id__in=[last_forecasts[k] for k in last_forecasts])
 
             if debug:
-                print("Getting latest Forecast")
+                logger.info("Getting latest Forecast")
 
             fc, missing_fc = get_latest_forecast()
 
             if len(missing_fc) > 0:
-                print(">>> ERROR: Unable to run forecast due to missing columns:", end="")
-                for c in missing_fc:
-                    print(c, end="")
-
+                logger.error(f">>> ERROR: Unable to run forecast due to missing columns: {', '.join(missing_fc)}")
             else:
                 if debug:
-                    print(fc)
+                    logger.info(fc)
 
                 if len(fc) > 0:
                     fd = pd.DataFrame(list(ForecastData.objects.exclude(forecast_id__in=ignore_forecast).values()))
 
-                    ff = (
-                        pd.DataFrame(list(Forecasts.objects.exclude(id__in=ignore_forecast).values()))
-                        .set_index("id")
-                        .sort_index()
-                    )
+                    ff = pd.DataFrame(list(Forecasts.objects.exclude(id__in=ignore_forecast).values()))
+
+                    logger.info(ff)
+                    ff = ff.set_index("id").sort_index()
 
                     ff["date"] = ff["created_at"].dt.tz_convert("GB").dt.normalize()
                     ff["ag_start"] = ff["created_at"].dt.normalize() + pd.Timedelta(hours=22)
@@ -226,6 +256,9 @@ class Command(BaseCommand):
                     ff_train = (
                         ff.sort_values("dt1600").drop_duplicates("date").sort_index().drop(["date", "dt1600"], axis=1)
                     )
+
+                    if debug:
+                        logger.info("Forecasts Database:\n{ff.to_string()}")
 
                     # df is the full dataset
                     df = (
@@ -266,6 +299,10 @@ class Command(BaseCommand):
 
                     # Get the prices to match the forecast
                     train_X = train_X.merge(prices["day_ahead"], left_index=True, right_index=True)
+
+                    if debug:
+                        logger.info(f"train_X:\n{train_X}")
+
                     train_y = train_X.pop("day_ahead")
                     sample_weights = ((np.log10((train_y - train_y.mean()).abs() + 10) * 5) - 4).round(0)
 
@@ -297,27 +334,29 @@ class Command(BaseCommand):
                         _, test_X, _, _ = train_test_split(test_X, test_y, test_size=MAX_TEST_X)
 
                     if debug:
-                        print(f"len(ff)      : {len(ff)}")
-                        print(f"len(ff_train): {len(ff_train)}")
-                        print(f"len(train_X) : {len(train_X)}")
-                        print(f"len(test_X)  : {len(test_X)}")
+                        logger.info(f"len(ff)      : {len(ff)}")
+                        logger.info(f"len(ff_train): {len(ff_train)}")
+                        logger.info(f"len(train_X) : {len(train_X)}")
+                        logger.info(f"len(test_X)  : {len(test_X)}")
 
-                        print(f"Earliest ff   : {ff.index.min()}")
-                        print(f"Latest ff     : {ff.index.max()}")
-                        print(f"Earliest ff_t : {ff_train.index.min()}")
-                        print(f"Latest ff_t   : {ff_train.index.max()}")
+                        logger.info(f"Earliest ff   : {ff.index.min()}")
+                        logger.info(f"Latest ff     : {ff.index.max()}")
+                        logger.info(f"Earliest ff_t : {ff_train.index.min()}")
+                        logger.info(f"Latest ff_t   : {ff_train.index.max()}")
 
-                        print("train_cols:")
+                        logger.info("train_cols:")
                         for col in train_X.columns:
-                            print(
+                            logger.info(
                                 f"  {col:16s}:  {train_X[col].min():10.2f} {train_X[col].mean():10.2f} {train_X[col].max():10.2f}"
                             )
+
+                        logger.info(f"test_X:\n{test_X}")
 
                     results = test_X[["dt", "day_ahead"]].copy()
                     results["pred"] = xg_model.predict(test_X[features])
 
-                    # print("Results:")
-                    # print(results.to_string())
+                    # logger.info("Results:")
+                    # logger.info(results.to_string())
 
                     fc["weekend"] = (fc.index.day_of_week >= 5).astype(int)
                     fc["days_ago"] = 0
@@ -365,48 +404,64 @@ class Command(BaseCommand):
                         fc["day_ahead_high"] = fc["day_ahead"] * 1.1
 
                     if debug:
-                        print(f"Forecast from {fc.index[0]} tp {fc.index[-1]}")
-                        print(f"Agile to      {agile_end}")
+                        logger.info(f"Forecast from {fc.index[0]} tp {fc.index[-1]}")
+                        logger.info(f"Agile to      {agile_end}")
                         if len(gb60) > 0:
-                            print(f"GB60 to       {prices.index[-1]}")
+                            logger.info(f"GB60 to       {prices.index[-1]}")
 
-                    idx0 = pd.date_range(fc.index[0], agile_end, freq="30min")
+                        logger.info(f"Forecast\n{fc}")
+
+                    sfs = [
+                        pd.DataFrame(
+                            index=pd.date_range(fc.index[0], agile_end, freq="30min"), data={"mult": 0, "shift": 1}
+                        )
+                    ]
 
                     if len(gb60) > 0:
-                        idx1 = pd.date_range(gb60.index[0], prices.index[-1], freq="30min")
-                        idx2 = fc.index.difference(idx0.union(idx1))
+                        sfs.append(
+                            pd.DataFrame(
+                                index=pd.date_range(gb60.index[0], prices.index[-1], freq="30min"),
+                                data={"mult": 0, "shift": 5},
+                            )
+                        )
+                        sfs.append(
+                            pd.DataFrame(index=fc.index.difference(sfs[0].index.union(sfs[1].index))),
+                            data={"mult": 1, "shift": 0},
+                        )
                     else:
-                        idx1 = pd.Index([])
-                        idx2 = fc.index.difference(idx0)
+                        sfs.append(pd.DataFrame(index=fc.index.difference(sfs[0].index), data={"mult": 1, "shift": 0}))
 
                     fc = fc.astype(float)
-
-                    x = pd.concat(
-                        [
-                            pd.DataFrame(index=idx0, data={"mult": 0, "shift": 1}),
-                            pd.DataFrame(index=idx1, data={"mult": 0, "shift": 5}),
-                            pd.DataFrame(index=idx2, data={"mult": 1, "shift": 0}),
-                        ],
-                    )
-
-                    x = pd.concat([x, prices.reindex(x.index).fillna(0)], axis=1)
+                    scale_factors = pd.concat(sfs)
 
                     if debug:
-                        print(fc.iloc[:50].to_string())
+                        for i, sf in enumerate(sfs):
+                            if len(sf.index) > 0:
+                                logger.info(f"idx{i}: {sf.index[0]}:{sf.index[-1]}\n{sf}")
+                        logger.info(f"Scale factors\n{scale_factors}")
 
-                    fc["day_ahead"] = fc["day_ahead"] * x["mult"] + x["day_ahead"] * (1 - x["mult"])
+                    scale_factors = pd.concat([scale_factors, prices.reindex(scale_factors.index).fillna(0)], axis=1)
+
+                    if debug:
+                        logger.info(f"Scale Factors:\n{scale_factors}")
+
+                    fc["day_ahead"] = fc["day_ahead"] * scale_factors["mult"] + scale_factors["day_ahead"] * (
+                        1 - scale_factors["mult"]
+                    )
                     fc["day_ahead_low"] = (
-                        fc["day_ahead_low"] * x["mult"] + x["day_ahead"] * (1 - x["mult"]) - x["shift"]
+                        fc["day_ahead_low"] * scale_factors["mult"]
+                        + scale_factors["day_ahead"] * (1 - scale_factors["mult"])
+                        - scale_factors["shift"]
                     )
                     fc["day_ahead_high"] = (
-                        fc["day_ahead_high"] * x["mult"] + x["day_ahead"] * (1 - x["mult"]) + x["shift"]
+                        fc["day_ahead_high"] * scale_factors["mult"]
+                        + scale_factors["day_ahead"] * (1 - scale_factors["mult"])
+                        + scale_factors["shift"]
                     )
 
                     if debug:
-                        print(
-                            pd.concat([x, fc[["day_ahead", "day_ahead_low", "day_ahead_high"]]], axis=1)
-                            .iloc[:50]
-                            .to_string()
+                        logger.info(
+                            pd.concat([scale_factors, fc[["day_ahead", "day_ahead_low", "day_ahead_high"]]], axis=1)
                         )
 
                     ag = pd.concat(
@@ -433,8 +488,8 @@ class Command(BaseCommand):
                     # fc = fc.drop(day_ahead_cols, axis=1)
                     fc = fc[list(fd.columns)[3:]]
 
-                    # print(fc.columns)
-                    # print(ag.columns)
+                    # logger.info(fc.columns)
+                    # logger.info(ag.columns)
 
                     this_forecast = Forecasts(name=new_name)
                     this_forecast.save()
@@ -445,9 +500,9 @@ class Command(BaseCommand):
 
         if debug:
             for f in Forecasts.objects.all().order_by("-created_at"):
-                print(f"{f.id:4d}: {f.name}")
+                logger.info(f"{f.id:4d}: {f.name}")
         else:
             try:
-                print(f"\n\nAdded Forecast: {this_forecast.id:>4d}: {this_forecast.name}")
+                logger.info(f"\n\nAdded Forecast: {this_forecast.id:>4d}: {this_forecast.name}")
             except:
-                print("No forecast added")
+                logger.info("No forecast added")

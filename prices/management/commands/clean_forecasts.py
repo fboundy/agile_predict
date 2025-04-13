@@ -16,17 +16,36 @@ class Command(BaseCommand):
             help="Only keep one forecast per day ",
         )
 
+        parser.add_argument(
+            "--min_fd",
+        )
+
+        parser.add_argument(
+            "--min_ad",
+        )
+
+        parser.add_argument(
+            "--days",
+        )
+
     def handle(self, *args, **options):
         delete = options.get("delete", False)
+        min_fd = int(options.get("min_fd", 600) or 600)
+        min_ad = int(options.get("min_ad", 0) or 0)
+        max_days = int(options.get("days", 100000) or 10000)
+
+        print(f"Max days: {max_days}")
+
         forecast_days = {}
         for f in Forecasts.objects.all().order_by("-created_at"):
-            q = ForecastData.objects.filter(forecast=f)
-            a = AgileData.objects.filter(forecast=f)
+            fd = ForecastData.objects.filter(forecast=f)
+            ad = AgileData.objects.filter(forecast=f)
 
-            print(f.id, f.name, q.count(), a.count())
-            if q.count() < 600 or a.count() < 8000:
-                f.delete()
+            print(f.id, f.name, fd.count(), ad.count(), end="")
+            if fd.count() < min_fd or ad.count() < min_ad:
+                print(" <- Fail")
             else:
+                print("")
                 if f.created_at.date() in forecast_days:
                     forecast_days[f.created_at.date()].append(f)
                 else:
@@ -36,7 +55,8 @@ class Command(BaseCommand):
 
         keep = []
         for d in forecast_days:
-            if (pd.Timestamp.now() - pd.Timestamp(d)).days <= 90:
+            print(f"{d} {(pd.Timestamp.now() - pd.Timestamp(d)).days}")
+            if (pd.Timestamp.now() - pd.Timestamp(d)).days <= max_days:
                 # print(d)
                 t = [f.created_at for f in forecast_days[d]]
                 id = [f.id for f in forecast_days[d]]

@@ -205,7 +205,11 @@ class GraphFormView(FormView):
                 y = [a.agile_pred for a in d if (a.date_time >= agile.index[-1] or show_overlap)]
 
                 df = pd.Series(index=pd.to_datetime(x), data=y).sort_index()
-                df.index = df.index.tz_convert("GB")
+                try:
+                    df.index = df.index.tz_convert("GB")
+                except:
+                    df.index = df.index.tz_localize("GB")
+
                 df = df.loc[agile.index[0] :]
 
                 data = data + [

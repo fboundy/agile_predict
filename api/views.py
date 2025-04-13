@@ -8,12 +8,19 @@ from prices.models import Forecasts
 from .serializers import PriceForecastSerializer, PriceForecastRegionSerializer
 
 
-class PriceForecastAPIView(generics.ListAPIView):
-    ids = [f.id for f in Forecasts.objects.all().order_by("-created_at")[:1]]
+# class PriceForecastAPIView(generics.ListAPIView):
+#     ids = [f.id for f in Forecasts.objects.all().order_by("-created_at")[:1]]
 
-    queryset = Forecasts.objects.filter(id__in=ids)
-    # queryset = Forecasts.objects.all()
+
+#     queryset = Forecasts.objects.filter(id__in=ids)
+#     # queryset = Forecasts.objects.all()
+#     serializer_class = PriceForecastSerializer
+class PriceForecastAPIView(generics.ListAPIView):
     serializer_class = PriceForecastSerializer
+
+    def get_queryset(self):
+        latest = Forecasts.objects.order_by("-created_at")[:1]
+        return latest
 
 
 class PriceForecastRegionAPIView(generics.ListAPIView):
