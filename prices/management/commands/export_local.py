@@ -7,10 +7,10 @@ import os
 
 class Command(BaseCommand):
     def handle(self, *args, **options):
-        local_dir = os.path.join(os.getcwd(), ".local")
+        local_dir = os.path.join(os.getcwd(), "temp")
         hdf = os.path.join(local_dir, "forecast.hdf")
         if not os.path.exists(local_dir):
-            os.mkdir(".local")
+            os.mkdir("temp")
 
         elif os.path.exists(hdf):
             os.remove(hdf)
@@ -19,12 +19,9 @@ class Command(BaseCommand):
             key = data.__name__
             print(key)
 
+            df = pd.DataFrame(list(data.objects.all().values()))
             if key == "AgileData":
-                ff = list(pd.DataFrame(list(Forecasts.objects.all().values())).sort_values("created_at")["id"][-10:])
-                print(ff)
-                df = pd.DataFrame(list(data.objects.filter(forecast_id__in=ff).values()))
-            else:
-                df = pd.DataFrame(list(data.objects.all().values()))
+                df = df[df["region"].isin(["G", "X"])]
 
             try:
                 df.to_hdf(hdf, key=key, mode="a")

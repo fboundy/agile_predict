@@ -302,6 +302,7 @@ def get_latest_forecast():
         data, e = DataSet(**x).download()
         if len(data) > 0:
             downloaded_data += [data]
+            # print(f"{x}:\n{data}\n\n")
         else:
             download_errors += [e]
 
@@ -389,7 +390,7 @@ class DataSet:
             pass
 
         try:
-            df.index += pd.to_datetime(df[self.time_col], format="%H:%M") - pd.Timestamp("1900-01-01")
+            df.index += pd.to_datetime(df[self.time_col], format="%H:%M:%S") - pd.Timestamp("1900-01-01")
         except:
             pass
 
