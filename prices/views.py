@@ -149,6 +149,8 @@ class GraphFormView(FormView):
 
     def update_chart(self, context, **kwargs):
         region = context["region"]
+        if region not in regions:
+            region = "X"
         forecasts_to_plot = kwargs.get("forecasts_to_plot")
         days_to_plot = int(kwargs.get("days_to_plot", 7))
         show_generation_and_demand = kwargs.get("show_generation_and_demand", True)

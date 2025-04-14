@@ -120,7 +120,7 @@ class Command(BaseCommand):
                         fd_obj.save()
                         z = "added"
 
-                str_log = f"{i:4d} {id} {new_values['date_time'].strftime('%Y-%d-%m %H:%M')} Forecast Data {z:8s} | "
+                str_log = f"{i:4d} {id} {new_values['date_time'].strftime('%Y-%m-%d %H:%M')} Forecast Data {z:8s} | "
 
                 df = ad[ad["forecast_id"] == id].set_index("date_time")
                 if len(df) > 0:

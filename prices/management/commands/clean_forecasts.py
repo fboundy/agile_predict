@@ -36,38 +36,21 @@ class Command(BaseCommand):
 
         print(f"Max days: {max_days}")
 
-        forecast_days = {}
+        print(f"  ID  |       Name       |  #FD  |   #AD   | Days |")
+        print(f"------+------------------+-------+---------+------+")
+        keep = []
         for f in Forecasts.objects.all().order_by("-created_at"):
             fd = ForecastData.objects.filter(forecast=f)
             ad = AgileData.objects.filter(forecast=f)
-
-            print(f.id, f.name, fd.count(), ad.count(), end="")
+            dt = pd.to_datetime(f.name).tz_localize("GB")
+            days = (pd.Timestamp.now(tz="GB") - dt).days
             if fd.count() < min_fd or ad.count() < min_ad:
-                print(" <- Fail")
+                fail = " <- Fail"
             else:
-                print("")
-                if f.created_at.date() in forecast_days:
-                    forecast_days[f.created_at.date()].append(f)
-                else:
-                    forecast_days[f.created_at.date()] = [f]
-
-        print(forecast_days)
-
-        keep = []
-        for d in forecast_days:
-            print(f"{d} {(pd.Timestamp.now() - pd.Timestamp(d)).days}")
-            if (pd.Timestamp.now() - pd.Timestamp(d)).days <= max_days:
-                # print(d)
-                t = [f.created_at for f in forecast_days[d]]
-                id = [f.id for f in forecast_days[d]]
-                df = pd.Series(index=t, data=id)
-                df.index = df.index.tz_convert("GB")
-
-                z = df[df.index.hour >= 9]
-                if len(z) > 0:
-                    keep.append(z.sort_index().iloc[0])
-                else:
-                    keep.append(df.sort_index().iloc[-1])
+                fail = ""
+                if days < max_days:
+                    keep.append(f.id)
+            print(f"{f.id:5d} | {f.name} | {fd.count():5d} | {ad.count():7d} | {days:4d} | {fail}")
 
         print(keep)
 

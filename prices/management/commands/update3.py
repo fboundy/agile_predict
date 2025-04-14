@@ -242,7 +242,7 @@ class Command(BaseCommand):
 
                     logger.info(ff)
                     ff = ff.set_index("id").sort_index()
-
+                    ff["created_at"] = pd.to_datetime(ff["name"]).dt.tz_localize("GB")
                     ff["date"] = ff["created_at"].dt.tz_convert("GB").dt.normalize()
                     ff["ag_start"] = ff["created_at"].dt.normalize() + pd.Timedelta(hours=22)
                     ff["ag_end"] = ff["created_at"].dt.normalize() + pd.Timedelta(hours=46)
