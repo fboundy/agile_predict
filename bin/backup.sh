@@ -1,11 +1,10 @@
 #!/bin/bash
 
 # Load environment
-if [ -f bin/.env ]; then
+if [ -f .env ]; then
     set -a
-    . bin/.env
+    . .env
     set +a
-
 else
     echo "Missing .env file"
     exit 1

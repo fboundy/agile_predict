@@ -4,3 +4,4 @@ fly.toml
 .local/
 bin/
 .env
+.vscode/

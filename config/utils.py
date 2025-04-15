@@ -499,7 +499,7 @@ def day_ahead_to_agile(df, reverse=False, region="G"):
 
 
 def df_to_Model(df, myModel, update=False):
-    df = df.dropna()
+    # df = df.dropna()
     for index, row in df.iterrows():
         if update:
             try:
@@ -518,8 +518,8 @@ def df_to_Model(df, myModel, update=False):
                 new_values.update(row)
                 obj = myModel(**new_values)
                 obj.save()
-            except:
-                print(f"Failed to update {myModel} with data for datetime {index}")
+            except Exception as e:
+                print(f"Failed to update {myModel} with data for datetime {index}: {e}")
 
 
 def model_to_df(myModel):

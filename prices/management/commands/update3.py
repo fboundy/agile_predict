@@ -138,42 +138,10 @@ class Command(BaseCommand):
             if q.count() < min_fd or a.count() < min_ad:
                 f.delete()
 
-        # hist = get_history_from_model()
-
-        # if debug:
-        #     logger.info("Getting history from model")
-        #     logger.info("Database History:")
-        #     logger.info(hist)
-        # start = pd.Timestamp("2023-07-01", tz="GB")
-        # if len(hist) > 48:
-        #     hist = hist.iloc[:-48]
-        #     start = hist.index[-1] + pd.Timedelta("30min")
-        #     # for h in History.objects.filter(date_time__gte=start):
-        #     #     h.delete()
-        # else:
-        #     hist = pd.DataFrame()
-
-        # if debug:
-        #     logger.info(f"New data from {start.strftime(TIME_FORMAT)}:")
-
-        # logger.info("Loading new history:")
-        # new_hist, missing_hist = get_latest_history(start=start)
-
-        # if len(new_hist) > 0:
-        #     if debug:
-        #         logger.info(new_hist)
-        #     df_to_Model(new_hist, History, update=True)
-
-        # else:
-        #     logger.info("None")
-
-        # hist = pd.concat([hist, new_hist]).sort_index()
+        prices, start = model_to_df(PriceHistory)
 
         if debug:
             logger.info("Getting Historic Prices")
-
-        prices, start = model_to_df(PriceHistory)
-        if debug:
             logger.info(f"Prices\n{prices}")
 
         agile = get_agile(start=start)
@@ -237,171 +205,178 @@ class Command(BaseCommand):
 
                 if len(fc) > 0:
                     fd = pd.DataFrame(list(ForecastData.objects.exclude(forecast_id__in=ignore_forecast).values()))
-
                     ff = pd.DataFrame(list(Forecasts.objects.exclude(id__in=ignore_forecast).values()))
 
-                    logger.info(ff)
-                    ff = ff.set_index("id").sort_index()
-                    ff["created_at"] = pd.to_datetime(ff["name"]).dt.tz_localize("GB")
-                    ff["date"] = ff["created_at"].dt.tz_convert("GB").dt.normalize()
-                    ff["ag_start"] = ff["created_at"].dt.normalize() + pd.Timedelta(hours=22)
-                    ff["ag_end"] = ff["created_at"].dt.normalize() + pd.Timedelta(hours=46)
+                    if len(ff) > 0:
+                        logger.info(ff)
+                        ff = ff.set_index("id").sort_index()
+                        ff["created_at"] = pd.to_datetime(ff["name"]).dt.tz_localize("GB")
+                        ff["date"] = ff["created_at"].dt.tz_convert("GB").dt.normalize()
+                        ff["ag_start"] = ff["created_at"].dt.normalize() + pd.Timedelta(hours=22)
+                        ff["ag_end"] = ff["created_at"].dt.normalize() + pd.Timedelta(hours=46)
 
-                    # Only train on the forecasts closest to 16:15
-                    ff["dt1600"] = (
-                        (ff["date"] + pd.Timedelta(hours=16, minutes=15) - ff["created_at"].dt.tz_convert("GB"))
-                        .dt.total_seconds()
-                        .abs()
-                    )
-                    ff_train = (
-                        ff.sort_values("dt1600").drop_duplicates("date").sort_index().drop(["date", "dt1600"], axis=1)
-                    )
+                        # Only train on the forecasts closest to 16:15
+                        ff["dt1600"] = (
+                            (ff["date"] + pd.Timedelta(hours=16, minutes=15) - ff["created_at"].dt.tz_convert("GB"))
+                            .dt.total_seconds()
+                            .abs()
+                        )
+                        ff_train = (
+                            ff.sort_values("dt1600")
+                            .drop_duplicates("date")
+                            .sort_index()
+                            .drop(["date", "dt1600"], axis=1)
+                        )
 
-                    if debug:
-                        logger.info("Forecasts Database:\n{ff.to_string()}")
+                        if debug:
+                            logger.info("Forecasts Database:\n{ff.to_string()}")
 
-                    # df is the full dataset
-                    df = (
-                        (fd.merge(ff, right_index=True, left_on="forecast_id"))
-                        .set_index("date_time")
-                        .drop("day_ahead", axis=1)
-                    )
+                        # df is the full dataset
+                        df = (
+                            (fd.merge(ff, right_index=True, left_on="forecast_id"))
+                            .set_index("date_time")
+                            .drop("day_ahead", axis=1)
+                        )
 
-                    df["dow"] = df.index.day_of_week
-                    df["weekend"] = (df.index.day_of_week >= 5).astype(int)
-                    df["time"] = df.index.tz_convert("GB").hour + df.index.minute / 60
-                    df["days_ago"] = (pd.Timestamp.now(tz="UTC") - df["created_at"]).dt.total_seconds() / 3600 / 24
-                    df["dt"] = (df.index - df["created_at"]).dt.total_seconds() / 3600 / 24
-                    df["peak"] = ((df["time"] >= 16) & (df["time"] < 19)).astype(float)
+                        df["dow"] = df.index.day_of_week
+                        df["weekend"] = (df.index.day_of_week >= 5).astype(int)
+                        df["time"] = df.index.tz_convert("GB").hour + df.index.minute / 60
+                        df["days_ago"] = (pd.Timestamp.now(tz="UTC") - df["created_at"]).dt.total_seconds() / 3600 / 24
+                        df["dt"] = (df.index - df["created_at"]).dt.total_seconds() / 3600 / 24
+                        df["peak"] = ((df["time"] >= 16) & (df["time"] < 19)).astype(float)
 
-                    max_days = 60
+                        max_days = 60
 
-                    features = [
-                        "bm_wind",
-                        "solar",
-                        "demand",
-                        # "time",
-                        "peak",
-                        "days_ago",
-                        # "dow",
-                        "wind_10m",
-                        "weekend",
-                    ]
+                        features = [
+                            "bm_wind",
+                            "solar",
+                            "demand",
+                            # "time",
+                            "peak",
+                            "days_ago",
+                            # "dow",
+                            "wind_10m",
+                            "weekend",
+                        ]
 
-                    # Only use the forecasts closest to 16:15 for training
-                    train_X = df[df["forecast_id"].isin(ff_train.index)]
-                    train_X = train_X[train_X["days_ago"] < max_days]
+                        # Only use the forecasts closest to 16:15 for training
+                        train_X = df[df["forecast_id"].isin(ff_train.index)]
+                        train_X = train_X[train_X["days_ago"] < max_days]
 
-                    # Only train on the next agile prices that are set from the pm auction
-                    train_X = train_X[(train_X.index >= train_X["ag_start"]) & (train_X.index < train_X["ag_end"])][
-                        features
-                    ]
+                        # Only train on the next agile prices that are set from the pm auction
+                        train_X = train_X[
+                            (train_X.index >= train_X["ag_start"]) & (train_X.index < train_X["ag_end"])
+                        ][features]
 
-                    # Get the prices to match the forecast
-                    train_X = train_X.merge(prices["day_ahead"], left_index=True, right_index=True)
+                        # Get the prices to match the forecast
+                        train_X = train_X.merge(prices["day_ahead"], left_index=True, right_index=True)
 
-                    if debug:
-                        logger.info(f"train_X:\n{train_X}")
+                        if debug:
+                            logger.info(f"train_X:\n{train_X}")
 
-                    train_y = train_X.pop("day_ahead")
-                    sample_weights = ((np.log10((train_y - train_y.mean()).abs() + 10) * 5) - 4).round(0)
+                        train_y = train_X.pop("day_ahead")
+                        sample_weights = ((np.log10((train_y - train_y.mean()).abs() + 10) * 5) - 4).round(0)
 
-                    xg_model = xg.XGBRegressor(
-                        objective="reg:squarederror",
-                        booster="dart",
-                        gamma=0.2,
-                        subsample=1.0,
-                        n_estimators=200,
-                        max_depth=10,
-                        colsample_bytree=1,
-                    )
+                        xg_model = xg.XGBRegressor(
+                            objective="reg:squarederror",
+                            booster="dart",
+                            gamma=0.2,
+                            subsample=1.0,
+                            n_estimators=200,
+                            max_depth=10,
+                            colsample_bytree=1,
+                        )
 
-                    xg_model.fit(train_X, train_y, sample_weight=sample_weights, verbose=True)
+                        xg_model.fit(train_X, train_y, sample_weight=sample_weights, verbose=True)
 
-                    # Drop the training data set
-                    test_X = df[~df["forecast_id"].isin(ff_train.index)]
+                        # Drop the training data set
+                        test_X = df[~df["forecast_id"].isin(ff_train.index)]
 
-                    # Drop any data which is actual ir dt < 0
-                    test_X = test_X[test_X.index > test_X["ag_start"]]
+                        # Drop any data which is actual ir dt < 0
+                        test_X = test_X[test_X.index > test_X["ag_start"]]
 
-                    # Drop the old data
-                    test_X = test_X[test_X["days_ago"] < max_days]
+                        # Drop the old data
+                        test_X = test_X[test_X["days_ago"] < max_days]
 
-                    test_X = test_X.merge(prices["day_ahead"], left_index=True, right_index=True)
-                    test_y = test_X["day_ahead"]
+                        test_X = test_X.merge(prices["day_ahead"], left_index=True, right_index=True)
+                        test_y = test_X["day_ahead"]
 
-                    if len(test_X) > MAX_TEST_X:
-                        _, test_X, _, _ = train_test_split(test_X, test_y, test_size=MAX_TEST_X)
+                        if len(test_X) > MAX_TEST_X:
+                            _, test_X, _, _ = train_test_split(test_X, test_y, test_size=MAX_TEST_X)
 
-                    if debug:
-                        logger.info(f"len(ff)      : {len(ff)}")
-                        logger.info(f"len(ff_train): {len(ff_train)}")
-                        logger.info(f"len(train_X) : {len(train_X)}")
-                        logger.info(f"len(test_X)  : {len(test_X)}")
+                        if debug:
+                            logger.info(f"len(ff)      : {len(ff)}")
+                            logger.info(f"len(ff_train): {len(ff_train)}")
+                            logger.info(f"len(train_X) : {len(train_X)}")
+                            logger.info(f"len(test_X)  : {len(test_X)}")
 
-                        logger.info(f"Earliest ff   : {ff.index.min()}")
-                        logger.info(f"Latest ff     : {ff.index.max()}")
-                        logger.info(f"Earliest ff_t : {ff_train.index.min()}")
-                        logger.info(f"Latest ff_t   : {ff_train.index.max()}")
+                            logger.info(f"Earliest ff   : {ff.index.min()}")
+                            logger.info(f"Latest ff     : {ff.index.max()}")
+                            logger.info(f"Earliest ff_t : {ff_train.index.min()}")
+                            logger.info(f"Latest ff_t   : {ff_train.index.max()}")
 
-                        logger.info("train_cols:")
-                        for col in train_X.columns:
-                            logger.info(
-                                f"  {col:16s}:  {train_X[col].min():10.2f} {train_X[col].mean():10.2f} {train_X[col].max():10.2f}"
-                            )
+                            logger.info("train_cols:")
+                            for col in train_X.columns:
+                                logger.info(
+                                    f"  {col:16s}:  {train_X[col].min():10.2f} {train_X[col].mean():10.2f} {train_X[col].max():10.2f}"
+                                )
 
-                        logger.info(f"test_X:\n{test_X}")
+                            logger.info(f"test_X:\n{test_X}")
 
-                    results = test_X[["dt", "day_ahead"]].copy()
-                    results["pred"] = xg_model.predict(test_X[features])
-
-                    # logger.info("Results:")
-                    # logger.info(results.to_string())
+                        results = test_X[["dt", "day_ahead"]].copy()
+                        results["pred"] = xg_model.predict(test_X[features])
 
                     fc["weekend"] = (fc.index.day_of_week >= 5).astype(int)
                     fc["days_ago"] = 0
                     fc["time"] = fc.index.tz_convert("GB").hour + fc.index.minute / 60
-                    fc["day_ahead"] = xg_model.predict(fc.drop("emb_wind", axis=1).reindex(train_X.columns, axis=1))
                     fc["dt"] = (fc.index - pd.Timestamp.now(tz="UTC")).total_seconds() / 86400
-
-                    if (len(test_X) > 10) and (not no_ranges):
-
-                        kde = KernelDensity()
-                        kde.fit(results[["dt", "pred", "day_ahead"]].to_numpy())
-
-                        xlim = (
-                            np.floor(results[["pred", "day_ahead"]].min(axis=1).min() / 11) * 10,
-                            np.ceil(results[["pred", "day_ahead"]].max(axis=1).max() / 9) * 10,
+                    if len(ff) > 0:
+                        fc["day_ahead"] = xg_model.predict(
+                            fc.drop("emb_wind", axis=1).reindex(train_X.columns, axis=1)
                         )
 
-                        fc = pd.concat(
-                            [
-                                fc,
-                                pd.DataFrame(
-                                    index=fc.index,
-                                    data=kde_quantiles(
-                                        kde,
-                                        fc["dt"].to_list(),
-                                        fc["day_ahead"].to_list(),
-                                        lim=xlim,
-                                        quantiles={"day_ahead_low": 0.1, "day_ahead_high": 0.9},
-                                    ),
-                                ),
-                            ],
-                            axis=1,
-                        )
+                        if (len(test_X) > 10) and (not no_ranges):
+                            kde = KernelDensity()
+                            kde.fit(results[["dt", "pred", "day_ahead"]].to_numpy())
 
-                        for case in ["low", "high"]:
-                            fc[f"day_ahead_{case}"] = (
-                                fc[f"day_ahead_{case}"].rolling(3, center=True).mean().bfill().ffill()
+                            xlim = (
+                                np.floor(results[["pred", "day_ahead"]].min(axis=1).min() / 11) * 10,
+                                np.ceil(results[["pred", "day_ahead"]].max(axis=1).max() / 9) * 10,
                             )
 
-                        fc["day_ahead_low"] = fc[["day_ahead", "day_ahead_low"]].min(axis=1)
-                        fc["day_ahead_high"] = fc[["day_ahead", "day_ahead_high"]].max(axis=1)
+                            fc = pd.concat(
+                                [
+                                    fc,
+                                    pd.DataFrame(
+                                        index=fc.index,
+                                        data=kde_quantiles(
+                                            kde,
+                                            fc["dt"].to_list(),
+                                            fc["day_ahead"].to_list(),
+                                            lim=xlim,
+                                            quantiles={"day_ahead_low": 0.1, "day_ahead_high": 0.9},
+                                        ),
+                                    ),
+                                ],
+                                axis=1,
+                            )
+
+                            for case in ["low", "high"]:
+                                fc[f"day_ahead_{case}"] = (
+                                    fc[f"day_ahead_{case}"].rolling(3, center=True).mean().bfill().ffill()
+                                )
+
+                            fc["day_ahead_low"] = fc[["day_ahead", "day_ahead_low"]].min(axis=1)
+                            fc["day_ahead_high"] = fc[["day_ahead", "day_ahead_high"]].max(axis=1)
+
+                        else:
+                            fc["day_ahead_low"] = fc["day_ahead"] * 0.9
+                            fc["day_ahead_high"] = fc["day_ahead"] * 1.1
 
                     else:
-                        fc["day_ahead_low"] = fc["day_ahead"] * 0.9
-                        fc["day_ahead_high"] = fc["day_ahead"] * 1.1
+                        fc["day_ahead"] = None
+                        fc["day_ahead_low"] = None
+                        fc["day_ahead_high"] = None
 
                     if debug:
                         logger.info(f"Forecast from {fc.index[0]} tp {fc.index[-1]}")
@@ -485,11 +460,23 @@ class Command(BaseCommand):
                         ]
                     )
 
-                    # fc = fc.drop(day_ahead_cols, axis=1)
-                    fc = fc[list(fd.columns)[3:]]
+                    # fc = fc[list(fd.columns)[3:]]
+                    fc = fc[
+                        [
+                            "bm_wind",
+                            "solar",
+                            "emb_wind",
+                            "temp_2m",
+                            "wind_10m",
+                            "rad",
+                            "demand",
+                            "day_ahead",
+                        ]
+                    ]
 
-                    # logger.info(fc.columns)
-                    # logger.info(ag.columns)
+                    if debug:
+                        logger.info(f"Final forecast from {fc.index[0]} to {fc.index[-1]}")
+                        logger.info(f"Forecast\n{fc}")
 
                     this_forecast = Forecasts(name=new_name)
                     this_forecast.save()
