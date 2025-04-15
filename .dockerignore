@@ -2,4 +2,6 @@ fly.toml
 .git/
 *.sqlite3
 .local/
+bin/
+.env
 .vscode/

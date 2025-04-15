@@ -1,0 +1,29 @@
+name: agile_predict
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - django=4.2.*
+  - djangorestframework
+  - environs
+  - psycopg2-binary
+  - dj-database-url
+  - django-crispy-forms
+  - crispy-bootstrap5
+  - matplotlib
+  - seaborn
+  - numpy
+  - pandas
+  - plotly
+  - scipy
+  - scikit-learn
+  - tables
+  - xgboost
+  - requests
+  - pip
+  - pip:
+    - blosc2
+    - whitenoise
+    - python-dotenv
+    - black
