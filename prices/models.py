@@ -44,7 +44,7 @@ class History(models.Model):
 class ForecastData(models.Model):
     forecast = models.ForeignKey(Forecasts, related_name="data", on_delete=models.CASCADE)
     date_time = models.DateTimeField()
-    day_ahead = models.FloatField()
+    day_ahead = models.FloatField(null=True)
     bm_wind = models.FloatField()
     solar = models.FloatField()
     emb_wind = models.FloatField()
