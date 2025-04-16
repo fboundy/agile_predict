@@ -1,5 +1,6 @@
 import xgboost as xg
 from sklearn.metrics import mean_squared_error as MSE
+from sklearn.model_selection import cross_val_score
 from sklearn.neighbors import KernelDensity
 from sklearn.model_selection import train_test_split
 
@@ -61,12 +62,11 @@ class Command(BaseCommand):
         )
 
         parser.add_argument(
-            "--no_day_of_week",
-            action="store_true",
+            "--max_days",
         )
 
         parser.add_argument(
-            "--nordpool",
+            "--no_day_of_week",
             action="store_true",
         )
 
@@ -90,9 +90,9 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         # Setup logging
-        local_dir = os.path.join(os.getcwd(), ".local")
-        os.makedirs(local_dir, exist_ok=True)
-        log_file = os.path.join(local_dir, "train_forecast.log")
+        log_dir = os.path.join(os.getcwd(), "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, "update.log")
 
         logger = logging.getLogger(__name__)
         logger.setLevel(logging.INFO)
@@ -111,11 +111,10 @@ class Command(BaseCommand):
         debug = options.get("debug", False)
 
         min_fd = int(options.get("min_fd", 600) or 600)
-        min_ad = int(options.get("min_ad", 0) or 0)
+        min_ad = int(options.get("min_ad", 1500) or 1500)
+        max_days = int(options.get("max_days", 60) or 60)
 
         no_ranges = options.get("no_ranges", False)
-
-        use_gb60 = options.get("gb60", False)
 
         drop_cols = ["emb_wind"]
         if options.get("no_day_of_week", False):
@@ -129,14 +128,32 @@ class Command(BaseCommand):
             ignore_forecast = [int(x) for x in options.get("ignore_forecast", [])]
 
         # Clean any invalid forecasts
-        for f in Forecasts.objects.all():
-            q = ForecastData.objects.filter(forecast=f)
-            a = AgileData.objects.filter(forecast=f)
+        if debug:
+            logger.info(f"Max days: {max_days}")
 
+            logger.info(f"  ID  |       Name       |  #FD  |   #AD   | Days |")
+            logger.info(f"------+------------------+-------+---------+------+")
+        keep = []
+        for f in Forecasts.objects.all().order_by("-created_at"):
+            fd = ForecastData.objects.filter(forecast=f)
+            ad = AgileData.objects.filter(forecast=f)
+            dt = pd.to_datetime(f.name).tz_localize("GB")
+            days = (pd.Timestamp.now(tz="GB") - dt).days
+            if fd.count() < min_fd or ad.count() < min_ad:
+                fail = " <- Fail"
+            else:
+                if days < max_days * 2:
+                    keep.append(f.id)
+                    fail = ""
+                else:
+                    fail = "<- Old"
             if debug:
-                logger.info(f"{f.id} {f.name} {q.count()} {a.count()}")
-            if q.count() < min_fd or a.count() < min_ad:
-                f.delete()
+                logger.info(f"{f.id:5d} | {f.name} | {fd.count():5d} | {ad.count():7d} | {days:4d} | {fail}")
+
+        forecasts_to_delete = Forecasts.objects.exclude(id__in=keep)
+        if debug:
+            logger.info(f"\nDeleting ({forecasts_to_delete})\n")
+        forecasts_to_delete.delete()
 
         prices, start = model_to_df(PriceHistory)
 
@@ -245,8 +262,6 @@ class Command(BaseCommand):
                         df["dt"] = (df.index - df["created_at"]).dt.total_seconds() / 3600 / 24
                         df["peak"] = ((df["time"] >= 16) & (df["time"] < 19)).astype(float)
 
-                        max_days = 60
-
                         features = [
                             "bm_wind",
                             "solar",
@@ -286,6 +301,12 @@ class Command(BaseCommand):
                             max_depth=10,
                             colsample_bytree=1,
                         )
+
+                        scores = cross_val_score(
+                            xg_model, train_X, train_y, cv=5, scoring="neg_root_mean_squared_error"
+                        )
+
+                        logger.info(f"Cross-val scrore: {scores}")
 
                         xg_model.fit(train_X, train_y, sample_weight=sample_weights, verbose=True)
 
@@ -400,8 +421,10 @@ class Command(BaseCommand):
                             )
                         )
                         sfs.append(
-                            pd.DataFrame(index=fc.index.difference(sfs[0].index.union(sfs[1].index))),
-                            data={"mult": 1, "shift": 0},
+                            pd.DataFrame(
+                                index=fc.index.difference(sfs[0].index.union(sfs[1].index)),
+                                data={"mult": 1, "shift": 0},
+                            )
                         )
                     else:
                         sfs.append(pd.DataFrame(index=fc.index.difference(sfs[0].index), data={"mult": 1, "shift": 0}))
@@ -478,7 +501,7 @@ class Command(BaseCommand):
                         logger.info(f"Final forecast from {fc.index[0]} to {fc.index[-1]}")
                         logger.info(f"Forecast\n{fc}")
 
-                    this_forecast = Forecasts(name=new_name)
+                    this_forecast = Forecasts(name=new_name, mean=-np.mean(scores), stdev=np.std(scores))
                     this_forecast.save()
                     fc["forecast"] = this_forecast
                     ag["forecast"] = this_forecast

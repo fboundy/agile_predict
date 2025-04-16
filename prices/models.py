@@ -5,6 +5,8 @@ from django.urls import reverse
 class Forecasts(models.Model):
     name = models.CharField(unique=True, max_length=64)
     created_at = models.DateTimeField(auto_now_add=True)
+    mean = models.FloatField(null=True)
+    stdev = models.FloatField(null=True)
 
     def __str__(self):
         return self.name

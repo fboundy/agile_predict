@@ -225,7 +225,7 @@ class GraphFormView(FormView):
                         marker={"symbol": 104, "size": 10},
                         mode="lines",
                         line=dict(width=width),
-                        name="Prediction",
+                        name=f"Prediction ({pd.to_datetime(f.name).tz_localize('GB').strftime('%d-%b %H:%M')})",
                         hovertemplate=hover_template_price,
                     )
                 ]
@@ -240,7 +240,7 @@ class GraphFormView(FormView):
                             line=dict(width=1, color="red"),
                             name="Low",
                             showlegend=False,
-                            hovertemplate=hover_template_price
+                            hovertemplate=hover_template_price,
                         ),
                         go.Scatter(
                             x=df.index,
@@ -367,7 +367,7 @@ class GraphFormView(FormView):
             legend=legend,
             height=height,
             template="plotly_dark",
-            hovermode='x',
+            hovermode="x",
         )
 
         figure.update_layout(**layout)
