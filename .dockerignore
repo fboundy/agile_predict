@@ -5,3 +5,4 @@ fly.toml
 bin/
 .env
 .vscode/
+logs/
