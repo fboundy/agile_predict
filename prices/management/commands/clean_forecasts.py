@@ -47,9 +47,13 @@ class Command(BaseCommand):
             if fd.count() < min_fd or ad.count() < min_ad:
                 fail = " <- Fail"
             else:
-                fail = ""
+                fail = " <- Manual"
                 if days < max_days:
-                    keep.append(f.id)
+                    for hour in [6, 10, 16, 22]:
+                        if f"{hour:02d}:15" in f.name:
+                            keep.append(f.id)
+                            fail = ""
+
             if f.mean is None:
                 print(f"{f.id:5d} | {f.name} | {fd.count():5d} | {ad.count():7d} | {days:4d} |  N/A  |  N/A  | {fail}")
             else:

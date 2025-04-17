@@ -1,15 +1,18 @@
+from pathlib import Path
+
 import pandas as pd
+import plotly.graph_objects as go
+from django.core.cache import cache
 
 # Create your views here.
-from django.views.generic import TemplateView, FormView
-from .models import Forecasts, PriceHistory, AgileData, ForecastData, History
-import plotly.graph_objects as go
+from django.views.generic import FormView, TemplateView
 from plotly.subplots import make_subplots
 
-from config.settings import GLOBAL_SETTINGS
+from config.settings import GLOBAL_SETTINGS, BASE_DIR
 from config.utils import day_ahead_to_agile
-from .forms import ForecastForm
 
+from .forms import ForecastForm
+from .models import AgileData, ForecastData, Forecasts, History, PriceHistory
 
 regions = GLOBAL_SETTINGS["REGIONS"]
 PRIOR_DAYS = 2
@@ -76,14 +79,12 @@ class StatsView(TemplateView):
             index = [
                 obj.date_time
                 for obj in agile_pred_objects
-                if obj.date_time > forecast_after
-                if obj.date_time < forecast_after + pd.Timedelta("7D")
+                if forecast_after < obj.date_time < forecast_after + pd.Timedelta("7D")
             ]
             data = [
                 obj.agile_pred
                 for obj in agile_pred_objects
-                if obj.date_time > forecast_after
-                if obj.date_time < forecast_after + pd.Timedelta("7D")
+                if forecast_after < obj.date_time < forecast_after + pd.Timedelta("7D")
             ]
             if len(data) > 0:
                 df.loc[index, forecast_created_at] = data
@@ -132,7 +133,52 @@ class StatsView(TemplateView):
 
         figure.add_heatmap(x=x, y=y, z=z, row=2, col=1, colorbar={"title": "Error\n[p/kWh]"})
 
-        context["stats"] = figure.to_html()
+        # HTML for the existing Plotly figure
+        context["stats"] = figure.to_html(full_html=False, include_plotlyjs="cdn")
+
+        # --- SECTION 2: Static Diagnostic PNG Plots ---
+        plot_dir = BASE_DIR / "plots" / "stats_plots"
+
+        # context["plot_files"] = [f"stats_plots/{f.name}" for f in plot_dir.glob("*.png") if f.is_file()]
+
+        descriptions = {
+            "1_actual_vs_predicted_over_time.png": (
+                "This plot shows the full training dataset used for the last forecast. Actual data are plotted as the black line."
+                + " The model fits are plotted as the points with the colour indicating the lead time from forecast to actual pricing."
+                + "All of the plots below other than the XGBoost Feature Importance show the same data in different ways.",
+                "Actual vs Predicted Over Time",
+            ),
+            "2_scatters.png": (
+                "Scatter plot of predicted vs actual prices. Color shows forecast lead time (in days).",
+                "Prediction vs Actual Scatter",
+            ),
+            "3_residuals.png": (
+                "Histogram of prediction errors (residuals) to visualize model bias and spread.",
+                "Residuals Distribution",
+            ),
+            "4_kde_error_by_horizon.png": (
+                "KDE heatmap and scatter overlay showing how forecast error varies by lead time.",
+                "Forecast Error by Horizon (KDE)",
+            ),
+            "5_feature_importance.png": (
+                "This plot is slightly different to the others in that it shows the relative importance of the various inputs in building the regression model. Details of each feauture can be found on the About page.",
+                "XGBoost Feature Importance",
+            ),
+        }
+
+        plot_dir = BASE_DIR / "plots" / "stats_plots"
+        plot_files = [
+            {
+                "filename": f"stats_plots/{f.name}",
+                "description": descriptions.get(f.name, ("", ""))[0],
+                "title": descriptions.get(f.name, ("", ""))[1] or f.name.replace("_", " ").title().replace(".Png", ""),
+            }
+            for f in plot_dir.glob("*.png")
+            if f.is_file()
+        ]
+
+        context["plot_files"] = plot_files
+
         return context
 
 

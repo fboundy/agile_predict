@@ -12,31 +12,109 @@
                         >BRMS</a
                     >), National Grid Electricity Supply Operator (<a href="https://www.nationalgrideso.com/data-portal"
                         >NG ESO</a
-                    >) and weather data from<a href="https://open-meteo.com"> open-meteo.com</a>
+                    >) and weather data from <a href="https://open-meteo.com">open-meteo.com</a>. The table below lists
+                    the features used in the model.
+                </p>
+
+                <div class="table-responsive mb-3">
+                    <table class="table table-bordered table-sm table-hover">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Feature</th>
+                                <th>Description</th>
+                                <th>Source</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>bm_wind</td>
+                                <td>Forecast metered wind generation</td>
+                                <td>NG ESO (Day Ahead from BMRS)</td>
+                            </tr>
+                            <tr>
+                                <td>solar</td>
+                                <td>Embedded solar generation forecast</td>
+                                <td>NG ESO</td>
+                            </tr>
+                            <tr>
+                                <td>demand</td>
+                                <td>Forecast electricity demand</td>
+                                <td>BMRS + NG ESO</td>
+                            </tr>
+                            <tr>
+                                <td>peak</td>
+                                <td>Binary flag for expected daily peak hours</td>
+                                <td>Derived</td>
+                            </tr>
+                            <tr>
+                                <td>days_ago</td>
+                                <td>Number of days from forecast publication to target</td>
+                                <td>Derived</td>
+                            </tr>
+                            <tr>
+                                <td>wind_10m</td>
+                                <td>Surface wind speed forecast at 10m elevation</td>
+                                <td>open-meteo.com</td>
+                            </tr>
+                            <tr>
+                                <td>weekend</td>
+                                <td>Binary indicator for weekends</td>
+                                <td>Derived</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h5 class="mt-4">How the Forecast Works</h5>
+                <p>
+                    AgilePredict uses an <strong>XGBoost Gradient Boosting Regressor</strong> to forecast electricity
+                    prices based on a blend of weather and energy market data. Here's an overview of how it works:
+                </p>
+                <ul>
+                    <li>
+                        <strong>Data Collection:</strong> Forecasts and actual prices are sourced from NG ESO, BMRS,
+                        Open-Meteo, and historical Agile data.
+                    </li>
+                    <li>
+                        <strong>Feature Engineering:</strong> Time-based and derived features like peak hours, days
+                        since forecast, and weekend indicators are calculated.
+                    </li>
+                    <li>
+                        <strong>Training Focus:</strong> The model trains on the data closest to 16:15 daily (aligned
+                        with auction timing) and targets the PM auction period (22:00–22:00 next day).
+                    </li>
+                    <li>
+                        <strong>Modeling:</strong> The XGBoost model is trained using log-weighted errors to better
+                        capture high-volatility pricing. It uses cross-validation to validate accuracy.
+                    </li>
+                    <li>
+                        <strong>Prediction:</strong> New forecasts are generated, and confidence intervals are estimated
+                        using Kernel Density Estimation (KDE).
+                    </li>
+                    <li>
+                        <strong>Blending:</strong> Model outputs are blended with actual prices and extended into future
+                        time slots. Forecasts include a central prediction, and low/high bounds.
+                    </li>
+                    <li>
+                        <strong>Publishing:</strong> Results are stored and published for multiple UK regions with
+                        Agile-compatible pricing.
+                    </li>
+                </ul>
+
+                <p>
+                    The forecasts are updated automatically four times per day: at 06:15, 10:15, 16:15, and 22:15. The
+                    accuracy tends to be stronger for general trends rather than exact half-hour slots, especially
+                    further into the future.
                 </p>
 
                 <p>
-                    The model runs in Python using the
-                    <a href="https://xgboost.readthedocs.io/en/stable/#">XGBoost</a> Gradient Boosting library,
-                    <a href="https://pandas.pydata.org/">pandas</a> and
-                    <a href="https://www.djangoproject.com/">django</a>. The model is trained on a combination of
-                    historic actual data and historic forecasts together with the actual Agile prices. As more forecasts
-                    are processed the model should <i>learn</i> and improve its predictions.
-                </p>
-
-                <p>
-                    The forecasts should get automatically updated at 6:30, 11:30 and 16:30 daily. For each update the
-                    model is run 50 times to estimate the uncertainty in the prediction. It should be note that this
-                    approach only accounts for the uncertainty in the model and not the uncertainty in the underlying
-                    forecasts or generation, demand and weather.
-                </p>
-                <p>
-                    This model is very much work in progress: use it at your own risk! Overall trends are more likely to
-                    be accurate than the half-hourly slot details.
+                    AgilePredict is a work in progress. Please use the forecasts with care and always check with
+                    official pricing when it matters.
                 </p>
             </div>
         </div>
     </div>
+
     <div class="row">
         <div class="col-lg-6 fluid p-4">
             <div class="card bg-dark-subtle p-3">
@@ -51,7 +129,7 @@
                     donate more than £1! All proceeds will go to help support
                     <a href="https://penrithmrt.org.uk">Penrith Mountain Rescue Team</a>
                 </p>
-                <h4>Octopus Referal Link</h4>
+                <h4>Octopus Referral Link</h4>
                 <p>
                     If you would like to join Octopus please use my link, there's £50 credit for both of us if you do:
                     <a href="https://share.octopus.energy/silk-dream-111"

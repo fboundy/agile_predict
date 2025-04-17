@@ -1,11 +1,63 @@
-{% extends "base.html" %} {% block content %}
+{% extends "base.html" %} {% load static %} {% block content %}
 
 <div class="container-lg fluid">
     <div class="row">
         <div class="col-lg p-4">
-            <div class="row">{% if stats %} {{ stats|safe }} {% endif %}</div>
+            <h4 class="mb-4">Model RMS Error and Robustness vs Forecast Date</h4>
+            <p class="text-muted">
+                This plot shows how the model fit to the training data and its robustness evolve over time as more
+                points are included.
+            </p>
+            <p class="text-muted">
+                The model is trained five times using 80% of the data to train and the other 20% to test. Each iteration
+                gives an RMS error for the fit. The mean of the five plotted as the black line and the range (as +/- 1
+                standard deviation) is the pale yellow range. As more data is added the model should learn and so the
+                absolute error should trend downwards and the range should narrow.
+            </p>
+
+            <div class="row mt-3">
+                <img src="{% static 'trends/trend.png' %}" alt="Trend" class="w-full h-auto rounded shadow" />
+            </div>
+            <div class="row mt-3">
+                <h4 class="mb-4">Model Error Heatmap</h4>
+                <p class="text-muted">
+                    The top plot shows the last week's actual Agile Price in yellow; the thin grey lines are the
+                    historical forecasts. The heatmap below shows how the errors in the grey lines have evolved over
+                    time with warm colours being big errors and blue being a perfect match.
+                </p>
+                <p class="text-muted">
+                    If the model is behaving well you should see warmer colours bottom right (ie errors due to
+                    forecasting a week ahead) and cooler colours towards the top and left.
+                </p>
+
+                <!-- Plotly Forecast + Heatmap -->
+                {% if stats %}
+                <div class="mb-4">{{ stats|safe }}</div>
+                {% else %}
+                <div class="alert alert-warning">No forecast stats available.</div>
+                {% endif %}
+            </div>
+            <!-- Diagnostic Static Plots -->
+            <h4 class="mt-4">Model Diagnostic Plots - Most Recent Forecast</h4>
+            {% if plot_files %}
+            <div class="row mt-3">
+                {% for plot in plot_files %}
+                <div class="{% if forloop.first %}col-lg-12{% else %}col-md-6{% endif %} mb-4">
+                    <h5 class="text-light">{{ plot.title }}</h5>
+
+                    <p class="text-muted">{{ plot.description }}</p>
+                    <img
+                        src="{% static plot.filename %}"
+                        class="img-fluid rounded shadow-sm border border-light"
+                        alt="{{ plot.filename }}"
+                    />
+                </div>
+                {% endfor %} {% else %}
+                <p>No diagnostic plots available. Run a forecast to generate them.</p>
+                {% endif %}
+            </div>
         </div>
     </div>
-</div>
 
-{% endblock content %}
+    {% endblock content %}
+</div>

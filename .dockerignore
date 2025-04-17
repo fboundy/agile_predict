@@ -6,3 +6,5 @@ bin/
 .env
 .vscode/
 logs/
+static/
+environment.yml
