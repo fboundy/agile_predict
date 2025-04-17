@@ -371,13 +371,15 @@ class Command(BaseCommand):
 
                             logger.info(f"test_X:\n{test_X}")
 
+                        factor = GLOBAL_SETTINGS["REGIONS"]["X"]["factors"][0]
+
                         results = test_X[["dt", "day_ahead"]].copy()
                         results["pred"] = xg_model.predict(test_X[features])
 
                         # Add required columns before plotting
                         results["forecast_created"] = test_X["created_at"]
                         results["target_time"] = test_X.index
-                        results["error"] = results["day_ahead"] - results["pred"]
+                        results["error"] = (results["day_ahead"] - results["pred"]) * factor
 
                         def save_plot(fig, name):
                             plot_path = os.path.join(PLOT_DIR, f"{name}.png")
@@ -404,17 +406,17 @@ class Command(BaseCommand):
                             ]
                         )
 
-                        ff.plot(x="created_at", y="mean", ax=ax, lw=2, color="black", marker="o")
+                        ax.plot(ff["created_at"], ff["mean"] * factor, lw=2, color="black", marker="o")
                         ax.fill_between(
                             ff["created_at"],
-                            ff["mean"] - ff["stdev"],
-                            ff["mean"] + ff["stdev"],
+                            (ff["mean"] - ff["stdev"]) * factor,
+                            (ff["mean"] + ff["stdev"]) * factor,
                             color="yellow",
                             alpha=0.3,
                             label="±1 Stdev",
                         )
 
-                        ax.set_ylabel("Predicted Day Ahead Price RMSE [£/MWh]")
+                        ax.set_ylabel("Predicted Agile Price RMSE [p/kWh]")
                         ax.set_xlabel("Forecast Date/Time")
                         ax.set_ylim(0)
                         ax.xaxis.set_major_locator(mdates.AutoDateLocator())
@@ -477,10 +479,10 @@ class Command(BaseCommand):
 
                         # 3. Residuals
                         fig, ax = plt.subplots(figsize=(8, 6))
-                        residuals = results["day_ahead"] - results["pred"]
+                        residuals = (results["day_ahead"] - results["pred"]) * factor
                         sns.histplot(residuals, bins=50, kde=True, ax=ax)
                         ax.set_title("Residuals Distribution")
-                        ax.set_xlabel("Error (Actual - Predicted) [£/MWh]")
+                        ax.set_xlabel("Error (Actual - Predicted) [p/kWh]")
                         save_plot(fig, "3_residuals")
 
                         # 4. Forecast Error by Horizon
@@ -505,7 +507,7 @@ class Command(BaseCommand):
                         )
                         ax.set_title("2D KDE: Forecast Error by Horizon")
                         ax.set_xlabel("Days Ahead (dt)")
-                        ax.set_ylabel("Error (Actual - Predicted) [£/MWh]")
+                        ax.set_ylabel("Error (Actual - Predicted) [p/kWh]")
                         save_plot(fig, "4_kde_error_by_horizon")
 
                         # 5. Feature Importance (XGBoost built-in)

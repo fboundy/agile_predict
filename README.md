@@ -1,4 +1,4 @@
-# Agile Predict v2.1.2
+# Agile Predict v2.2.1
 
 This model forecasts Octopus Agile electricity prices up to 14 days in advance using a Machine Learning model trained
 on data from the Balancing Mechanism Reporting System (<a href="https://bmrs.elexon.co.uk/">BRMS</a>), National Grid
