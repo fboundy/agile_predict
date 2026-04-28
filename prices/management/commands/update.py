@@ -30,7 +30,7 @@ DAYS_TO_INCLUDE = 7
 MODEL_ITERS = 50
 MIN_HIST = 7
 MAX_HIST = 28
-MAX_TEST_X = 20000
+MAX_TEST_X = 10000
 
 log_dir = os.path.join(os.getcwd(), "logs")
 os.makedirs(log_dir, exist_ok=True)
@@ -130,6 +130,11 @@ class Command(BaseCommand):
             action="store_true",
         )
 
+        parser.add_argument(
+            "--skip_kde_plot",
+            action="store_true",
+        )
+
     def handle(self, *args, **options):
         # Setup logging
 
@@ -140,6 +145,7 @@ class Command(BaseCommand):
         max_days = int(options.get("max_days", 60) or 60)
 
         no_ranges = options.get("no_ranges", False)
+        skip_kde_plot = options.get("skip_kde_plot", False)
 
         drop_cols = ["emb_wind"]
         if options.get("no_day_of_week", False):
@@ -328,17 +334,24 @@ class Command(BaseCommand):
                             n_estimators=200,
                             max_depth=10,
                             colsample_bytree=1,
+                            n_jobs=1,
                         )
 
                         scores = cross_val_score(
                             xg_model, train_X, train_y, cv=5, scoring="neg_root_mean_squared_error"
                         )
 
-                        logger.info(f"Cross-val scrore: {scores}")
+                        logger.info(f"Cross-val score: {scores}")
 
+                        logger.info(
+                            "Fitting final XGBoost model "
+                            f"({len(train_X)} rows, {len(train_X.columns)} features)"
+                        )
                         xg_model.fit(train_X, train_y, sample_weight=sample_weights, verbose=True)
+                        logger.info("Finished fitting final XGBoost model")
 
                         # Drop the training data set
+                        logger.info("Preparing holdout/test dataset")
                         test_X = df[~df["forecast_id"].isin(ff_train.index)]
 
                         # Drop any data which is actual ir dt < 0
@@ -351,6 +364,7 @@ class Command(BaseCommand):
                         test_y = test_X["day_ahead"]
 
                         if len(test_X) > MAX_TEST_X:
+                            logger.info(f"Sampling test dataset from {len(test_X)} rows to {MAX_TEST_X} rows")
                             _, test_X, _, _ = train_test_split(test_X, test_y, test_size=MAX_TEST_X)
 
                         if debug:
@@ -374,8 +388,10 @@ class Command(BaseCommand):
 
                         factor = GLOBAL_SETTINGS["REGIONS"]["X"]["factors"][0]
 
+                        logger.info(f"Predicting holdout/test dataset ({len(test_X)} rows)")
                         results = test_X[["dt", "day_ahead"]].copy()
                         results["pred"] = xg_model.predict(test_X[features])
+                        logger.info("Finished holdout/test predictions")
 
                         # Add required columns before plotting
                         results["forecast_created"] = test_X["created_at"]
@@ -391,6 +407,7 @@ class Command(BaseCommand):
                             plt.close(fig)
 
                         PLOT_DIR = Path(os.path.join("plots", "trends"))
+                        logger.info(f"Writing trend plot to {PLOT_DIR}")
                         PLOT_DIR.mkdir(parents=True, exist_ok=True)
                         for f in PLOT_DIR.glob("*.png"):
                             f.unlink()
@@ -427,9 +444,11 @@ class Command(BaseCommand):
                         ax.xaxis.set_major_formatter(mdates.DateFormatter("%d-%b\n%H:%M"))
                         fig.autofmt_xdate()  # rotates and aligns labels
                         save_plot(fig, "trend")
+                        logger.info("Saved trend plot")
 
                         # Directory to save plots
                         PLOT_DIR = Path(os.path.join("plots", "stats_plots"))
+                        logger.info(f"Writing stats plots to {PLOT_DIR}")
                         PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
                         # Clean old files (optional)
@@ -475,6 +494,7 @@ class Command(BaseCommand):
                         ax.set_ylabel("£/MWh")
                         ax.legend()
                         save_plot(fig, "1_actual_vs_predicted_over_time")
+                        logger.info("Saved stats plot 1/5: actual vs predicted over time")
 
                         # 2. Prediction vs Actual Scatter
                         fig, ax = plt.subplots(figsize=(8, 6))
@@ -493,6 +513,7 @@ class Command(BaseCommand):
                         ax.set_ylabel("Predicted Price [£/MWh]")
                         ax.set_title("Prediction vs Actual")
                         save_plot(fig, "2_scatters")
+                        logger.info("Saved stats plot 2/5: prediction vs actual scatter")
 
                         # 3. Residuals
                         fig, ax = plt.subplots(figsize=(8, 6))
@@ -501,41 +522,48 @@ class Command(BaseCommand):
                         ax.set_title("Residuals Distribution")
                         ax.set_xlabel("Error (Actual - Predicted) [p/kWh]")
                         save_plot(fig, "3_residuals")
+                        logger.info("Saved stats plot 3/5: residuals distribution")
 
-                        # 4. Forecast Error by Horizon
-                        fig, ax = plt.subplots(figsize=(8, 6))
-                        kde = sns.kdeplot(
-                            data=results,
-                            x="dt",
-                            y="error",
-                            fill=True,
-                            cmap="Oranges",
-                            levels=10,
-                            ax=ax,
-                        )
+                        if skip_kde_plot:
+                            logger.info("Skipped stats plot 4/5: forecast error by horizon KDE")
+                        else:
+                            # 4. Forecast Error by Horizon
+                            logger.info("Generating stats plot 4/5: forecast error by horizon KDE")
+                            fig, ax = plt.subplots(figsize=(8, 6))
+                            kde = sns.kdeplot(
+                                data=results,
+                                x="dt",
+                                y="error",
+                                fill=True,
+                                cmap="Oranges",
+                                levels=10,
+                                ax=ax,
+                            )
 
-                        # Add a colorbar
-                        # cbar = plt.colorbar(kde.collections[0], ax=ax)
-                        # cbar.set_label("Density")
-                        # sns.scatterplot(
-                        #     data=results,
-                        #     x="dt",
-                        #     y=residuals,
-                        #     alpha=0.3,
-                        #     ax=ax,
-                        #     color="grey",
-                        #     linewidth=0,
-                        # )
-                        ax.set_title("2D KDE: Forecast Error by Horizon")
-                        ax.set_xlabel("Days Ahead (dt)")
-                        ax.set_ylabel("Error (Actual - Predicted) [p/kWh]")
-                        save_plot(fig, "4_kde_error_by_horizon")
+                            # Add a colorbar
+                            # cbar = plt.colorbar(kde.collections[0], ax=ax)
+                            # cbar.set_label("Density")
+                            # sns.scatterplot(
+                            #     data=results,
+                            #     x="dt",
+                            #     y=residuals,
+                            #     alpha=0.3,
+                            #     ax=ax,
+                            #     color="grey",
+                            #     linewidth=0,
+                            # )
+                            ax.set_title("2D KDE: Forecast Error by Horizon")
+                            ax.set_xlabel("Days Ahead (dt)")
+                            ax.set_ylabel("Error (Actual - Predicted) [p/kWh]")
+                            save_plot(fig, "4_kde_error_by_horizon")
+                            logger.info("Saved stats plot 4/5: forecast error by horizon")
 
                         # 5. Feature Importance (XGBoost built-in)
                         fig, ax = plt.subplots(figsize=(8, 6))
                         xg.plot_importance(xg_model, ax=ax, importance_type="gain", show_values=False)
                         ax.set_title("XGBoost Feature Importance (Gain)")
                         save_plot(fig, "5_feature_importance")
+                        logger.info("Saved stats plot 5/5: feature importance")
 
                         # fig, ax = plt.subplots(figsize=(8, 6))
                         # bins = [0, 1, 2, 3, 5, 10, 15]
@@ -553,11 +581,14 @@ class Command(BaseCommand):
                     fc["time"] = fc.index.tz_convert("GB").hour + fc.index.minute / 60
                     fc["dt"] = (fc.index - pd.Timestamp.now(tz="UTC")).total_seconds() / 86400
                     if len(ff) > 0:
+                        logger.info(f"Predicting latest forecast ({len(fc)} rows)")
                         fc["day_ahead"] = xg_model.predict(
                             fc.drop("emb_wind", axis=1).reindex(train_X.columns, axis=1)
                         )
+                        logger.info("Finished latest forecast prediction")
 
                         if (len(test_X) > 10) and (not no_ranges):
+                            logger.info("Fitting KDE for forecast range estimates")
                             kde = KernelDensity()
                             kde.fit(results[["dt", "pred", "day_ahead"]].to_numpy())
 
@@ -582,6 +613,7 @@ class Command(BaseCommand):
                                 ],
                                 axis=1,
                             )
+                            logger.info("Finished KDE forecast range estimates")
 
                             for case in ["low", "high"]:
                                 fc[f"day_ahead_{case}"] = (
@@ -592,6 +624,7 @@ class Command(BaseCommand):
                             fc["day_ahead_high"] = fc[["day_ahead", "day_ahead_high"]].max(axis=1)
 
                         else:
+                            logger.info("Using fallback +/-10% forecast ranges")
                             fc["day_ahead_low"] = fc["day_ahead"] * 0.9
                             fc["day_ahead_high"] = fc["day_ahead"] * 1.1
 
@@ -640,6 +673,7 @@ class Command(BaseCommand):
                         logger.info(f"Scale factors\n{scale_factors}")
 
                     scale_factors = pd.concat([scale_factors, prices.reindex(scale_factors.index).fillna(0)], axis=1)
+                    logger.info(f"Applying scale factors ({len(scale_factors)} rows)")
 
                     if debug:
                         logger.info(f"Scale Factors:\n{scale_factors}")
@@ -683,6 +717,7 @@ class Command(BaseCommand):
                             for region in regions
                         ]
                     )
+                    logger.info(f"Prepared agile forecast data ({len(ag)} rows across {len(regions)} regions)")
 
                     # fc = fc[list(fd.columns)[3:]]
                     fc = fc[
@@ -703,11 +738,15 @@ class Command(BaseCommand):
                         logger.info(f"Forecast\n{fc}")
 
                     this_forecast = Forecasts(name=new_name, mean=-np.mean(scores), stdev=np.std(scores))
+                    logger.info(f"Saving forecast record: {new_name}")
                     this_forecast.save()
                     fc["forecast"] = this_forecast
                     ag["forecast"] = this_forecast
+                    logger.info(f"Writing ForecastData rows: {len(fc)}")
                     df_to_Model(fc, ForecastData)
+                    logger.info(f"Writing AgileData rows: {len(ag)}")
                     df_to_Model(ag, AgileData)
+                    logger.info(f"Finished writing forecast {this_forecast.id}: {this_forecast.name}")
 
         if debug:
             for f in Forecasts.objects.all().order_by("-created_at"):

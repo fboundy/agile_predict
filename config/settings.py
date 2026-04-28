@@ -34,6 +34,7 @@ SECRET_KEY = env("SECRET_KEY")
 DEBUG = env.bool("DEBUG", default=False)
 
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["agilepredict.com", ".agilepredict.com", ".fly.dev"])
+UPDATE_TOKEN = env("UPDATE_TOKEN", default="")
 
 
 LOG_DIR = os.path.join(BASE_DIR, "logs")

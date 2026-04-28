@@ -1,14 +1,16 @@
-from io import StringIO
+from hmac import compare_digest
+import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pandas as pd
 import plotly.graph_objects as go
-from django.core.management import call_command
-from django.core.management.base import CommandError
-from django.core.cache import cache
-from django.http import JsonResponse
+from django.conf import settings
+from django.http import HttpResponseForbidden, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_GET, require_POST
 
 # Create your views here.
 from django.views.generic import FormView, TemplateView
@@ -22,61 +24,142 @@ from .models import AgileData, ForecastData, Forecasts, History, PriceHistory
 
 regions = GLOBAL_SETTINGS["REGIONS"]
 PRIOR_DAYS = 2
+UPDATE_STATUS_PATH = BASE_DIR / "logs" / "update_status.json"
 
 
 def _truthy(value):
     return str(value).lower() in {"1", "true", "yes", "on"}
 
 
-@csrf_exempt
-@require_POST
-def run_update(request):
-    stdout = StringIO()
-    stderr = StringIO()
-    options = {}
+def _update_command_args(request):
+    args = [sys.executable, str(BASE_DIR / "manage.py"), "run_update_job"]
 
-    for key in ["debug", "no_day_of_week", "no_ranges"]:
+    for key in ["debug", "no_day_of_week", "no_ranges", "skip_kde_plot"]:
         if key in request.POST or key in request.GET:
-            options[key] = _truthy(request.POST.get(key, request.GET.get(key)))
+            if _truthy(request.POST.get(key, request.GET.get(key))):
+                args.append(f"--{key}")
+
+    if "skip_kde_plot" not in request.POST and "skip_kde_plot" not in request.GET:
+        args.append("--skip_kde_plot")
 
     for key in ["min_fd", "min_ad", "max_days", "train_frac", "drop_last"]:
         value = request.POST.get(key, request.GET.get(key))
         if value not in {None, ""}:
-            options[key] = value
+            args.extend([f"--{key}", str(value)])
 
     ignore_forecast = request.POST.getlist("ignore_forecast") or request.GET.getlist("ignore_forecast")
-    if ignore_forecast:
-        options["ignore_forecast"] = ignore_forecast
+    for forecast_id in ignore_forecast:
+        args.extend(["--ignore_forecast", str(forecast_id)])
+
+    return args
+
+
+def _read_update_status():
+    try:
+        return json.loads(UPDATE_STATUS_PATH.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _write_update_status(status):
+    UPDATE_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    UPDATE_STATUS_PATH.write_text(json.dumps(status, indent=2, sort_keys=True))
+
+
+def _pid_is_running(pid):
+    if not pid:
+        return False
+
+    proc_path = Path("/proc") / str(pid)
+    if proc_path.exists():
+        return True
 
     try:
-        call_command("update", stdout=stdout, stderr=stderr, **options)
-    except CommandError as exc:
-        return JsonResponse(
-            {
-                "ok": False,
-                "error": str(exc),
-                "stdout": stdout.getvalue(),
-                "stderr": stderr.getvalue(),
-            },
-            status=400,
-        )
-    except Exception as exc:
-        return JsonResponse(
-            {
-                "ok": False,
-                "error": str(exc),
-                "stdout": stdout.getvalue(),
-                "stderr": stderr.getvalue(),
-            },
-            status=500,
-        )
+        os.kill(int(pid), 0)
+    except (OSError, ValueError):
+        return False
+    return True
 
+
+def _forbidden_if_update_token_invalid(request):
+    expected_token = getattr(settings, "UPDATE_TOKEN", "")
+    provided_token = request.headers.get("X-Update-Token", "")
+    if not expected_token or not compare_digest(provided_token, expected_token):
+        return HttpResponseForbidden("Forbidden")
+    return None
+
+
+@require_GET
+def update_status(request):
+    forbidden = _forbidden_if_update_token_invalid(request)
+    if forbidden:
+        return forbidden
+
+    current_status = _read_update_status()
     return JsonResponse(
         {
             "ok": True,
-            "stdout": stdout.getvalue(),
-            "stderr": stderr.getvalue(),
+            "update": current_status,
+            "running": current_status.get("status") == "running" and _pid_is_running(current_status.get("pid")),
         }
+    )
+
+
+@csrf_exempt
+@require_POST
+def run_update(request):
+    forbidden = _forbidden_if_update_token_invalid(request)
+    if forbidden:
+        return forbidden
+
+    current_status = _read_update_status()
+    if current_status.get("status") == "running" and _pid_is_running(current_status.get("pid")):
+        return JsonResponse(
+            {
+                "ok": False,
+                "error": "Update already running",
+                "update": current_status,
+            },
+            status=409,
+        )
+
+    log_path = BASE_DIR / "logs" / "update_http.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_update_status({"status": "starting", "log": str(log_path)})
+    try:
+        log_file = log_path.open("ab")
+        env = os.environ.copy()
+        env.update(
+            {
+                "OMP_NUM_THREADS": "1",
+                "OPENBLAS_NUM_THREADS": "1",
+                "MKL_NUM_THREADS": "1",
+                "NUMEXPR_NUM_THREADS": "1",
+            }
+        )
+        process = subprocess.Popen(
+            _update_command_args(request),
+            cwd=BASE_DIR,
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        log_file.close()
+    except Exception as exc:
+        _write_update_status({"status": "failed_to_start", "error": str(exc), "log": str(log_path)})
+        return JsonResponse({"ok": False, "error": str(exc)}, status=500)
+
+    _write_update_status({"status": "running", "pid": process.pid, "log": str(log_path)})
+    return JsonResponse(
+        {
+            "ok": True,
+            "status": "started",
+            "pid": process.pid,
+            "log": str(log_path),
+            "status_file": str(UPDATE_STATUS_PATH),
+        },
+        status=202,
     )
 
 
@@ -105,6 +188,10 @@ class StatsView(TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        cached_context = cache.get("stats_view_context")
+        if cached_context is not None:
+            context.update(cached_context)
+            return context
 
         agile_actuals_end = pd.Timestamp(PriceHistory.objects.all().order_by("-date_time")[0].date_time)
         agile_actuals_start = agile_actuals_end - pd.Timedelta("7D")
@@ -137,17 +224,16 @@ class StatsView(TemplateView):
             if forecast_created_at.hour >= 16:
                 forecast_after += pd.Timedelta("24h")
 
-            agile_pred_objects = agile_forecast_data.filter(forecast=forecast[0])
-            index = [
-                obj.date_time
-                for obj in agile_pred_objects
-                if forecast_after < obj.date_time < forecast_after + pd.Timedelta("7D")
-            ]
-            data = [
-                obj.agile_pred
-                for obj in agile_pred_objects
-                if forecast_after < obj.date_time < forecast_after + pd.Timedelta("7D")
-            ]
+            forecast_until = forecast_after + pd.Timedelta("7D")
+            agile_pred_rows = list(
+                agile_forecast_data.filter(
+                    forecast=forecast[0],
+                    date_time__gt=forecast_after,
+                    date_time__lt=forecast_until,
+                ).values_list("date_time", "agile_pred")
+            )
+            index = [row[0] for row in agile_pred_rows]
+            data = [row[1] for row in agile_pred_rows]
             if len(data) > 0:
                 df.loc[index, forecast_created_at] = data
                 figure.add_trace(
@@ -242,6 +328,14 @@ class StatsView(TemplateView):
         ]
 
         context["plot_files"] = plot_files
+        cache.set(
+            "stats_view_context",
+            {
+                "stats": context["stats"],
+                "plot_files": context["plot_files"],
+            },
+            timeout=60 * 15,
+        )
 
         return context
 

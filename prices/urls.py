@@ -1,8 +1,9 @@
 from django.urls import path
-from .views import GraphFormView, ApiHowToView, GlossaryView, AboutView, StatsView, ColorView, run_update
+from .views import GraphFormView, ApiHowToView, GlossaryView, AboutView, StatsView, ColorView, run_update, update_status
 
 urlpatterns = [
     path("update", run_update, name="run_update"),
+    path("update/status", update_status, name="update_status"),
     path("color", ColorView.as_view(), name="color"),
     path("stats", StatsView.as_view(), name="api_how_to"),
     path("api_how_to", ApiHowToView.as_view(), name="api_how_to"),
