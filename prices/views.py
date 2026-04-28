@@ -1,8 +1,14 @@
+from io import StringIO
 from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.core.cache import cache
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
 
 # Create your views here.
 from django.views.generic import FormView, TemplateView
@@ -16,6 +22,62 @@ from .models import AgileData, ForecastData, Forecasts, History, PriceHistory
 
 regions = GLOBAL_SETTINGS["REGIONS"]
 PRIOR_DAYS = 2
+
+
+def _truthy(value):
+    return str(value).lower() in {"1", "true", "yes", "on"}
+
+
+@csrf_exempt
+@require_POST
+def run_update(request):
+    stdout = StringIO()
+    stderr = StringIO()
+    options = {}
+
+    for key in ["debug", "no_day_of_week", "no_ranges"]:
+        if key in request.POST or key in request.GET:
+            options[key] = _truthy(request.POST.get(key, request.GET.get(key)))
+
+    for key in ["min_fd", "min_ad", "max_days", "train_frac", "drop_last"]:
+        value = request.POST.get(key, request.GET.get(key))
+        if value not in {None, ""}:
+            options[key] = value
+
+    ignore_forecast = request.POST.getlist("ignore_forecast") or request.GET.getlist("ignore_forecast")
+    if ignore_forecast:
+        options["ignore_forecast"] = ignore_forecast
+
+    try:
+        call_command("update", stdout=stdout, stderr=stderr, **options)
+    except CommandError as exc:
+        return JsonResponse(
+            {
+                "ok": False,
+                "error": str(exc),
+                "stdout": stdout.getvalue(),
+                "stderr": stderr.getvalue(),
+            },
+            status=400,
+        )
+    except Exception as exc:
+        return JsonResponse(
+            {
+                "ok": False,
+                "error": str(exc),
+                "stdout": stdout.getvalue(),
+                "stderr": stderr.getvalue(),
+            },
+            status=500,
+        )
+
+    return JsonResponse(
+        {
+            "ok": True,
+            "stdout": stdout.getvalue(),
+            "stderr": stderr.getvalue(),
+        }
+    )
 
 
 class GlossaryView(TemplateView):
