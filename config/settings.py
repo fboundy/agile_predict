@@ -34,6 +34,7 @@ SECRET_KEY = env("SECRET_KEY")
 DEBUG = env.bool("DEBUG", default=False)
 
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["agilepredict.com", ".agilepredict.com", ".fly.dev"])
+UPDATE_TOKEN = env("UPDATE_TOKEN", default="")
 
 
 LOG_DIR = os.path.join(BASE_DIR, "logs")
@@ -161,9 +162,9 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 # https://docs.djangoproject.com/en/4.2/topics/i18n/
 
-LANGUAGE_CODE = "en-us"
+LANGUAGE_CODE = "en-gb"
 
-TIME_ZONE = "GB"
+TIME_ZONE = "Europe/London"
 
 USE_I18N = True
 
@@ -234,6 +235,10 @@ GLOBAL_SETTINGS = {
     },
     "UPDATE_TIME": "09:00",
     "AGILE_RELEASE_TIME": "16:00",
+    "SHIFTS": {
+        "2020-01-01 00:00:00": 0.0,
+        "2026-04-01 00:00:00": -3.5,
+    },
     "REGIONS": {
         "X": {
             "name": "National Average",

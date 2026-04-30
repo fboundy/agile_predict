@@ -530,19 +530,24 @@ def day_ahead_to_agile(df, reverse=False, region="G"):
     x = pd.DataFrame(df).set_axis(["In"], axis=1)
     x["Out"] = x["In"]
     x["Peak"] = (x.index.hour >= 16) & (x.index.hour < 19)
+
+    shifts = pd.Series(GLOBAL_SETTINGS["SHIFTS"])
+    shifts.index = pd.to_datetime(shifts.index).tz_localize("GB")
+
+    shifts = pd.concat([shifts, pd.Series(index=[x.index[-1]], data=[shifts.iloc[-1]])]).sort_index()
+
+    shifts = shifts.resample("30min").ffill().reindex(x.index).ffill().bfill()
+
     if reverse:
         x.loc[x["Peak"], "Out"] -= regions[region]["factors"][1]
+        x.loc[x["Peak"], "Out"] -= shifts
         x["Out"] /= regions[region]["factors"][0]
     else:
-        # print(region)
         x["Out"] *= regions[region]["factors"][0]
         x.loc[x["Peak"], "Out"] += regions[region]["factors"][1]
+        x.loc[x["Peak"], "Out"] += shifts
 
-    if reverse:
-        name = "day_ahead"
-    else:
-        name = "agile"
-
+    name = "day_ahead" if reverse else "agile"
     return x["Out"].rename(name)
 
 
