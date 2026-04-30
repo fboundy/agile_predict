@@ -29,17 +29,41 @@ jobs:
         shell: bash
         run: |
           hhmm="$(TZ=Europe/London date +'%H%M')"
+          hour="${hhmm:0:2}"
+          minute="${hhmm:2:2}"
+          full_update_due="false"
+          latest_agile_due="false"
+
+          case "${hhmm}" in
+            061[5-9]|062[0-4]|111[5-9]|112[0-4]|161[5-9]|162[0-4]|221[5-9]|222[0-4])
+              full_update_due="true"
+              ;;
+          esac
+
+          if [[ "${hour}" =~ ^(16|17|18|19|20|21|22)$ ]] && [[ "${minute}" =~ ^0[0-9]$ ]]; then
+            latest_agile_due="true"
+          fi
+
           echo "hhmm=${hhmm}" >> "${GITHUB_OUTPUT}"
+          echo "full_update_due=${full_update_due}" >> "${GITHUB_OUTPUT}"
+          echo "latest_agile_due=${latest_agile_due}" >> "${GITHUB_OUTPUT}"
           echo "UK local time: ${hhmm}"
+          echo "Full update due: ${full_update_due}"
+          echo "Latest Agile due: ${latest_agile_due}"
 
       - name: Queue full update
         if: >-
           github.event.inputs.job == 'full_update' ||
-          contains(fromJSON('["0615","1115","1615","2215"]'), steps.uk_time.outputs.hhmm)
+          steps.uk_time.outputs.full_update_due == 'true'
         shell: bash
         run: |
+          url="https://agilepredict.com/update?debug=true"
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then
+            url="${url}&scheduled=true"
+          fi
+
           curl --fail --show-error --silent -X POST \
-            "https://agilepredict.com/update?debug=true" \
+            "${url}" \
             -H "X-Update-Token: ${UPDATE_TOKEN}"
         env:
           UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
@@ -47,11 +71,16 @@ jobs:
       - name: Queue latest Agile
         if: >-
           github.event.inputs.job == 'latest_agile' ||
-          contains(fromJSON('["1600","1700","1800","1900","2000","2100","2200"]'), steps.uk_time.outputs.hhmm)
+          steps.uk_time.outputs.latest_agile_due == 'true'
         shell: bash
         run: |
+          url="https://agilepredict.com/update/latest_agile"
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then
+            url="${url}?scheduled=true"
+          fi
+
           curl --fail --show-error --silent -X POST \
-            "https://agilepredict.com/update/latest_agile" \
+            "${url}" \
             -H "X-Update-Token: ${UPDATE_TOKEN}"
         env:
           UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
