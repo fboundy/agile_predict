@@ -4,6 +4,7 @@ import traceback
 
 from django.core.management import call_command
 from django.core.management.base import BaseCommand
+from django.db import close_old_connections
 from django.utils import timezone
 
 from config.settings import BASE_DIR
@@ -66,8 +67,10 @@ class Command(BaseCommand):
         )
 
         try:
+            close_old_connections()
             call_command("update", **update_options)
         except Exception as exc:
+            close_old_connections()
             write_status(
                 {
                     "status": "failed",
@@ -81,6 +84,7 @@ class Command(BaseCommand):
             )
             raise
 
+        close_old_connections()
         write_status(
             {
                 "status": "completed",

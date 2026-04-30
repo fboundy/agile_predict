@@ -15,6 +15,7 @@ import matplotlib.cm as cm
 import seaborn as sns
 
 from django.core.cache import cache  # Or store in the database if needed
+from django.db import close_old_connections
 
 import numpy as np
 import os
@@ -49,6 +50,11 @@ console_handler.setFormatter(formatter)
 if not logger.handlers:
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
+
+
+def refresh_db_connection(label):
+    logger.info(f"Refreshing database connection: {label}")
+    close_old_connections()
 
 
 def lighten_cmap(cmap_name="viridis", amount=0.5):
@@ -207,6 +213,7 @@ class Command(BaseCommand):
 
         if len(new_prices) > 0:
             logger.info(new_prices)
+            refresh_db_connection("before writing new price history")
             df_to_Model(new_prices, PriceHistory)
             prices = pd.concat([prices, new_prices]).sort_index()
 
@@ -247,6 +254,7 @@ class Command(BaseCommand):
                 logger.info("Getting latest Forecast")
 
             fc, missing_fc = get_latest_forecast()
+            refresh_db_connection("after fetching latest forecast")
 
             if len(missing_fc) > 0:
                 logger.error(f">>> ERROR: Unable to run forecast due to missing columns: {', '.join(missing_fc)}")
@@ -255,6 +263,7 @@ class Command(BaseCommand):
                     logger.info(fc)
 
                 if len(fc) > 0:
+                    refresh_db_connection("before loading training data")
                     fd = pd.DataFrame(list(ForecastData.objects.exclude(forecast_id__in=ignore_forecast).values()))
                     ff = pd.DataFrame(list(Forecasts.objects.exclude(id__in=ignore_forecast).values()))
 
@@ -342,6 +351,7 @@ class Command(BaseCommand):
                         )
 
                         logger.info(f"Cross-val score: {scores}")
+                        refresh_db_connection("after cross-validation")
 
                         logger.info(
                             "Fitting final XGBoost model "
@@ -349,6 +359,7 @@ class Command(BaseCommand):
                         )
                         xg_model.fit(train_X, train_y, sample_weight=sample_weights, verbose=True)
                         logger.info("Finished fitting final XGBoost model")
+                        refresh_db_connection("after fitting final XGBoost model")
 
                         # Drop the training data set
                         logger.info("Preparing holdout/test dataset")
@@ -737,6 +748,7 @@ class Command(BaseCommand):
                         logger.info(f"Final forecast from {fc.index[0]} to {fc.index[-1]}")
                         logger.info(f"Forecast\n{fc}")
 
+                    refresh_db_connection("before saving forecast rows")
                     this_forecast = Forecasts(name=new_name, mean=-np.mean(scores), stdev=np.std(scores))
                     logger.info(f"Saving forecast record: {new_name}")
                     this_forecast.save()
