@@ -1,9 +1,22 @@
 from django.urls import path
-from .views import GraphFormView, ApiHowToView, GlossaryView, AboutView, StatsView, ColorView, run_update, update_status
+from .views import (
+    AboutView,
+    ApiHowToView,
+    ColorView,
+    GlossaryView,
+    GraphFormView,
+    StatsView,
+    run_latest_agile,
+    run_update,
+    stats_plot,
+    update_status,
+)
 
 urlpatterns = [
     path("update", run_update, name="run_update"),
+    path("update/latest_agile", run_latest_agile, name="run_latest_agile"),
     path("update/status", update_status, name="update_status"),
+    path("stats/plot/<path:filename>", stats_plot, name="stats_plot"),
     path("color", ColorView.as_view(), name="color"),
     path("stats", StatsView.as_view(), name="api_how_to"),
     path("api_how_to", ApiHowToView.as_view(), name="api_how_to"),

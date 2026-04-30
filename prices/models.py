@@ -3,6 +3,14 @@ from django.urls import reverse
 
 
 class UpdateJob(models.Model):
+    JOB_UPDATE = "update"
+    JOB_LATEST_AGILE = "latest_agile"
+
+    JOB_TYPE_CHOICES = [
+        (JOB_UPDATE, "Full update"),
+        (JOB_LATEST_AGILE, "Latest Agile prices"),
+    ]
+
     STATUS_PENDING = "pending"
     STATUS_RUNNING = "running"
     STATUS_COMPLETED = "completed"
@@ -15,6 +23,7 @@ class UpdateJob(models.Model):
         (STATUS_FAILED, "Failed"),
     ]
 
+    job_type = models.CharField(max_length=32, choices=JOB_TYPE_CHOICES, default=JOB_UPDATE)
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_PENDING)
     options = models.JSONField(default=dict, blank=True)
     error = models.TextField(blank=True)
@@ -27,7 +36,20 @@ class UpdateJob(models.Model):
         ordering = ["-requested_at"]
 
     def __str__(self):
-        return f"{self.id}: {self.status}"
+        return f"{self.id}: {self.job_type} {self.status}"
+
+
+class PlotImage(models.Model):
+    filename = models.CharField(max_length=255, unique=True)
+    content_type = models.CharField(max_length=64, default="image/png")
+    content = models.BinaryField()
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["filename"]
+
+    def __str__(self):
+        return self.filename
 
 
 class Forecasts(models.Model):

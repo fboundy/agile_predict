@@ -20,9 +20,10 @@ from django.db import close_old_connections
 import numpy as np
 import os
 import logging
+import time
 
 from django.core.management.base import BaseCommand
-from ...models import History, PriceHistory, Forecasts, ForecastData, AgileData
+from ...models import AgileData, ForecastData, Forecasts, History, PlotImage, PriceHistory
 
 from config.utils import *
 from config.settings import GLOBAL_SETTINGS
@@ -37,8 +38,9 @@ log_dir = os.path.join(os.getcwd(), "logs")
 os.makedirs(log_dir, exist_ok=True)
 log_file = os.environ.get("UPDATE_LOG_FILE", os.path.join(log_dir, "update.log"))
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("prices.update")
 logger.setLevel(logging.INFO)
+logger.propagate = False
 
 formatter = logging.Formatter("%(asctime)s %(levelname)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 
@@ -61,6 +63,35 @@ def configure_update_logger():
 configure_update_logger()
 
 
+def published_plot_name(plot_path):
+    try:
+        return Path(plot_path).relative_to(Path("plots")).as_posix()
+    except ValueError:
+        return Path(plot_path).as_posix()
+
+
+def clear_published_plots(prefix):
+    close_old_connections()
+    deleted_count, _ = PlotImage.objects.filter(filename__startswith=prefix).delete()
+    cache.delete("stats_view_context")
+    logger.info("Cleared %s published plot(s) with prefix %s", deleted_count, prefix)
+
+
+def publish_plot(plot_path):
+    close_old_connections()
+    plot_path = Path(plot_path)
+    filename = published_plot_name(plot_path)
+    PlotImage.objects.update_or_create(
+        filename=filename,
+        defaults={
+            "content": plot_path.read_bytes(),
+            "content_type": "image/png",
+        },
+    )
+    cache.delete("stats_view_context")
+    logger.info("Published plot image %s", filename)
+
+
 def refresh_db_connection(label):
     logger.info(f"Refreshing database connection: {label}")
     close_old_connections()
@@ -78,17 +109,45 @@ def lighten_cmap(cmap_name="viridis", amount=0.5):
     )
 
 
-def kde_quantiles(kde, dt, pred, quantiles={"low": 0.1, "mid": 0.5, "high": 0.9}, lim=(0, 150)):
+def kde_quantiles(kde, dt, pred, quantiles={"low": 0.1, "mid": 0.5, "high": 0.9}, lim=(0, 150), log_every=25):
     if not isinstance(dt, list):
         dt = [dt]
     if not isinstance(pred, list):
         pred = [pred]
 
     results = {q: [] for q in quantiles}
-    for dt1, pred1 in zip(dt, pred):
+    total = len(dt)
+    started = time.monotonic()
+    price_points = len(range(int(lim[0]), int(lim[1])))
+    logger.info(
+        "Starting KDE quantiles rows=%s price_points_per_row=%s quantiles=%s lim=%s",
+        total,
+        price_points,
+        list(quantiles.keys()),
+        lim,
+    )
+    for row_number, (dt1, pred1) in enumerate(zip(dt, pred), start=1):
+        if row_number == 1 or row_number % log_every == 0 or row_number == total:
+            logger.info(
+                "KDE quantiles progress row=%s/%s elapsed_seconds=%.2f",
+                row_number,
+                total,
+                time.monotonic() - started,
+            )
+
+        row_started = time.monotonic()
         x = np.array([[dt1, pred1, p] for p in range(int(lim[0]), int(lim[1]))])
         c = pd.Series(index=x[:, 2], data=np.exp(kde.score_samples(x)).cumsum())
         c /= c.iloc[-1]
+        if time.monotonic() - row_started > 5:
+            logger.info(
+                "Slow KDE quantile row row=%s/%s dt=%.4f pred=%.4f duration_seconds=%.2f",
+                row_number,
+                total,
+                dt1,
+                pred1,
+                time.monotonic() - row_started,
+            )
 
         for q in quantiles:
             if len(c[c < quantiles[q]]) > 0:
@@ -96,6 +155,7 @@ def kde_quantiles(kde, dt, pred, quantiles={"low": 0.1, "mid": 0.5, "high": 0.9}
                 results[q] += [(quantiles[q] - c[idx]) / (c[idx + 1] - c[idx]) + idx]
             else:
                 results[q] += [np.nan]
+    logger.info("Finished KDE quantiles rows=%s elapsed_seconds=%.2f", total, time.monotonic() - started)
     return results
 
 
@@ -426,12 +486,14 @@ class Command(BaseCommand):
                             plot_path = os.path.join(PLOT_DIR, f"{name}.png")
                             fig.savefig(plot_path, bbox_inches="tight")
                             plt.close(fig)
+                            publish_plot(plot_path)
 
                         PLOT_DIR = Path(os.path.join("plots", "trends"))
                         logger.info(f"Writing trend plot to {PLOT_DIR}")
                         PLOT_DIR.mkdir(parents=True, exist_ok=True)
                         for f in PLOT_DIR.glob("*.png"):
                             f.unlink()
+                        clear_published_plots("trends/")
 
                         fig, ax = plt.subplots(figsize=(16, 6))
                         ff = pd.concat(
@@ -475,6 +537,7 @@ class Command(BaseCommand):
                         # Clean old files (optional)
                         for f in PLOT_DIR.glob("*.png"):
                             f.unlink()
+                        clear_published_plots("stats_plots/")
 
                         # 1. Prediction vs Actual over Time
                         fig, ax = plt.subplots(figsize=(16, 6))
@@ -609,14 +672,27 @@ class Command(BaseCommand):
                         logger.info("Finished latest forecast prediction")
 
                         if (len(test_X) > 10) and (not no_ranges):
-                            logger.info("Fitting KDE for forecast range estimates")
+                            kde_fit_data = results[["dt", "pred", "day_ahead"]].to_numpy()
+                            logger.info(
+                                "Fitting KDE for forecast range estimates rows=%s cols=%s",
+                                kde_fit_data.shape[0],
+                                kde_fit_data.shape[1],
+                            )
+                            kde_started = time.monotonic()
                             kde = KernelDensity()
-                            kde.fit(results[["dt", "pred", "day_ahead"]].to_numpy())
+                            kde.fit(kde_fit_data)
+                            logger.info("Finished KDE fit elapsed_seconds=%.2f", time.monotonic() - kde_started)
 
                             xlim = (
                                 np.floor(results[["pred", "day_ahead"]].min(axis=1).min() / 11) * 10,
                                 np.ceil(results[["pred", "day_ahead"]].max(axis=1).max() / 9) * 10,
                             )
+                            logger.info(
+                                "Calculating KDE forecast range quantiles forecast_rows=%s xlim=%s",
+                                len(fc),
+                                xlim,
+                            )
+                            quantile_started = time.monotonic()
 
                             fc = pd.concat(
                                 [
@@ -634,7 +710,10 @@ class Command(BaseCommand):
                                 ],
                                 axis=1,
                             )
-                            logger.info("Finished KDE forecast range estimates")
+                            logger.info(
+                                "Finished KDE forecast range estimates elapsed_seconds=%.2f",
+                                time.monotonic() - quantile_started,
+                            )
 
                             for case in ["low", "high"]:
                                 fc[f"day_ahead_{case}"] = (

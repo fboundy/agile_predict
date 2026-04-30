@@ -24,8 +24,12 @@ class PriceForecastSerializer(serializers.ModelSerializer):
 # These are the serializers for the filtered view
 class FilteredListSerializer(serializers.ListSerializer):
     def to_representation(self, data):
-        data = data.filter(region=self.context["region"])
-        max_date = min([d.date_time for d in data.all()]) + pd.Timedelta(days=self.context["days"])
+        data = data.filter(region=self.context["region"]).order_by("date_time")
+        first_price = data.first()
+        if first_price is None:
+            return []
+
+        max_date = first_price.date_time + pd.Timedelta(days=self.context["days"])
         data = data.filter(date_time__lte=max_date)
         return super(FilteredListSerializer, self).to_representation(data)
 

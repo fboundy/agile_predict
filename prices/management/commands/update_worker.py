@@ -14,7 +14,12 @@ from config.settings import BASE_DIR
 from prices.models import UpdateJob
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("prices.worker")
+
+COMMAND_BY_JOB_TYPE = {
+    UpdateJob.JOB_UPDATE: "update",
+    UpdateJob.JOB_LATEST_AGILE: "latest_agile",
+}
 
 
 class Command(BaseCommand):
@@ -63,7 +68,7 @@ class Command(BaseCommand):
             error="Worker restarted before this job completed.",
         )
         if count:
-            logger.warning("Marked %s interrupted update job(s) as failed", count)
+            logger.warning("Marked %s interrupted worker job(s) as failed", count)
 
     def claim_job(self):
         with transaction.atomic():
@@ -83,8 +88,22 @@ class Command(BaseCommand):
             return job
 
     def run_job(self, job):
-        logger.info("Running update job %s with options %s", job.id, job.options)
-        log_path = BASE_DIR / "logs" / "update_jobs" / f"update_job_{job.id}.log"
+        command_name = COMMAND_BY_JOB_TYPE.get(job.job_type)
+        if command_name is None:
+            message = f"Unknown worker job type: {job.job_type}"
+            self.mark_job_failed(job, message)
+            logger.error("Worker job %s failed: %s", job.id, message)
+            return
+
+        command_options = job.options if job.job_type == UpdateJob.JOB_UPDATE else {}
+        logger.info(
+            "Running worker job id=%s type=%s command=%s options=%s",
+            job.id,
+            job.job_type,
+            command_name,
+            command_options,
+        )
+        log_path = BASE_DIR / "logs" / "update_jobs" / f"{job.job_type}_job_{job.id}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         self.set_job_log_file(job, log_path)
 
@@ -97,12 +116,12 @@ class Command(BaseCommand):
             close_old_connections()
             with log_path.open("a") as log_file:
                 with redirect_stdout(log_file), redirect_stderr(log_file):
-                    call_command("update", **job.options)
+                    call_command(command_name, **command_options)
         except Exception as exc:
             close_old_connections()
             self.append_to_job_log(log_path, traceback.format_exc())
             self.mark_job_failed(job, f"{exc}\n\n{traceback.format_exc()}")
-            logger.exception("Update job %s failed", job.id)
+            logger.exception("Worker job id=%s type=%s failed", job.id, job.job_type)
             return
         finally:
             if old_update_log_file is None:
@@ -117,7 +136,7 @@ class Command(BaseCommand):
 
         close_old_connections()
         self.mark_job_completed(job)
-        logger.info("Update job %s completed", job.id)
+        logger.info("Worker job id=%s type=%s completed", job.id, job.job_type)
 
     def set_job_log_file(self, job, log_path):
         while True:
@@ -127,7 +146,7 @@ class Command(BaseCommand):
                 return
             except DatabaseError:
                 close_old_connections()
-                logger.exception("Database unavailable while setting update job log file; retrying")
+                logger.exception("Database unavailable while setting worker job log file; retrying")
                 time.sleep(5)
 
     def append_to_job_log(self, log_path, content):
@@ -146,7 +165,7 @@ class Command(BaseCommand):
                 return
             except DatabaseError:
                 close_old_connections()
-                logger.exception("Database unavailable while marking update job failed; retrying")
+                logger.exception("Database unavailable while marking worker job failed; retrying")
                 time.sleep(5)
 
     def mark_job_completed(self, job):
@@ -158,5 +177,5 @@ class Command(BaseCommand):
                 return
             except DatabaseError:
                 close_old_connections()
-                logger.exception("Database unavailable while marking update job completed; retrying")
+                logger.exception("Database unavailable while marking worker job completed; retrying")
                 time.sleep(5)

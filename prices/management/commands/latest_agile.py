@@ -1,34 +1,36 @@
 from django.core.management.base import BaseCommand
+from django.db import close_old_connections
+
 from config.utils import *
 
 
 class Command(BaseCommand):
-    # def add_arguments(self, parser):
-    #     parser.add_argument("poll_ids", nargs="+", type=int)
+    help = "Fetch the latest Octopus Agile prices and store any new price rows."
 
     def handle(self, *args, **options):
-        print("Getting Historic Prices")
-        prices = pd.DataFrame(list(PriceHistory.objects.all().values()))
+        self.stdout.write("Getting historic Agile prices")
+        close_old_connections()
+        prices, start = model_to_df(PriceHistory)
+        self.stdout.write(f"Existing price rows: {len(prices)}")
+        self.stdout.write(f"Fetching Agile prices from: {start}")
 
-        start = pd.Timestamp("2023-07-01", tz="GB")
-        if len(prices) > 0:
-            prices.index = pd.to_datetime(prices["date_time"])
-            prices = prices.sort_index()
-            prices.index = prices.index.tz_convert("GB")
-            prices.drop(["id", "date_time"], axis=1, inplace=True)
-            start = prices.index[-1] + pd.Timedelta("30min")
-
+        close_old_connections()
         agile = get_agile(start=start)
+        self.stdout.write(f"Fetched Agile rows: {len(agile)}")
 
         day_ahead = day_ahead_to_agile(agile, reverse=True)
 
         new_prices = pd.concat([day_ahead, agile], axis=1)
         if len(prices) > 0:
             new_prices = new_prices[new_prices.index > prices.index[-1]]
-        print(new_prices)
-        if len(new_prices) > 0:
-            print(new_prices)
-            try:
-                df_to_Model(new_prices, PriceHistory)
-            except:
-                pass
+
+        self.stdout.write(f"New price rows to write: {len(new_prices)}")
+        if len(new_prices) == 0:
+            self.stdout.write("No new Agile prices to write")
+            return
+
+        self.stdout.write(f"Writing Agile prices from {new_prices.index[0]} to {new_prices.index[-1]}")
+        close_old_connections()
+        df_to_Model(new_prices, PriceHistory)
+        close_old_connections()
+        self.stdout.write("Finished latest Agile price update")

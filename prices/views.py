@@ -1,9 +1,15 @@
 from hmac import compare_digest
+import logging
+from pathlib import Path
+import time
 
 import pandas as pd
 import plotly.graph_objects as go
 from django.conf import settings
-from django.http import HttpResponseForbidden, JsonResponse
+from django.core.cache import cache
+from django.http import HttpResponse, HttpResponseForbidden, JsonResponse
+from django.shortcuts import get_object_or_404
+from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
@@ -11,14 +17,15 @@ from django.views.decorators.http import require_GET, require_POST
 from django.views.generic import FormView, TemplateView
 from plotly.subplots import make_subplots
 
-from config.settings import GLOBAL_SETTINGS, BASE_DIR
+from config.settings import GLOBAL_SETTINGS
 from config.utils import day_ahead_to_agile
 
 from .forms import ForecastForm
-from .models import AgileData, ForecastData, Forecasts, History, PriceHistory, UpdateJob
+from .models import AgileData, ForecastData, Forecasts, History, PlotImage, PriceHistory, UpdateJob
 
 regions = GLOBAL_SETTINGS["REGIONS"]
 PRIOR_DAYS = 2
+logger = logging.getLogger("prices.web")
 
 
 def _truthy(value):
@@ -53,6 +60,7 @@ def _job_payload(job):
         return None
     return {
         "id": job.id,
+        "job_type": job.job_type,
         "status": job.status,
         "options": job.options,
         "error": job.error,
@@ -71,6 +79,21 @@ def _forbidden_if_update_token_invalid(request):
     return None
 
 
+def _active_job():
+    return UpdateJob.objects.filter(status__in=[UpdateJob.STATUS_PENDING, UpdateJob.STATUS_RUNNING]).first()
+
+
+def _job_already_active_response(active_job):
+    return JsonResponse(
+        {
+            "ok": False,
+            "error": "Worker job already queued or running",
+            "update": _job_payload(active_job),
+        },
+        status=409,
+    )
+
+
 @require_GET
 def update_status(request):
     forbidden = _forbidden_if_update_token_invalid(request)
@@ -87,6 +110,12 @@ def update_status(request):
     )
 
 
+@require_GET
+def stats_plot(request, filename):
+    plot = get_object_or_404(PlotImage, filename=filename)
+    return HttpResponse(bytes(plot.content), content_type=plot.content_type)
+
+
 @csrf_exempt
 @require_POST
 def run_update(request):
@@ -94,18 +123,35 @@ def run_update(request):
     if forbidden:
         return forbidden
 
-    active_job = UpdateJob.objects.filter(status__in=[UpdateJob.STATUS_PENDING, UpdateJob.STATUS_RUNNING]).first()
+    active_job = _active_job()
     if active_job is not None:
-        return JsonResponse(
-            {
-                "ok": False,
-                "error": "Update already queued or running",
-                "update": _job_payload(active_job),
-            },
-            status=409,
-        )
+        return _job_already_active_response(active_job)
 
-    job = UpdateJob.objects.create(options=_update_options(request))
+    job = UpdateJob.objects.create(job_type=UpdateJob.JOB_UPDATE, options=_update_options(request))
+    logger.info("Queued update job id=%s options=%s", job.id, job.options)
+    return JsonResponse(
+        {
+            "ok": True,
+            "status": "queued",
+            "update": _job_payload(job),
+        },
+        status=202,
+    )
+
+
+@csrf_exempt
+@require_POST
+def run_latest_agile(request):
+    forbidden = _forbidden_if_update_token_invalid(request)
+    if forbidden:
+        return forbidden
+
+    active_job = _active_job()
+    if active_job is not None:
+        return _job_already_active_response(active_job)
+
+    job = UpdateJob.objects.create(job_type=UpdateJob.JOB_LATEST_AGILE, options={})
+    logger.info("Queued latest_agile job id=%s", job.id)
     return JsonResponse(
         {
             "ok": True,
@@ -140,12 +186,15 @@ class StatsView(TemplateView):
     template_name = "stats.html"
 
     def get_context_data(self, **kwargs):
+        started = time.monotonic()
         context = super().get_context_data(**kwargs)
         cached_context = cache.get("stats_view_context")
         if cached_context is not None:
             context.update(cached_context)
+            logger.debug("Stats context served from cache")
             return context
 
+        logger.info("Building stats context")
         agile_actuals_end = pd.Timestamp(PriceHistory.objects.all().order_by("-date_time")[0].date_time)
         agile_actuals_start = agile_actuals_end - pd.Timedelta("7D")
 
@@ -238,10 +287,6 @@ class StatsView(TemplateView):
         context["stats"] = figure.to_html(full_html=False, include_plotlyjs="cdn")
 
         # --- SECTION 2: Static Diagnostic PNG Plots ---
-        plot_dir = BASE_DIR / "plots" / "stats_plots"
-
-        # context["plot_files"] = [f"stats_plots/{f.name}" for f in plot_dir.glob("*.png") if f.is_file()]
-
         descriptions = {
             "1_actual_vs_predicted_over_time.png": (
                 "This plot shows the full training dataset used for the last forecast. Actual data are plotted as the black line."
@@ -269,15 +314,20 @@ class StatsView(TemplateView):
             ),
         }
 
-        plot_dir = BASE_DIR / "plots" / "stats_plots"
+        trend_plot = PlotImage.objects.filter(filename="trends/trend.png").first()
+        context["trend_plot_url"] = (
+            reverse("stats_plot", kwargs={"filename": trend_plot.filename}) if trend_plot is not None else None
+        )
+
         plot_files = [
             {
-                "filename": f"stats_plots/{f.name}",
-                "description": descriptions.get(f.name, ("", ""))[0],
-                "title": descriptions.get(f.name, ("", ""))[1] or f.name.replace("_", " ").title().replace(".Png", ""),
+                "filename": plot.filename,
+                "url": reverse("stats_plot", kwargs={"filename": plot.filename}),
+                "description": descriptions.get(Path(plot.filename).name, ("", ""))[0],
+                "title": descriptions.get(Path(plot.filename).name, ("", ""))[1]
+                or Path(plot.filename).name.replace("_", " ").title().replace(".Png", ""),
             }
-            for f in plot_dir.glob("*.png")
-            if f.is_file()
+            for plot in PlotImage.objects.filter(filename__startswith="stats_plots/").order_by("filename")
         ]
 
         context["plot_files"] = plot_files
@@ -285,10 +335,12 @@ class StatsView(TemplateView):
             "stats_view_context",
             {
                 "stats": context["stats"],
+                "trend_plot_url": context["trend_plot_url"],
                 "plot_files": context["plot_files"],
             },
             timeout=60 * 15,
         )
+        logger.info("Built stats context duration_seconds=%.2f plot_count=%s", time.monotonic() - started, len(plot_files))
 
         return context
 
@@ -427,9 +479,13 @@ class GraphFormView(FormView):
             legend = dict(orientation="h", yanchor="top", y=-0.075, xanchor="right", x=1)
 
             f = Forecasts.objects.filter(id__in=forecasts_to_plot).order_by("-created_at")[0]
-            print(forecast_end)
             d = ForecastData.objects.filter(forecast=f, date_time__lte=forecast_end).order_by("date_time")
-            print([a.date_time for a in d][-1])
+            logger.debug(
+                "Graph generation/demand data forecast_id=%s forecast_end=%s rows=%s",
+                f.id,
+                forecast_end,
+                d.count(),
+            )
             figure.add_trace(
                 go.Scatter(
                     x=[a.date_time for a in d],
