@@ -2,6 +2,34 @@ from django.db import models
 from django.urls import reverse
 
 
+class UpdateJob(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_RUNNING = "running"
+    STATUS_COMPLETED = "completed"
+    STATUS_FAILED = "failed"
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_RUNNING, "Running"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    options = models.JSONField(default=dict, blank=True)
+    error = models.TextField(blank=True)
+    log_file = models.CharField(max_length=255, blank=True)
+    requested_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-requested_at"]
+
+    def __str__(self):
+        return f"{self.id}: {self.status}"
+
+
 class Forecasts(models.Model):
     name = models.CharField(unique=True, max_length=64)
     created_at = models.DateTimeField(auto_now_add=True)

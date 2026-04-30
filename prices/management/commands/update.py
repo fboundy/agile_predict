@@ -35,21 +35,30 @@ MAX_TEST_X = 10000
 
 log_dir = os.path.join(os.getcwd(), "logs")
 os.makedirs(log_dir, exist_ok=True)
-log_file = os.path.join(log_dir, "update.log")
+log_file = os.environ.get("UPDATE_LOG_FILE", os.path.join(log_dir, "update.log"))
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-file_handler = logging.FileHandler(log_file)
-console_handler = logging.StreamHandler()
-
 formatter = logging.Formatter("%(asctime)s %(levelname)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-file_handler.setFormatter(formatter)
-console_handler.setFormatter(formatter)
 
-if not logger.handlers:
+
+def configure_update_logger():
+    logger.handlers.clear()
+    current_log_file = os.environ.get("UPDATE_LOG_FILE", log_file)
+    os.makedirs(os.path.dirname(current_log_file), exist_ok=True)
+
+    file_handler = logging.FileHandler(current_log_file)
+    file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
+
+    if os.environ.get("UPDATE_LOG_TO_CONSOLE", "1").lower() not in {"0", "false", "no", "off"}:
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+
+
+configure_update_logger()
 
 
 def refresh_db_connection(label):
@@ -142,6 +151,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        configure_update_logger()
         # Setup logging
 
         debug = options.get("debug", False)

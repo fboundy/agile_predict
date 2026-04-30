@@ -1,9 +1,4 @@
 from hmac import compare_digest
-import json
-import os
-from pathlib import Path
-import subprocess
-import sys
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -20,65 +15,52 @@ from config.settings import GLOBAL_SETTINGS, BASE_DIR
 from config.utils import day_ahead_to_agile
 
 from .forms import ForecastForm
-from .models import AgileData, ForecastData, Forecasts, History, PriceHistory
+from .models import AgileData, ForecastData, Forecasts, History, PriceHistory, UpdateJob
 
 regions = GLOBAL_SETTINGS["REGIONS"]
 PRIOR_DAYS = 2
-UPDATE_STATUS_PATH = BASE_DIR / "logs" / "update_status.json"
 
 
 def _truthy(value):
     return str(value).lower() in {"1", "true", "yes", "on"}
 
 
-def _update_command_args(request):
-    args = [sys.executable, str(BASE_DIR / "manage.py"), "run_update_job"]
+def _update_options(request):
+    options = {}
 
     for key in ["debug", "no_day_of_week", "no_ranges", "skip_kde_plot"]:
         if key in request.POST or key in request.GET:
-            if _truthy(request.POST.get(key, request.GET.get(key))):
-                args.append(f"--{key}")
+            options[key] = _truthy(request.POST.get(key, request.GET.get(key)))
 
+    # The HTTP-triggered update skips the expensive diagnostic KDE plot unless explicitly requested.
     if "skip_kde_plot" not in request.POST and "skip_kde_plot" not in request.GET:
-        args.append("--skip_kde_plot")
+        options["skip_kde_plot"] = True
 
     for key in ["min_fd", "min_ad", "max_days", "train_frac", "drop_last"]:
         value = request.POST.get(key, request.GET.get(key))
         if value not in {None, ""}:
-            args.extend([f"--{key}", str(value)])
+            options[key] = value
 
     ignore_forecast = request.POST.getlist("ignore_forecast") or request.GET.getlist("ignore_forecast")
-    for forecast_id in ignore_forecast:
-        args.extend(["--ignore_forecast", str(forecast_id)])
+    if ignore_forecast:
+        options["ignore_forecast"] = ignore_forecast
 
-    return args
-
-
-def _read_update_status():
-    try:
-        return json.loads(UPDATE_STATUS_PATH.read_text())
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    return options
 
 
-def _write_update_status(status):
-    UPDATE_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    UPDATE_STATUS_PATH.write_text(json.dumps(status, indent=2, sort_keys=True))
-
-
-def _pid_is_running(pid):
-    if not pid:
-        return False
-
-    proc_path = Path("/proc") / str(pid)
-    if proc_path.exists():
-        return True
-
-    try:
-        os.kill(int(pid), 0)
-    except (OSError, ValueError):
-        return False
-    return True
+def _job_payload(job):
+    if job is None:
+        return None
+    return {
+        "id": job.id,
+        "status": job.status,
+        "options": job.options,
+        "error": job.error,
+        "log_file": job.log_file,
+        "requested_at": job.requested_at.isoformat() if job.requested_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+    }
 
 
 def _forbidden_if_update_token_invalid(request):
@@ -95,12 +77,12 @@ def update_status(request):
     if forbidden:
         return forbidden
 
-    current_status = _read_update_status()
+    latest_job = UpdateJob.objects.order_by("-requested_at").first()
     return JsonResponse(
         {
             "ok": True,
-            "update": current_status,
-            "running": current_status.get("status") == "running" and _pid_is_running(current_status.get("pid")),
+            "update": _job_payload(latest_job),
+            "running": latest_job is not None and latest_job.status == UpdateJob.STATUS_RUNNING,
         }
     )
 
@@ -112,52 +94,23 @@ def run_update(request):
     if forbidden:
         return forbidden
 
-    current_status = _read_update_status()
-    if current_status.get("status") == "running" and _pid_is_running(current_status.get("pid")):
+    active_job = UpdateJob.objects.filter(status__in=[UpdateJob.STATUS_PENDING, UpdateJob.STATUS_RUNNING]).first()
+    if active_job is not None:
         return JsonResponse(
             {
                 "ok": False,
-                "error": "Update already running",
-                "update": current_status,
+                "error": "Update already queued or running",
+                "update": _job_payload(active_job),
             },
             status=409,
         )
 
-    log_path = BASE_DIR / "logs" / "update_http.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_update_status({"status": "starting", "log": str(log_path)})
-    try:
-        log_file = log_path.open("ab")
-        env = os.environ.copy()
-        env.update(
-            {
-                "OMP_NUM_THREADS": "1",
-                "OPENBLAS_NUM_THREADS": "1",
-                "MKL_NUM_THREADS": "1",
-                "NUMEXPR_NUM_THREADS": "1",
-            }
-        )
-        process = subprocess.Popen(
-            _update_command_args(request),
-            cwd=BASE_DIR,
-            env=env,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        log_file.close()
-    except Exception as exc:
-        _write_update_status({"status": "failed_to_start", "error": str(exc), "log": str(log_path)})
-        return JsonResponse({"ok": False, "error": str(exc)}, status=500)
-
-    _write_update_status({"status": "running", "pid": process.pid, "log": str(log_path)})
+    job = UpdateJob.objects.create(options=_update_options(request))
     return JsonResponse(
         {
             "ok": True,
-            "status": "started",
-            "pid": process.pid,
-            "log": str(log_path),
-            "status_file": str(UPDATE_STATUS_PATH),
+            "status": "queued",
+            "update": _job_payload(job),
         },
         status=202,
     )
