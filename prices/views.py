@@ -1,4 +1,5 @@
 from hmac import compare_digest
+from datetime import timedelta
 import logging
 from pathlib import Path
 import time
@@ -10,6 +11,7 @@ from django.core.cache import cache
 from django.http import HttpResponse, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
@@ -94,6 +96,36 @@ def _job_already_active_response(active_job):
     )
 
 
+def _scheduled_duplicate_response(request, job_type):
+    if not _truthy(request.POST.get("scheduled", request.GET.get("scheduled", ""))):
+        return None
+
+    since = timezone.now() - timedelta(minutes=20)
+    recent_job = (
+        UpdateJob.objects.filter(
+            job_type=job_type,
+            status__in=[
+                UpdateJob.STATUS_PENDING,
+                UpdateJob.STATUS_RUNNING,
+                UpdateJob.STATUS_COMPLETED,
+            ],
+            requested_at__gte=since,
+        )
+        .order_by("-requested_at")
+        .first()
+    )
+    if recent_job is None:
+        return None
+
+    return JsonResponse(
+        {
+            "ok": True,
+            "status": "already_queued_recently",
+            "update": _job_payload(recent_job),
+        }
+    )
+
+
 @require_GET
 def update_status(request):
     forbidden = _forbidden_if_update_token_invalid(request)
@@ -123,6 +155,10 @@ def run_update(request):
     if forbidden:
         return forbidden
 
+    duplicate = _scheduled_duplicate_response(request, UpdateJob.JOB_UPDATE)
+    if duplicate is not None:
+        return duplicate
+
     active_job = _active_job()
     if active_job is not None:
         return _job_already_active_response(active_job)
@@ -145,6 +181,10 @@ def run_latest_agile(request):
     forbidden = _forbidden_if_update_token_invalid(request)
     if forbidden:
         return forbidden
+
+    duplicate = _scheduled_duplicate_response(request, UpdateJob.JOB_LATEST_AGILE)
+    if duplicate is not None:
+        return duplicate
 
     active_job = _active_job()
     if active_job is not None:
