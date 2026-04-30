@@ -1,6 +1,9 @@
-date
-/home/boundys/.fly/bin/fly ssh console -C "python manage.py latest_agile" -a prices 
-date
-/home/boundys/.fly/bin/fly app restart prices
-date
+#!/usr/bin/env sh
+set -eu
 
+: "${UPDATE_TOKEN:?UPDATE_TOKEN is required}"
+
+date
+curl -i -X POST "https://agilepredict.com/update/latest_agile" \
+  -H "X-Update-Token: ${UPDATE_TOKEN}"
+date

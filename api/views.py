@@ -1,3 +1,5 @@
+import logging
+
 from django.shortcuts import render
 import pandas as pd
 
@@ -6,6 +8,9 @@ import pandas as pd
 from rest_framework import generics
 from prices.models import Forecasts
 from .serializers import PriceForecastSerializer, PriceForecastRegionSerializer
+
+
+logger = logging.getLogger("prices.api")
 
 
 # class PriceForecastAPIView(generics.ListAPIView):
@@ -36,7 +41,8 @@ class PriceForecastRegionAPIView(generics.ListAPIView):
 
     def get_queryset(self):
         forecast_count = int(self.request.query_params.get("forecast_count", 1))
-        print(f"forecast_count: {forecast_count}")
+        region = self.kwargs["region"].upper()
+        logger.debug("API forecast request region=%s forecast_count=%s", region, forecast_count)
         ids = [f.id for f in Forecasts.objects.all().order_by("-created_at")[:forecast_count]]
         queryset = Forecasts.objects.filter(id__in=ids).order_by("-created_at")
         return queryset

@@ -328,7 +328,7 @@ def get_latest_forecast():
     all_cols = ["emb_wind", "bm_wind", "solar", "demand", "temp_2m", "wind_10m", "rad"]
     missing_cols += [c for c in all_cols if c not in df.columns]
     if len(missing_cols) > 0:
-        print(f">>> ERROR: No forecast data for {missing_cols} ")
+        logger.error("No forecast data for columns=%s", missing_cols)
         return pd.DataFrame(), missing_cols
     else:
         df["date_time"] = pd.to_datetime(df.index)
@@ -354,12 +354,13 @@ class DataSet:
         pass
 
     def download(self, tz="GB", params={}):
-        logger.info(f"    {self.url}")
+        logger.debug("Downloading dataset url=%s", self.url)
+        response = None
+        code = None
         for n in range(RETRIES):
             try:
                 response = requests.get(url=self.url, params=self.params)
                 response.raise_for_status()
-                code = None
                 break
 
             except HTTPError as exc:
@@ -367,8 +368,19 @@ class DataSet:
 
                 if code in RETRY_CODES:
                     # retry after n seconds
+                    logger.warning("Retrying dataset download url=%s status=%s attempt=%s", self.url, code, n + 1)
                     time.sleep(n)
                     continue
+                logger.exception("Dataset download failed url=%s status=%s", self.url, code)
+                return pd.DataFrame(), code
+
+            except requests.exceptions.RequestException as exc:
+                logger.warning("Dataset download request error url=%s attempt=%s error=%s", self.url, n + 1, exc)
+                time.sleep(n)
+
+        if response is None:
+            logger.error("Dataset download failed after retries url=%s", self.url)
+            return pd.DataFrame(), code
 
         try:
             df = pd.json_normalize(response.json(), self.record_path)
@@ -376,24 +388,23 @@ class DataSet:
             try:
                 df = pd.DataFrame(response.json()[self.record_path[0]])
             except Exception as e:
-                print(f">>> ERROR {e} for URL {self.url}\n>>> with params {self.params}")
+                logger.exception("Unable to parse dataset response url=%s params=%s", self.url, self.params)
                 return pd.DataFrame(), code
 
         if "EMBEDDED_SOLAR_FORECAST" in self.cols:
             i = 1
-            logger.info(f"{i}:\n{df.iloc[:30]}")
+            logger.debug("%s embedded solar forecast rows=%s head=%s", i, len(df), df.iloc[:30].to_dict())
 
         try:
             df.index = pd.to_datetime(df[self.date_col])
             if df.index.tzinfo is None:
                 df.index = df.index.tz_localize(self.tz, ambiguous="infer")
         except Exception as e:
-            print(f">>> Error: {e}")
-            print(df.index)
+            logger.exception("Unable to parse dataset datetime url=%s index=%s", self.url, df.index)
 
         if "EMBEDDED_SOLAR_FORECAST" in self.cols:
             i += 1
-            logger.info(f"{i}:\n{df.iloc[:30]}")
+            logger.debug("%s embedded solar forecast rows=%s head=%s", i, len(df), df.iloc[:30].to_dict())
 
         try:
             df.index = pd.to_datetime(df["Date"]) + (df["Settlement_period"] - 1) * pd.Timedelta("30min")
@@ -403,7 +414,7 @@ class DataSet:
 
         if "EMBEDDED_SOLAR_FORECAST" in self.cols:
             i += 1
-            logger.info(f"{i}:\n{df.iloc[:30]}")
+            logger.debug("%s embedded solar forecast rows=%s head=%s", i, len(df), df.iloc[:30].to_dict())
 
         try:
             df.index += pd.to_datetime(df[self.time_col].str[:5], format="%H:%M") - pd.Timestamp("1900-01-01")
@@ -412,7 +423,7 @@ class DataSet:
 
         if "EMBEDDED_SOLAR_FORECAST" in self.cols:
             i += 1
-            logger.info(f"{i}:\n{df.iloc[:30]}")
+            logger.debug("%s embedded solar forecast rows=%s head=%s", i, len(df), df.iloc[:30].to_dict())
 
         try:
             df.index += (df[self.period_col] - 1) * pd.Timedelta("30min")
@@ -421,7 +432,7 @@ class DataSet:
 
         if "EMBEDDED_SOLAR_FORECAST" in self.cols:
             i += 1
-            logger.info(f"{i}:\n{df.iloc[:30]}")
+            logger.debug("%s embedded solar forecast rows=%s head=%s", i, len(df), df.iloc[:30].to_dict())
 
         try:
             df.index = df.index.tz_convert(tz)
@@ -430,7 +441,7 @@ class DataSet:
 
         if "EMBEDDED_SOLAR_FORECAST" in self.cols:
             i += 1
-            logger.info(f"{i}:\n{df.iloc[:30]}")
+            logger.debug("%s embedded solar forecast rows=%s head=%s", i, len(df), df.iloc[:30].to_dict())
 
         try:
             df = df[self.cols]
@@ -439,7 +450,7 @@ class DataSet:
 
         if "EMBEDDED_SOLAR_FORECAST" in self.cols:
             i += 1
-            logger.info(f"{i}:\n{df.iloc[:30]}")
+            logger.debug("%s embedded solar forecast rows=%s head=%s", i, len(df), df.iloc[:30].to_dict())
 
         try:
             if "func" in self.__dict__:
@@ -447,12 +458,11 @@ class DataSet:
             elif "resample" in self.__dict__:
                 df = df.resample(self.resample).mean()
         except Exception as e:
-
-            print(e)
+            logger.exception("Unable to resample dataset url=%s", self.url)
 
         if "EMBEDDED_SOLAR_FORECAST" in self.cols:
             i += 1
-            logger.info(f"{i}:\n{df.iloc[:30]}")
+            logger.debug("%s embedded solar forecast rows=%s head=%s", i, len(df), df.iloc[:30].to_dict())
 
         try:
             df = df.interpolate()
@@ -461,7 +471,7 @@ class DataSet:
 
         if "EMBEDDED_SOLAR_FORECAST" in self.cols:
             i += 1
-            logger.info(f"{i}:\n{df.iloc[:30]}")
+            logger.debug("%s embedded solar forecast rows=%s head=%s", i, len(df), df.iloc[:30].to_dict())
 
         try:
             df = df.sort_values(self.sort_col)
@@ -470,7 +480,7 @@ class DataSet:
 
         if "EMBEDDED_SOLAR_FORECAST" in self.cols:
             i += 1
-            logger.info(f"{i}:\n{df.iloc[:30]}")
+            logger.debug("%s embedded solar forecast rows=%s head=%s", i, len(df), df.iloc[:30].to_dict())
 
         if isinstance(df, pd.DataFrame):
             try:
@@ -485,7 +495,7 @@ class DataSet:
 
         if "EMBEDDED_SOLAR_FORECAST" in self.cols:
             i += 1
-            logger.info(f"{i}:\n{df.iloc[:30]}")
+            logger.debug("%s embedded solar forecast rows=%s head=%s", i, len(df), df.iloc[:30].to_dict())
 
         df = df.sort_index()
         df = df[~df.index.duplicated()]
@@ -572,7 +582,7 @@ def df_to_Model(df, myModel, update=False):
                 obj = myModel(**new_values)
                 obj.save()
             except Exception as e:
-                print(f"Failed to update {myModel} with data for datetime {index}: {e}")
+                logger.warning("Failed to update model=%s datetime=%s error=%s", myModel.__name__, index, e)
 
 
 def model_to_df(myModel):

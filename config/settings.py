@@ -44,7 +44,7 @@ LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "handlers": {
-        "file": {
+        "utils_file": {
             "level": "DEBUG",
             "class": "logging.FileHandler",
             "filename": os.path.join(BASE_DIR, "logs", "utils.log"),
@@ -61,10 +61,34 @@ LOGGING = {
             "style": "{",
         },
     },
+    "root": {
+        "handlers": ["console"],
+        "level": "WARNING",
+    },
     "loggers": {
         "config.utils": {
-            "handlers": ["file", "console"],
+            "handlers": ["utils_file", "console"],
             "level": "INFO",
+            "propagate": False,
+        },
+        "prices.api": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "prices.web": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "prices.worker": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "django.request": {
+            "handlers": ["console"],
+            "level": "WARNING",
             "propagate": False,
         },
     },

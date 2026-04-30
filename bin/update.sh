@@ -1,4 +1,10 @@
-/home/boundys/.fly/bin/fly ssh console -C "python manage.py update --debug" -a prices 
-/home/boundys/.fly/bin/fly ssh console -C "python manage.py collectstatic --noinput --clear" -a prices 
-# /home/boundys/.fly/bin/fly app restart prices
+#!/usr/bin/env sh
+set -eu
+
+: "${UPDATE_TOKEN:?UPDATE_TOKEN is required}"
+
+date
+curl -i -X POST "https://agilepredict.com/update?debug=true" \
+  -H "X-Update-Token: ${UPDATE_TOKEN}"
+date
 

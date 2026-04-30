@@ -16,7 +16,11 @@
             </p>
 
             <div class="row mt-3">
+                {% if trend_plot_url %}
+                <img src="{{ trend_plot_url }}" alt="Trend" class="w-full h-auto rounded shadow" />
+                {% else %}
                 <img src="{% static 'trends/trend.png' %}" alt="Trend" class="w-full h-auto rounded shadow" />
+                {% endif %}
             </div>
             <div class="row mt-3">
                 <h4 class="mb-4">Model Error Heatmap</h4>
@@ -47,7 +51,7 @@
 
                     <p class="text-muted">{{ plot.description }}</p>
                     <img
-                        src="{% static plot.filename %}"
+                        src="{{ plot.url }}"
                         class="img-fluid rounded shadow-sm border border-light"
                         alt="{{ plot.filename }}"
                     />

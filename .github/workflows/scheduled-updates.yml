@@ -1,0 +1,57 @@
+name: Scheduled updates
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Job to queue manually"
+        required: true
+        default: "none"
+        type: choice
+        options:
+          - none
+          - latest_agile
+          - full_update
+
+concurrency:
+  group: scheduled-updates
+  cancel-in-progress: false
+
+jobs:
+  scheduled-updates:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get UK local time
+        id: uk_time
+        shell: bash
+        run: |
+          hhmm="$(TZ=Europe/London date +'%H%M')"
+          echo "hhmm=${hhmm}" >> "${GITHUB_OUTPUT}"
+          echo "UK local time: ${hhmm}"
+
+      - name: Queue full update
+        if: >-
+          github.event.inputs.job == 'full_update' ||
+          contains(fromJSON('["0615","1115","1615","2215"]'), steps.uk_time.outputs.hhmm)
+        shell: bash
+        run: |
+          curl --fail --show-error --silent -X POST \
+            "https://agilepredict.com/update?debug=true" \
+            -H "X-Update-Token: ${UPDATE_TOKEN}"
+        env:
+          UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
+
+      - name: Queue latest Agile
+        if: >-
+          github.event.inputs.job == 'latest_agile' ||
+          contains(fromJSON('["1600","1700","1800","1900","2000","2100","2200"]'), steps.uk_time.outputs.hhmm)
+        shell: bash
+        run: |
+          curl --fail --show-error --silent -X POST \
+            "https://agilepredict.com/update/latest_agile" \
+            -H "X-Update-Token: ${UPDATE_TOKEN}"
+        env:
+          UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
