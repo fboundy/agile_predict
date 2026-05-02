@@ -15,10 +15,18 @@
    days:           the number of days to download (default = 14) 
    forecast_count: the number of recent forecasts to download (default = 1, ie the most recent)
    high_low:       include the high and low estimates (default = True)
+   export:         return Agile Outgoing export prices instead of Agile import prices (default = False)
                         </code></pre>
                         So to download the three most recent forecasts for seven days for NW England (Region G) without 
                         high and low estimate the URL would be: <a href="https://agilepredict.com/api/G?days=7&forecast_count=3&high_low=False">https://agilepredict.com/api/G?days=7&forecast_count=3&high_low=False</a>
-
+                        <br /><br />
+                        To return Agile Outgoing export prices instead, add <code>export=true</code>:
+                        <a href="https://agilepredict.com/api/G?days=7&export=true">https://agilepredict.com/api/G?days=7&export=true</a>
+                        <br /><br />
+                        Accuracy summary data are available at
+                        <a href="https://agilepredict.com/api/accuracy/">https://agilepredict.com/api/accuracy/</a>.
+                        This endpoint also accepts <code>region</code> and <code>export</code>, for example:
+                        <a href="https://agilepredict.com/api/accuracy/?region=G&export=true">https://agilepredict.com/api/accuracy/?region=G&export=true</a>
                     </p>
                 </div>
             </div>

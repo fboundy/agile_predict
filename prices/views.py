@@ -21,7 +21,7 @@ from django.views.generic import FormView, TemplateView
 from plotly.subplots import make_subplots
 
 from config.settings import GLOBAL_SETTINGS
-from config.utils import day_ahead_to_agile
+from config.utils import day_ahead_to_agile, import_agile_to_export_agile
 
 from .forms import ForecastForm
 from .models import AgileData, ForecastData, Forecasts, History, PlotImage, PriceHistory, UpdateJob
@@ -217,10 +217,6 @@ class ApiHowToView(TemplateView):
 
 class AboutView(TemplateView):
     template_name = "about.html"
-
-
-class HomeAssistantView(TemplateView):
-    template_name = "home_assistant.html"
 
 
 class StatsView(TemplateView):
@@ -689,6 +685,7 @@ class GraphFormView(FormView):
         show_generation_and_demand = kwargs.get("show_generation_and_demand", True)
         show_range = kwargs.get("show_range_on_most_recent_forecast", True)
         show_overlap = kwargs.get("show_forecast_overlap", False)
+        show_export = kwargs.get("show_export_pricing", False)
         # print(">>> views.py | GraphFormView | update_chart")
         # print(forecasts_to_plot)
 
@@ -712,7 +709,9 @@ class GraphFormView(FormView):
         p = PriceHistory.objects.filter(date_time__gte=start).order_by("-date_time")
 
         day_ahead = pd.Series(index=[a.date_time for a in p], data=[a.day_ahead for a in p])
-        agile = day_ahead_to_agile(day_ahead, region=region).sort_index()
+        agile = day_ahead_to_agile(day_ahead, region=region, export=show_export).sort_index()
+        price_label = "Agile Export Price" if show_export else "Agile Price"
+        actual_label = "Actual Export" if show_export else "Actual"
 
         hover_template_time_price = "%{x|%H:%M}<br>%{y:.2f}p/kWh"
         hover_template_price = "%{y:.2f}p/kWh"
@@ -723,7 +722,7 @@ class GraphFormView(FormView):
                 y=agile.loc[:forecast_end],
                 marker={"symbol": 104, "size": 1, "color": "white"},
                 mode="lines",
-                name="Actual",
+                name=actual_label,
                 hovertemplate=hover_template_price,
             )
         ]
@@ -741,7 +740,13 @@ class GraphFormView(FormView):
                     d = list(d.filter(date_time__lte=limit))
 
                 x = [a.date_time for a in d if (a.date_time >= agile.index[-1] or show_overlap)]
-                y = [a.agile_pred for a in d if (a.date_time >= agile.index[-1] or show_overlap)]
+                source = pd.Series(
+                    index=pd.to_datetime([a.date_time for a in d]),
+                    data=[a.agile_pred for a in d],
+                )
+                if show_export:
+                    source = import_agile_to_export_agile(source, region=region)
+                y = [source.loc[pd.Timestamp(a.date_time)] for a in d if (a.date_time >= agile.index[-1] or show_overlap)]
 
                 df = pd.Series(index=pd.to_datetime(x), data=y).sort_index()
                 try:
@@ -764,10 +769,16 @@ class GraphFormView(FormView):
                 ]
 
                 if (width == 3) and (d[0].agile_high != d[0].agile_low and show_range):
+                    low_source = pd.Series(index=pd.to_datetime([a.date_time for a in d]), data=[a.agile_low for a in d])
+                    high_source = pd.Series(index=pd.to_datetime([a.date_time for a in d]), data=[a.agile_high for a in d])
+                    if show_export:
+                        low_source = import_agile_to_export_agile(low_source, region=region)
+                        high_source = import_agile_to_export_agile(high_source, region=region)
+
                     data = data + [
                         go.Scatter(
                             x=df.index,
-                            y=[a.agile_low for a in d if (a.date_time >= agile.index[-1] or show_overlap)],
+                            y=[low_source.loc[pd.Timestamp(a.date_time)] for a in d if (a.date_time >= agile.index[-1] or show_overlap)],
                             marker={"symbol": 104, "size": 10},
                             mode="lines",
                             line=dict(width=1, color="red"),
@@ -777,7 +788,7 @@ class GraphFormView(FormView):
                         ),
                         go.Scatter(
                             x=df.index,
-                            y=[a.agile_high for a in d if (a.date_time >= agile.index[-1] or show_overlap)],
+                            y=[high_source.loc[pd.Timestamp(a.date_time)] for a in d if (a.date_time >= agile.index[-1] or show_overlap)],
                             marker={"symbol": 104, "size": 10},
                             mode="lines",
                             line=dict(width=1, color="red"),
@@ -794,7 +805,7 @@ class GraphFormView(FormView):
             figure = make_subplots(
                 rows=2,
                 cols=1,
-                subplot_titles=("Agile Price", "Generation and Demand"),
+                subplot_titles=(price_label, "Generation and Demand"),
                 shared_xaxes=True,
                 vertical_spacing=0.1,
             )
@@ -896,7 +907,7 @@ class GraphFormView(FormView):
             figure.append_trace(d, row=1, col=1)
 
         layout = dict(
-            yaxis={"title": "Agile Price [p/kWh]"},
+            yaxis={"title": f"{price_label} [p/kWh]"},
             margin={
                 "r": 5,
                 "t": 50,
@@ -913,7 +924,7 @@ class GraphFormView(FormView):
             paper_bgcolor="#343a40",
         )
         figure.update_yaxes(
-            title_text="Agile Price [p/kWh]",
+            title_text=f"{price_label} [p/kWh]",
             row=1,
             col=1,
             fixedrange=True,
@@ -962,14 +973,6 @@ class GraphFormView(FormView):
         return context
 
     def form_valid(self, form):
-        # print(">>>views.py | GraphFormView | form_valid")
-        # print(form.cleaned_data)
-        context = self.get_context_data(form=form)
-        context = self.update_chart(context=context, **form.cleaned_data)
-
-        return self.render_to_response(context=context)
-
-    def form2_valid(self, form):
         # print(">>>views.py | GraphFormView | form_valid")
         # print(form.cleaned_data)
         context = self.get_context_data(form=form)

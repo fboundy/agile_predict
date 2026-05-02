@@ -10,7 +10,7 @@ import pandas as pd
 from rest_framework import generics
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from config.utils import day_ahead_to_agile, regions
+from config.utils import day_ahead_to_agile, import_agile_to_export_agile, regions
 from prices.models import AgileData, Forecasts, PriceHistory
 from .serializers import PriceForecastSerializer, PriceForecastRegionSerializer
 
@@ -28,6 +28,11 @@ logger = logging.getLogger("prices.api")
 class PriceForecastAPIView(generics.ListAPIView):
     serializer_class = PriceForecastSerializer
 
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context.update({"export": self.request.query_params.get("export", "false").lower() in ["true", "1", "yes", "on"]})
+        return context
+
     def get_queryset(self):
         latest = Forecasts.objects.order_by("-created_at")[:1]
         return latest
@@ -42,6 +47,7 @@ class PriceForecastRegionAPIView(generics.ListAPIView):
         context.update({"region": self.kwargs["region"].upper()})
         context.update({"days": int(self.request.query_params.get("days", 14))})
         context.update({"high_low": self.request.query_params.get("high_low", "true").lower() in ["true", "1"]})
+        context.update({"export": self.request.query_params.get("export", "false").lower() in ["true", "1", "yes", "on"]})
         return context
 
     def get_queryset(self):
@@ -66,6 +72,7 @@ class AccuracyAPIView(APIView):
         region = request.query_params.get("region", "X").upper()
         if region not in regions:
             region = "X"
+        export = request.query_params.get("export", "false").lower() in ["true", "1", "yes", "on"]
 
         data_from = timezone.now() - pd.Timedelta(days=30)
         bucket_values = {label: [] for label, _, _ in self.buckets}
@@ -81,9 +88,18 @@ class AccuracyAPIView(APIView):
         ).values_list("date_time", "day_ahead"))
         if actual_rows:
             day_ahead = pd.Series(data=[row[1] for row in actual_rows], index=[row[0] for row in actual_rows])
-            actual_by_date_time = day_ahead_to_agile(day_ahead, region=region).to_dict()
+            actual_by_date_time = day_ahead_to_agile(day_ahead, region=region, export=export).to_dict()
         else:
             actual_by_date_time = {}
+
+        forecasts = list(forecasts)
+        predicted_export_by_id = {}
+        if export and forecasts:
+            converted = import_agile_to_export_agile(
+                pd.Series(index=pd.to_datetime([forecast.date_time for forecast in forecasts]), data=[forecast.agile_pred for forecast in forecasts]),
+                region=region,
+            )
+            predicted_export_by_id = {forecast.pk: value for forecast, value in zip(forecasts, converted)}
 
         for forecast in forecasts:
             actual = actual_by_date_time.get(forecast.date_time)
@@ -96,7 +112,10 @@ class AccuracyAPIView(APIView):
 
             for label, start_hour, end_hour in self.buckets:
                 if start_hour <= lead_hours and (end_hour is None or lead_hours < end_hour):
-                    bucket_values[label].append(forecast.agile_pred - actual)
+                    predicted = forecast.agile_pred
+                    if export:
+                        predicted = predicted_export_by_id[forecast.pk]
+                    bucket_values[label].append(predicted - actual)
                     date_times.append(forecast.date_time)
                     break
 

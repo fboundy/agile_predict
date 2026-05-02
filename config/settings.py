@@ -267,62 +267,77 @@ GLOBAL_SETTINGS = {
         "X": {
             "name": "National Average",
             "factors": (0.2136, 12.21),
+            "export_factors": (0.0950, 0.9979, 5.8464),
         },
         "A": {
             "name": "Eastern England",
             "factors": (0.21, 13),
+            "export_factors": (0.095, 1.09, 7.04),
         },
         "B": {
             "name": "East Midlands",
             "factors": (0.20, 14),
+            "export_factors": (0.094, 0.78, 6.27),
         },
         "C": {
             "name": "London",
             "factors": (0.20, 12),
+            "export_factors": (0.095, 1.30, 5.93),
         },
         "D": {
             "name": "Merseyside and Northern Wales",
             "factors": (0.22, 13),
+            "export_factors": (0.097, 1.26, 5.97),
         },
         "E": {
             "name": "West Midlands",
             "factors": (0.21, 11),
+            "export_factors": (0.094, 0.77, 6.50),
         },
         "F": {
             "name": "North Eastern England",
             "factors": (0.21, 12),
+            "export_factors": (0.095, 0.87, 4.88),
         },
         "G": {
             "name": "North Western England",
             "factors": (0.21, 12),
+            "export_factors": (0.096, 1.10, 5.89),
         },
         "H": {
             "name": "Southern England",
             "factors": (0.21, 12),
+            "export_factors": (0.094, 0.93, 7.05),
         },
         "J": {
             "name": "South Eastern England",
             "factors": (0.22, 12),
+            "export_factors": (0.094, 1.09, 7.41),
         },
         "K": {
             "name": "Southern Wales",
             "factors": (0.22, 12),
+            "export_factors": (0.094, 0.97, 5.46),
         },
         "L": {
             "name": "South Western England",
             "factors": (0.23, 11),
+            "export_factors": (0.093, 0.83, 7.14),
         },
         "M": {
             "name": "Yorkshire",
             "factors": (0.20, 13),
+            "export_factors": (0.096, 0.72, 5.78),
         },
         "N": {
             "name": "Southern Scotland",
             "factors": (0.21, 13),
+            "export_factors": (0.097, 0.90, 3.85),
         },
         "P": {
             "name": "Northern Scotland",
             "factors": (0.24, 12),
+            "export_factors": (0.096, 1.36, 2.68),
         },
     },
 }

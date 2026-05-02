@@ -81,3 +81,21 @@ class AccuracyAPITests(TestCase):
         payload = response.json()
         self.assertEqual(payload["total_pairs"], 1)
         self.assertEqual(payload["buckets"][0], {"label": "0\u201324h", "n": 1, "mae": 2.0, "rmse": 2.0, "bias": 2.0})
+
+    def test_region_forecast_api_accepts_export_parameter(self):
+        created_at = datetime(2026, 5, 1, tzinfo=datetime_timezone.utc)
+        forecast = self.create_forecast(created_at)
+        AgileData.objects.create(
+            forecast=forecast,
+            region="A",
+            date_time=created_at + timedelta(hours=12),
+            agile_pred=21,
+            agile_low=20,
+            agile_high=24,
+        )
+
+        response = self.client.get("/api/A/?export=true")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertAlmostEqual(payload[0]["prices"][0]["agile_pred"], 10.59)

@@ -1,8 +1,12 @@
 from datetime import timedelta
 
+import pandas as pd
 from django.test import TestCase
 from django.utils import timezone
 
+from config.settings import GLOBAL_SETTINGS
+from config.utils import day_ahead_to_agile
+from prices.forms import ForecastForm
 from prices.models import AgileData, Forecasts, PriceHistory
 
 
@@ -91,3 +95,37 @@ class HistoryViewTests(TestCase):
         self.assertContains(response, "Offset")
         self.assertContains(response, "+1.00")
         self.assertContains(response, "-2.00")
+
+
+class ExportPricingTests(TestCase):
+    def test_national_export_coefficients_are_arithmetic_mean(self):
+        regional_factors = [
+            GLOBAL_SETTINGS["REGIONS"][region]["export_factors"]
+            for region in GLOBAL_SETTINGS["REGIONS"]
+            if region != "X"
+        ]
+        expected = tuple(round(sum(values) / len(values), 4) for values in zip(*regional_factors))
+
+        self.assertEqual(GLOBAL_SETTINGS["REGIONS"]["X"]["export_factors"], expected)
+
+    def test_export_conversion_uses_regional_coefficients_and_floor(self):
+        index = pd.to_datetime(["2026-05-01T12:00:00Z", "2026-05-01T16:00:00Z"])
+        day_ahead = pd.Series(index=index, data=[100, 100])
+
+        export = day_ahead_to_agile(day_ahead, region="A", export=True)
+
+        self.assertAlmostEqual(export.iloc[0], 10.59)
+        self.assertAlmostEqual(export.iloc[1], 17.63)
+
+    def test_import_conversion_handles_duplicate_timestamps(self):
+        index = pd.to_datetime(["2026-05-01T12:00:00Z", "2026-05-01T12:00:00Z"])
+        day_ahead = pd.Series(index=index, data=[100, 110])
+
+        agile = day_ahead_to_agile(day_ahead, region="A")
+
+        self.assertEqual(len(agile), 2)
+
+    def test_forecast_form_has_export_pricing_option(self):
+        form = ForecastForm()
+
+        self.assertIn("show_export_pricing", form.fields)
