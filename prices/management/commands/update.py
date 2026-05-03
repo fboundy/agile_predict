@@ -23,6 +23,16 @@ import logging
 import time
 
 from django.core.management.base import BaseCommand
+from ...forecast_features import (
+    build_forecast_frame,
+    build_holdout_data,
+    build_training_data,
+    FEATURE_SETS,
+    latest_prediction_features,
+    add_latest_forecast_features,
+    resolve_feature_columns,
+    select_daily_training_forecasts,
+)
 from ...models import AgileData, ForecastData, Forecasts, History, PlotImage, PriceHistory
 
 from config.utils import *
@@ -188,6 +198,25 @@ class Command(BaseCommand):
         )
 
         parser.add_argument(
+            "--feature_set",
+            choices=sorted(FEATURE_SETS),
+            default="default",
+            help="Named feature set to use for model training.",
+        )
+
+        parser.add_argument(
+            "--features",
+            help="Comma-separated feature columns to use instead of a named feature set.",
+        )
+
+        parser.add_argument(
+            "--drop_feature",
+            action="append",
+            default=[],
+            help="Feature column to remove from the selected feature set. May be supplied multiple times.",
+        )
+
+        parser.add_argument(
             "--train_frac",
         )
 
@@ -223,9 +252,13 @@ class Command(BaseCommand):
         no_ranges = options.get("no_ranges", False)
         skip_kde_plot = options.get("skip_kde_plot", False)
 
-        drop_cols = ["emb_wind"]
-        if options.get("no_day_of_week", False):
-            drop_cols += ["day_of_week"]
+        features = resolve_feature_columns(
+            feature_set=options.get("feature_set", "default"),
+            explicit_features=options.get("features"),
+            drop_features=options.get("drop_feature", []),
+            no_day_of_week=options.get("no_day_of_week", False),
+        )
+        logger.info("Using model features: %s", ", ".join(features))
 
         drop_last = int(options.get("drop_last", 0) or 0)
 
@@ -339,70 +372,16 @@ class Command(BaseCommand):
 
                     if len(ff) > 0:
                         logger.info(ff)
-                        ff = ff.set_index("id").sort_index()
-                        ff["created_at"] = pd.to_datetime(ff["name"]).dt.tz_localize("GB")
-                        ff["date"] = ff["created_at"].dt.tz_convert("GB").dt.normalize()
-                        ff["ag_start"] = ff["created_at"].dt.normalize() + pd.Timedelta(hours=22)
-                        ff["ag_end"] = ff["created_at"].dt.normalize() + pd.Timedelta(hours=46)
-
-                        # Only train on the forecasts closest to 16:15
-                        ff["dt1600"] = (
-                            (ff["date"] + pd.Timedelta(hours=16, minutes=15) - ff["created_at"].dt.tz_convert("GB"))
-                            .dt.total_seconds()
-                            .abs()
-                        )
-                        ff_train = (
-                            ff.sort_values("dt1600")
-                            .drop_duplicates("date")
-                            .sort_index()
-                            .drop(["date", "dt1600"], axis=1)
-                        )
+                        df, ff = build_forecast_frame(fd, ff)
+                        ff_train = select_daily_training_forecasts(ff)
 
                         if debug:
                             logger.info(f"Forecasts Database:\n{ff.to_string()}")
 
-                        # df is the full dataset
-                        df = (
-                            (fd.merge(ff, right_index=True, left_on="forecast_id"))
-                            .set_index("date_time")
-                            .drop("day_ahead", axis=1)
-                        )
-
-                        df["dow"] = df.index.day_of_week
-                        df["weekend"] = (df.index.day_of_week >= 5).astype(int)
-                        df["time"] = df.index.tz_convert("GB").hour + df.index.minute / 60
-                        df["days_ago"] = (pd.Timestamp.now(tz="UTC") - df["created_at"]).dt.total_seconds() / 3600 / 24
-                        df["dt"] = (df.index - df["created_at"]).dt.total_seconds() / 3600 / 24
-                        df["peak"] = ((df["time"] >= 16) & (df["time"] < 19)).astype(float)
-
-                        features = [
-                            "bm_wind",
-                            "solar",
-                            "demand",
-                            # "time",
-                            "peak",
-                            "days_ago",
-                            # "dow",
-                            "wind_10m",
-                            "weekend",
-                        ]
-
                         # Only use the forecasts closest to 16:15 for training
-                        train_X = df[df["forecast_id"].isin(ff_train.index)]
-                        train_X = train_X[train_X["days_ago"] < max_days]
-
-                        # Only train on the next agile prices that are set from the pm auction
-                        train_X = train_X[
-                            (train_X.index >= train_X["ag_start"]) & (train_X.index < train_X["ag_end"])
-                        ][features]
-
-                        # Get the prices to match the forecast
-                        train_X = train_X.merge(prices["day_ahead"], left_index=True, right_index=True)
-
+                        train_X, train_y = build_training_data(df, ff_train, prices, features, max_days)
                         if debug:
                             logger.info(f"train_X:\n{train_X}")
-
-                        train_y = train_X.pop("day_ahead")
                         sample_weights = ((np.log10((train_y - train_y.mean()).abs() + 10) * 5) - 4).round(0)
 
                         xg_model = xg.XGBRegressor(
@@ -433,16 +412,7 @@ class Command(BaseCommand):
 
                         # Drop the training data set
                         logger.info("Preparing holdout/test dataset")
-                        test_X = df[~df["forecast_id"].isin(ff_train.index)]
-
-                        # Drop any data which is actual ir dt < 0
-                        test_X = test_X[test_X.index > test_X["ag_start"]]
-
-                        # Drop the old data
-                        test_X = test_X[test_X["days_ago"] < max_days]
-
-                        test_X = test_X.merge(prices["day_ahead"], left_index=True, right_index=True)
-                        test_y = test_X["day_ahead"]
+                        test_X, test_y = build_holdout_data(df, ff_train, prices, max_days)
 
                         if len(test_X) > MAX_TEST_X:
                             logger.info(f"Sampling test dataset from {len(test_X)} rows to {MAX_TEST_X} rows")
@@ -660,15 +630,10 @@ class Command(BaseCommand):
                         # ax.legend()
                         # save_plot(fig, "6_binned_error_v_time")
 
-                    fc["weekend"] = (fc.index.day_of_week >= 5).astype(int)
-                    fc["days_ago"] = 0
-                    fc["time"] = fc.index.tz_convert("GB").hour + fc.index.minute / 60
-                    fc["dt"] = (fc.index - pd.Timestamp.now(tz="UTC")).total_seconds() / 86400
+                    fc = add_latest_forecast_features(fc)
                     if len(ff) > 0:
                         logger.info(f"Predicting latest forecast ({len(fc)} rows)")
-                        fc["day_ahead"] = xg_model.predict(
-                            fc.drop("emb_wind", axis=1).reindex(train_X.columns, axis=1)
-                        )
+                        fc["day_ahead"] = xg_model.predict(latest_prediction_features(fc, train_X.columns))
                         logger.info("Finished latest forecast prediction")
 
                         if (len(test_X) > 10) and (not no_ranges):

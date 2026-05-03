@@ -46,10 +46,14 @@ def _update_options(request):
     if "skip_kde_plot" not in request.POST and "skip_kde_plot" not in request.GET:
         options["skip_kde_plot"] = True
 
-    for key in ["min_fd", "min_ad", "max_days", "train_frac", "drop_last"]:
+    for key in ["min_fd", "min_ad", "max_days", "train_frac", "drop_last", "feature_set", "features"]:
         value = request.POST.get(key, request.GET.get(key))
         if value not in {None, ""}:
             options[key] = value
+
+    drop_feature = request.POST.getlist("drop_feature") or request.GET.getlist("drop_feature")
+    if drop_feature:
+        options["drop_feature"] = drop_feature
 
     ignore_forecast = request.POST.getlist("ignore_forecast") or request.GET.getlist("ignore_forecast")
     if ignore_forecast:

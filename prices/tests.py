@@ -6,6 +6,12 @@ from django.utils import timezone
 
 from config.settings import GLOBAL_SETTINGS
 from config.utils import day_ahead_to_agile
+from prices.forecast_features import (
+    build_training_data,
+    FEATURE_SETS,
+    latest_prediction_features,
+    resolve_feature_columns,
+)
 from prices.forms import ForecastForm
 from prices.models import AgileData, Forecasts, PriceHistory
 
@@ -129,3 +135,54 @@ class ExportPricingTests(TestCase):
         form = ForecastForm()
 
         self.assertIn("show_export_pricing", form.fields)
+
+
+class ForecastFeatureTests(TestCase):
+    def test_resolve_feature_columns_supports_named_sets_and_drops(self):
+        features = resolve_feature_columns(feature_set="weather", drop_features=["rad"])
+
+        self.assertIn("temp_2m", features)
+        self.assertNotIn("rad", features)
+        self.assertEqual(list(FEATURE_SETS["weather"]).count("rad"), 1)
+
+    def test_resolve_feature_columns_supports_explicit_feature_list(self):
+        features = resolve_feature_columns(explicit_features="demand, peak, weekend")
+
+        self.assertEqual(features, ["demand", "peak", "weekend"])
+
+    def test_build_training_data_uses_supplied_feature_set(self):
+        index = pd.to_datetime(["2026-05-01T22:00:00Z"])
+        created_at = pd.to_datetime(["2026-05-01T16:15:00Z"])
+        df = pd.DataFrame(
+            index=index,
+            data={
+                "forecast_id": [1],
+                "created_at": created_at,
+                "ag_start": pd.to_datetime(["2026-05-01T22:00:00Z"]),
+                "ag_end": pd.to_datetime(["2026-05-02T22:00:00Z"]),
+                "days_ago": [1],
+                "demand": [30],
+                "peak": [0],
+                "weekend": [0],
+            },
+        )
+        forecasts = pd.DataFrame(index=[1])
+        prices = pd.DataFrame(index=index, data={"day_ahead": [95]})
+
+        train_X, train_y = build_training_data(df, forecasts, prices, ["demand", "weekend"], max_days=7)
+
+        self.assertEqual(list(train_X.columns), ["demand", "weekend"])
+        self.assertEqual(train_y.iloc[0], 95)
+
+    def test_latest_prediction_features_preserves_requested_columns(self):
+        fc = pd.DataFrame(
+            data={
+                "demand": [30],
+                "emb_wind": [5],
+                "weekend": [0],
+            }
+        )
+
+        features = latest_prediction_features(fc, ["emb_wind", "demand"])
+
+        self.assertEqual(list(features.columns), ["emb_wind", "demand"])
