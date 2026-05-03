@@ -51,7 +51,7 @@ FEATURE_SETS = {
 }
 
 
-def resolve_feature_columns(feature_set="default", explicit_features=None, drop_features=None, no_day_of_week=False):
+def resolve_feature_columns(feature_set="generation", explicit_features=None, drop_features=None, no_day_of_week=False):
     if explicit_features:
         features = [feature.strip() for feature in explicit_features.split(",") if feature.strip()]
     else:

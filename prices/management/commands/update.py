@@ -201,7 +201,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--feature_set",
             choices=sorted(FEATURE_SETS),
-            default="default",
+            default="generation",
             help="Named feature set to use for model training.",
         )
 
@@ -254,7 +254,7 @@ class Command(BaseCommand):
         skip_kde_plot = options.get("skip_kde_plot", False)
 
         features = resolve_feature_columns(
-            feature_set=options.get("feature_set", "default"),
+            feature_set=options.get("feature_set", "generation"),
             explicit_features=options.get("features"),
             drop_features=options.get("drop_feature", []),
             no_day_of_week=options.get("no_day_of_week", False),
