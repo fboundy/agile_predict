@@ -1,55 +1,114 @@
-# Load environment variables from .env
-$envPath = ".env"
-if (-not (Test-Path $envPath)) {
-    Write-Error ".env file not found at $envPath"
-    exit 1
+param(
+    [string]$BackupFile,
+    [string]$SqliteDb = "db.sqlite3",
+    [string]$HostAddress = "127.0.0.1",
+    [int]$Port = 8000
+)
+
+$ErrorActionPreference = "Stop"
+
+$RootDir = Resolve-Path (Join-Path $PSScriptRoot "..")
+$envPath = Join-Path $RootDir ".env"
+
+function Read-DotEnv {
+    param([string]$Path)
+
+    $values = @{}
+    if (-not (Test-Path $Path)) {
+        return $values
+    }
+
+    Get-Content $Path | ForEach-Object {
+        $line = $_.Trim()
+        if ($line -eq "" -or $line.StartsWith("#")) {
+            return
+        }
+        if ($line -match "^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$") {
+            $name = $matches[1]
+            $value = $matches[2].Trim().Trim('"').Trim("'")
+            $values[$name] = $value
+        }
+    }
+
+    return $values
 }
 
-# Parse .env and set variables
-Get-Content $envPath | ForEach-Object {
-    if ($_ -match "^\s*([A-Z_]+)\s*=\s*(.*)\s*$") {
-        $name = $matches[1]
-        $value = $matches[2].Trim('"').Trim("'")
-        Set-Variable -Name $name -Value $value -Scope Script
+function Get-PythonExe {
+    param($EnvValues)
+
+    $candidates = @()
+    if ($EnvValues.ContainsKey("PYTHON_EXE")) {
+        $candidates += $EnvValues["PYTHON_EXE"]
+    }
+    $candidates += @(
+        (Join-Path $RootDir ".venv\Scripts\python.exe"),
+        "C:\Users\FrancisBoundy\miniconda3\envs\agile_predict\python.exe",
+        "python"
+    )
+
+    foreach ($candidate in $candidates) {
+        $command = Get-Command $candidate -ErrorAction SilentlyContinue
+        if ($command) {
+            return $command.Source
+        }
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    throw "Could not find Python. Set PYTHON_EXE in .env to the Python interpreter for this project."
+}
+
+function Stop-DjangoServer {
+    $servers = Get-CimInstance Win32_Process |
+        Where-Object { $_.CommandLine -match "manage\.py\s+runserver" }
+
+    foreach ($server in $servers) {
+        Write-Host "Stopping Django server process $($server.ProcessId)..."
+        Stop-Process -Id $server.ProcessId -Force
     }
 }
 
-# Check required variables
-$required = @("PGUSER", "PGPASSWORD", "DBNAME", "WIN_BACKUP_FILE")
-foreach ($var in $required) {
-    if (-not (Get-Variable $var -Scope Script -ErrorAction SilentlyContinue)) {
-        Write-Error "Missing required variable in .env: $var"
-        exit 1
+$envValues = Read-DotEnv $envPath
+
+if (-not $BackupFile) {
+    if ($envValues.ContainsKey("WIN_BACKUP_FILE")) {
+        $BackupFile = $envValues["WIN_BACKUP_FILE"]
+    } else {
+        $BackupFile = ".local\backup.sql"
     }
 }
 
-# PostgreSQL bin path
-$PgBin = "C:\Program Files\PostgreSQL\17\bin"
-$psql = Join-Path $PgBin "psql.exe"
-$dropdb = Join-Path $PgBin "dropdb.exe"
-$createdb = Join-Path $PgBin "createdb.exe"
+$backupPath = Resolve-Path (Join-Path $RootDir $BackupFile)
+$sqlitePath = Join-Path $RootDir $SqliteDb
+$pythonExe = Get-PythonExe $envValues
 
-if (-not (Test-Path $psql)) {
-    Write-Error "psql not found at $psql"
-    exit 1
+Write-Host "Restoring $backupPath to local SQLite database $sqlitePath"
+Write-Host "Using Python: $pythonExe"
+
+Stop-DjangoServer
+
+& $pythonExe (Join-Path $RootDir "bin\restore_sqlite.py") $backupPath $sqlitePath
+if ($LASTEXITCODE -ne 0) {
+    throw "SQLite restore failed."
 }
 
-if (-not (Test-Path $WIN_BACKUP_FILE)) {
-    Write-Error "Backup file not found: $WIN_BACKUP_FILE"
-    exit 1
+$env:SECRET_KEY = if ($envValues.ContainsKey("SECRET_KEY")) { $envValues["SECRET_KEY"] } else { "restore-sqlite" }
+$env:DEBUG = if ($envValues.ContainsKey("DEBUG")) { $envValues["DEBUG"] } else { "true" }
+$env:DATABASE_URL = "sqlite:///$sqlitePath"
+
+Write-Host "Starting Django server at http://${HostAddress}:$Port/ ..."
+Start-Process `
+    -FilePath $pythonExe `
+    -ArgumentList "manage.py", "runserver", "${HostAddress}:$Port", "--noreload" `
+    -WorkingDirectory $RootDir `
+    -WindowStyle Hidden
+
+Start-Sleep -Seconds 3
+
+try {
+    $response = Invoke-WebRequest -Uri "http://${HostAddress}:$Port/X/" -UseBasicParsing -TimeoutSec 10
+    Write-Host "Server restarted successfully. HTTP status: $($response.StatusCode)"
+} catch {
+    Write-Warning "Restore completed, but the server did not respond yet: $($_.Exception.Message)"
 }
-
-# Export password for pg tools
-$env:PGPASSWORD = $PGPASSWORD
-
-# Drop and recreate DB
-Write-Host "Dropping database '$DBNAME'..."
-& "$dropdb" -U $PGUSER $DBNAME 2>$null
-
-Write-Host "Creating database '$DBNAME'..."
-& "$createdb" -U $PGUSER $DBNAME
-
-Write-Host "Restoring from backup..."
-Get-Content $WIN_BACKUP_FILE | & "$psql" -U $PGUSER -d $DBNAME
-
-Write-Host "Restore completed!"
