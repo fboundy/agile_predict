@@ -13,7 +13,7 @@ from prices.forecast_features import (
     resolve_feature_columns,
 )
 from prices.forms import ForecastForm
-from prices.models import AgileData, Forecasts, PriceHistory
+from prices.models import AgileData, ExternalForecast, Forecasts, PriceHistory
 
 
 class HistoryViewTests(TestCase):
@@ -82,7 +82,8 @@ class HistoryViewTests(TestCase):
 
         for offset_days, predicted in [(0, 1), (1, -2)]:
             date_time = created_at + timedelta(days=offset_days, hours=1)
-            PriceHistory.objects.create(date_time=date_time, agile=0, day_ahead=0)
+            day_ahead = day_ahead_to_agile(pd.Series([0], index=[date_time]), reverse=True, region="X").iloc[0]
+            PriceHistory.objects.create(date_time=date_time, agile=0, day_ahead=day_ahead)
             AgileData.objects.create(
                 forecast=forecast,
                 region="X",
@@ -101,6 +102,32 @@ class HistoryViewTests(TestCase):
         self.assertContains(response, "Offset")
         self.assertContains(response, "+1.00")
         self.assertContains(response, "-2.00")
+
+    def test_history_gx_offers_external_comparison_without_dropdown_region(self):
+        created_at = timezone.now() - timedelta(hours=6)
+        ExternalForecast.objects.create(
+            source=ExternalForecast.SOURCE_X2R,
+            region="G",
+            forecast_name="x2r test",
+            source_created_at=created_at,
+            date_time=created_at + timedelta(hours=1),
+            agile_pred=12,
+        )
+
+        response = self.client.get("/history/Gx/?compare_x2r=1")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Compare AgileForecast")
+        self.assertContains(response, "Compare X2R")
+        self.assertContains(response, "X2R comparison predictions")
+        self.assertNotContains(response, 'value="GX"')
+
+    def test_history_regular_region_does_not_offer_external_comparison(self):
+        response = self.client.get("/history/G/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Compare AgileForecast")
+        self.assertNotContains(response, "Compare X2R")
 
 
 class ExportPricingTests(TestCase):

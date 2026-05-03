@@ -37,6 +37,17 @@ FEATURE_SETS = {
         "rad",
         "weekend",
     ),
+    "default_fuel": (
+        "bm_wind",
+        "solar",
+        "demand",
+        "peak",
+        "days_ago",
+        "wind_10m",
+        "weekend",
+        "nuclear",
+        "gas_ttf",
+    ),
 }
 
 

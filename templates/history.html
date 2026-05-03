@@ -4,7 +4,7 @@
 
 <div class="container-lg fluid">
     <div class="row bg-body text-center">
-        <h3>{{region_name}} {% if region != "X" %} (DNO Region {{region}}) {% endif %}</h3>
+        <h3>{{region_name}} {% if region != "X" and not compare_external_region %} (DNO Region {{region}}) {% endif %}</h3>
     </div>
     <div class="row">
         <div class="col-lg-9">
@@ -69,10 +69,36 @@
                     <label for="regionSelect" class="form-label">Region</label>
                     <select id="regionSelect" class="form-select">
                         {% for key, value in REGIONS.items %}
-                        <option value="{{ key }}" {% if key == region %}selected{% endif %}>{{ key }} - {{ value }}</option>
+                        <option value="{{ key }}" {% if key == data_region %}selected{% endif %}>{{ key }} - {{ value }}</option>
                         {% endfor %}
                     </select>
                 </div>
+                {% if compare_external_region %}
+                <div class="mb-3">
+                    <div class="form-check">
+                        <input
+                            id="compareAgileForecast"
+                            name="compare_agileforecast"
+                            value="1"
+                            type="checkbox"
+                            class="form-check-input"
+                            {% if compare_agileforecast %}checked{% endif %}
+                        />
+                        <label for="compareAgileForecast" class="form-check-label">Compare AgileForecast</label>
+                    </div>
+                    <div class="form-check mt-2">
+                        <input
+                            id="compareX2R"
+                            name="compare_x2r"
+                            value="1"
+                            type="checkbox"
+                            class="form-check-input"
+                            {% if compare_x2r %}checked{% endif %}
+                        />
+                        <label for="compareX2R" class="form-check-label">Compare X2R</label>
+                    </div>
+                </div>
+                {% endif %}
                 <div class="mb-3">
                     <label for="bucketSelect" class="form-label">Prediction Offset</label>
                     <select id="bucketSelect" name="offset_days" class="form-select">
@@ -120,6 +146,11 @@
             <div class="px-3 pb-3">
                 <div class="small text-body-secondary">
                     Showing {{ actual_count }} actual prices and {{ prediction_count }} predictions for {{ offset_label }} ahead.
+                    {% if external_counts %}
+                    {% for item in external_counts %}
+                    <br />{{ item.label }} comparison predictions: {{ item.count }}
+                    {% endfor %}
+                    {% endif %}
                 </div>
             </div>
             <div class="px-3 pb-3">
