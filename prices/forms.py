@@ -31,6 +31,12 @@ class ForecastForm(forms.Form):
         required=False,
         help_text="Show the 10% and 90% confidence level spread on the most recent forecast. This reflects the model uncertainty, not the weather uncertainty",
     )
+    show_export_pricing = forms.BooleanField(
+        label="Show export pricing (Beta)",
+        initial=False,
+        required=False,
+        help_text="Show Agile Outgoing export prices instead of Agile import prices",
+    )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -49,6 +55,7 @@ class ForecastForm(forms.Form):
                 AccordionGroup(
                     "Options",
                     Field("days_to_plot", small=True),
+                    Field("show_export_pricing"),
                     Field("show_generation_and_demand"),
                     Field("show_range_on_most_recent_forecast"),
                     Field(

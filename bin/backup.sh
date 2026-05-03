@@ -3,10 +3,11 @@
 # Timestamp for logs and backup file naming
 NOW=$(date +"%Y-%m-%d_%H-%M-%S")
 
-# Load environment
-if [ -f /home/boundys/data4/django/agile_predict/.env ]; then
+# Load environment. Strip Windows CRLF endings and tolerate spaces around "=".
+ENV_FILE="/home/boundys/data4/django/agile_predict/.env"
+if [ -f "$ENV_FILE" ]; then
     set -a
-    . /home/boundys/data4/django/agile_predict/.env
+    . <(sed -e 's/\r$//' -e 's/^\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=[[:space:]]*/\1=/' "$ENV_FILE")
     set +a
 else
     echo "Missing .env file"
@@ -35,7 +36,7 @@ echo "LOCAL_PORT: $LOCAL_PORT"
 echo "Starting Fly proxy to database..."
 
 # Start Fly proxy
-/home/boundys/.fly/bin/fly proxy ${LOCAL_PORT}:5432 -a $APP_NAME &
+/home/boundys/.fly/bin/fly proxy "${LOCAL_PORT}:5432" -a "$APP_NAME" &
 PROXY_PID=$!
 
 # Wait for proxy to be ready
@@ -64,7 +65,7 @@ mkdir -p "$BACKUP_DIR"
 BACKUP_FILE="$BACKUP_DIR/${DB_NAME}_backup_$NOW.sql"
 LATEST_BACKUP_FILE="$BACKUP_DIR/backup.sql"
 
-/usr/bin/pg_dump -h localhost -p $LOCAL_PORT -U $DB_USER -d $DB_NAME > "$BACKUP_FILE"
+/usr/bin/pg_dump -h 127.0.0.1 -p "$LOCAL_PORT" -U "$DB_USER" -d "$DB_NAME" > "$BACKUP_FILE"
 
 if [ $? -eq 0 ]; then
     echo "Backup completed successfully: $BACKUP_FILE"

@@ -1,5 +1,5 @@
 from hmac import compare_digest
-from datetime import timedelta
+from datetime import datetime, time as datetime_time, timedelta
 import logging
 from pathlib import Path
 import time
@@ -11,6 +11,7 @@ from django.core.cache import cache
 from django.http import HttpResponse, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
+from django.utils.dateparse import parse_date
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
@@ -20,7 +21,7 @@ from django.views.generic import FormView, TemplateView
 from plotly.subplots import make_subplots
 
 from config.settings import GLOBAL_SETTINGS
-from config.utils import day_ahead_to_agile
+from config.utils import day_ahead_to_agile, import_agile_to_export_agile
 
 from .forms import ForecastForm
 from .models import AgileData, ForecastData, Forecasts, History, PlotImage, PriceHistory, UpdateJob
@@ -218,10 +219,6 @@ class AboutView(TemplateView):
     template_name = "about.html"
 
 
-class HomeAssistantView(TemplateView):
-    template_name = "home_assistant.html"
-
-
 class StatsView(TemplateView):
     template_name = "stats.html"
 
@@ -385,6 +382,289 @@ class StatsView(TemplateView):
         return context
 
 
+class HistoryView(TemplateView):
+    template_name = "history.html"
+    max_offset_days = 14
+    window_options = {
+        "last-week": {"label": "Last Week", "days": 7},
+        "last-2-weeks": {"label": "Last 2 Weeks", "days": 14},
+        "last-month": {"label": "Last Month", "days": 30},
+        "custom": {"label": "Custom Dates", "days": None},
+    }
+
+    def format_offset_label(self, offset_days):
+        if offset_days == 0:
+            return "<1d"
+        return f"{offset_days}d"
+
+    def get_date_window(self):
+        window_key = self.request.GET.get("window", "last-2-weeks")
+        if window_key not in self.window_options:
+            window_key = "last-2-weeks"
+
+        end = timezone.now()
+        start = end - timedelta(days=self.window_options[window_key]["days"] or 14)
+        custom_start_date = start.date().isoformat()
+        custom_end_date = end.date().isoformat()
+
+        if window_key == "custom":
+            start_date = parse_date(self.request.GET.get("start_date", ""))
+            end_date = parse_date(self.request.GET.get("end_date", ""))
+            if start_date and end_date and start_date <= end_date:
+                current_timezone = timezone.get_current_timezone()
+                start = timezone.make_aware(datetime.combine(start_date, datetime_time.min), current_timezone)
+                end = timezone.make_aware(datetime.combine(end_date, datetime_time.max), current_timezone)
+                custom_start_date = start_date.isoformat()
+                custom_end_date = end_date.isoformat()
+            else:
+                window_key = "last-2-weeks"
+
+        return window_key, start, end, custom_start_date, custom_end_date
+
+    def add_prediction_traces(self, figure, predicted, offset_label, hover_template_price):
+        if len(predicted) < 2:
+            return 0
+
+        segment_count = 0
+        segment_x = []
+        segment_y = []
+        previous_timestamp = None
+
+        for timestamp, value in predicted.items():
+            if previous_timestamp is not None and timestamp - previous_timestamp != pd.Timedelta(minutes=30):
+                if len(segment_x) >= 2:
+                    segment_count += 1
+                    figure.add_trace(
+                        go.Scatter(
+                            x=pd.DatetimeIndex(segment_x).tz_convert("GB"),
+                            y=segment_y,
+                            line={"color": "#ffc107", "width": 2},
+                            mode="lines",
+                            name=f"Prediction {offset_label} ahead" if segment_count == 1 else None,
+                            showlegend=segment_count == 1,
+                            hovertemplate=hover_template_price,
+                        )
+                    )
+                segment_x = []
+                segment_y = []
+
+            segment_x.append(timestamp)
+            segment_y.append(value)
+            previous_timestamp = timestamp
+
+        if len(segment_x) >= 2:
+            segment_count += 1
+            figure.add_trace(
+                go.Scatter(
+                    x=pd.DatetimeIndex(segment_x).tz_convert("GB"),
+                    y=segment_y,
+                    line={"color": "#ffc107", "width": 2},
+                    mode="lines",
+                    name=f"Prediction {offset_label} ahead" if segment_count == 1 else None,
+                    showlegend=segment_count == 1,
+                    hovertemplate=hover_template_price,
+                )
+            )
+
+        return segment_count
+
+    def calculate_error_metrics(self, actual, predicted):
+        if len(actual) == 0 or len(predicted) == 0:
+            return None
+
+        actual_for_metrics = actual.copy()
+        predicted_for_metrics = predicted.copy()
+        actual_for_metrics.index = actual_for_metrics.index.tz_convert("UTC")
+        predicted_for_metrics.index = predicted_for_metrics.index.tz_convert("UTC")
+
+        common_index = predicted_for_metrics.index.intersection(actual_for_metrics.index)
+        if len(common_index) == 0:
+            return None
+
+        errors = predicted_for_metrics.loc[common_index] - actual_for_metrics.loc[common_index]
+        return {
+            "n": len(errors),
+            "mae": (errors.abs().mean()),
+            "rmse": ((errors**2).mean() ** 0.5),
+            "bias": errors.mean(),
+        }
+
+    def build_predicted_series(self, forecast_rows, start_hours, end_hours):
+        predicted_by_date_time = {}
+        for row in forecast_rows:
+            lead_hours = (row.date_time - row.forecast.created_at).total_seconds() / 3600
+            if lead_hours < start_hours or lead_hours >= end_hours:
+                continue
+            if row.date_time not in predicted_by_date_time:
+                predicted_by_date_time[row.date_time] = row.agile_pred
+
+        predicted = pd.Series(predicted_by_date_time).sort_index()
+        if len(predicted) > 0:
+            predicted.index = pd.to_datetime(predicted.index)
+        return predicted
+
+    def build_metrics_table(self, actual, forecast_rows):
+        columns = []
+        metrics_by_key = {"mae": [], "rmse": [], "bias": []}
+
+        for offset_days in range(self.max_offset_days + 1):
+            predicted = self.build_predicted_series(
+                forecast_rows,
+                offset_days * 24,
+                (offset_days + 1) * 24,
+            )
+            metrics = self.calculate_error_metrics(actual, predicted)
+            if metrics is None:
+                continue
+
+            columns.append(
+                {
+                    "label": self.format_offset_label(offset_days),
+                    "n": metrics["n"],
+                }
+            )
+            metrics_by_key["mae"].append(f"{metrics['mae']:.2f}")
+            metrics_by_key["rmse"].append(f"{metrics['rmse']:.2f}")
+            metrics_by_key["bias"].append(f"{metrics['bias']:+.2f}")
+
+        return {
+            "columns": columns,
+            "rows": [
+                {"label": "MAE", "values": metrics_by_key["mae"]},
+                {"label": "RMSE", "values": metrics_by_key["rmse"]},
+                {"label": "Bias", "values": metrics_by_key["bias"]},
+            ],
+            "mobile_rows": [
+                {
+                    "label": column["label"],
+                    "n": column["n"],
+                    "mae": metrics_by_key["mae"][index],
+                    "rmse": metrics_by_key["rmse"][index],
+                    "bias": metrics_by_key["bias"][index],
+                }
+                for index, column in enumerate(columns)
+            ],
+        }
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        region = self.kwargs.get("region", "X").upper()
+        if region not in regions:
+            region = "X"
+
+        try:
+            offset_days = int(self.request.GET.get("offset_days", 1))
+        except ValueError:
+            offset_days = 1
+        offset_days = min(max(offset_days, 0), self.max_offset_days)
+        start_hours = offset_days * 24
+        end_hours = (offset_days + 1) * 24
+        offset_label = self.format_offset_label(offset_days)
+
+        context["region"] = region
+        context["region_name"] = regions.get(region, {"name": ""})["name"]
+        context["offset_days"] = offset_days
+        context["offset_label"] = offset_label
+        context["offset_options"] = [
+            {"value": days, "label": self.format_offset_label(days)} for days in range(self.max_offset_days + 1)
+        ]
+
+        window_key, start, end, custom_start_date, custom_end_date = self.get_date_window()
+        context["window_key"] = window_key
+        context["window_options"] = [
+            {"key": key, "label": value["label"]} for key, value in self.window_options.items()
+        ]
+        context["custom_start_date"] = custom_start_date
+        context["custom_end_date"] = custom_end_date
+
+        actual_rows = list(
+            PriceHistory.objects.filter(date_time__gte=start, date_time__lte=end)
+            .order_by("date_time")
+            .values_list("date_time", "day_ahead")
+        )
+
+        if actual_rows:
+            day_ahead = pd.Series(data=[row[1] for row in actual_rows], index=[row[0] for row in actual_rows])
+            actual = day_ahead_to_agile(day_ahead, region=region).sort_index()
+        else:
+            actual = pd.Series(dtype=float)
+
+        forecast_rows = list(
+            AgileData.objects.filter(region=region, date_time__gte=start, date_time__lte=end)
+            .select_related("forecast")
+            .order_by("date_time", "-forecast__created_at")
+        )
+        predicted = self.build_predicted_series(forecast_rows, start_hours, end_hours)
+        metrics_table = self.build_metrics_table(actual, forecast_rows)
+
+        figure = make_subplots(rows=1, cols=1)
+        hover_template_price = "%{x|%d %b %H:%M}<br>%{y:.2f}p/kWh"
+
+        if len(actual) > 0:
+            figure.add_trace(
+                go.Scatter(
+                    x=actual.index.tz_convert("GB"),
+                    y=actual,
+                    line={"color": "white", "width": 2},
+                    mode="lines",
+                    name="Actual Agile",
+                    hovertemplate=hover_template_price,
+                )
+            )
+
+        prediction_segment_count = self.add_prediction_traces(figure, predicted, offset_label, hover_template_price)
+        error_metrics = self.calculate_error_metrics(actual, predicted)
+        if error_metrics is None:
+            title = f"Agile Price History - {offset_label} ahead"
+        else:
+            title = (
+                f"Agile Price History - {offset_label} ahead | "
+                f"MAE {error_metrics['mae']:.2f}p/kWh | "
+                f"RMSE {error_metrics['rmse']:.2f}p/kWh | "
+                f"Bias {error_metrics['bias']:+.2f}p/kWh"
+            )
+
+        figure.update_layout(
+            title={"text": title, "x": 0.5},
+            yaxis={"title": "Agile Price [p/kWh]"},
+            margin={"r": 5, "t": 50},
+            legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="right", x=1),
+            height=520,
+            template="plotly_dark",
+            hovermode="x",
+            plot_bgcolor="#212529",
+            paper_bgcolor="#343a40",
+        )
+        figure.update_xaxes(
+            tickformatstops=[
+                dict(dtickrange=[None, 86000000], value="%H:%M<br>%a %d %b"),
+                dict(dtickrange=[86000000, None], value="%d %b"),
+            ],
+        )
+        figure.update_yaxes(title_text="Agile Price [p/kWh]", fixedrange=True)
+
+        context["graph"] = figure.to_html(
+            full_html=False,
+            config={
+                "modeBarButtonsToRemove": [
+                    "zoom",
+                    "pan",
+                    "select",
+                    "zoomIn",
+                    "zoomOut",
+                    "autoScale",
+                    "resetScale",
+                ]
+            },
+        )
+        context["prediction_count"] = len(predicted)
+        context["prediction_segment_count"] = prediction_segment_count
+        context["error_metrics"] = error_metrics
+        context["metrics_table"] = metrics_table
+        context["actual_count"] = len(actual)
+        return context
+
+
 class GraphFormView(FormView):
     form_class = ForecastForm
     template_name = "graph.html"
@@ -405,6 +685,7 @@ class GraphFormView(FormView):
         show_generation_and_demand = kwargs.get("show_generation_and_demand", True)
         show_range = kwargs.get("show_range_on_most_recent_forecast", True)
         show_overlap = kwargs.get("show_forecast_overlap", False)
+        show_export = kwargs.get("show_export_pricing", False)
         # print(">>> views.py | GraphFormView | update_chart")
         # print(forecasts_to_plot)
 
@@ -428,7 +709,9 @@ class GraphFormView(FormView):
         p = PriceHistory.objects.filter(date_time__gte=start).order_by("-date_time")
 
         day_ahead = pd.Series(index=[a.date_time for a in p], data=[a.day_ahead for a in p])
-        agile = day_ahead_to_agile(day_ahead, region=region).sort_index()
+        agile = day_ahead_to_agile(day_ahead, region=region, export=show_export).sort_index()
+        price_label = "Agile Export Price" if show_export else "Agile Price"
+        actual_label = "Actual Export" if show_export else "Actual"
 
         hover_template_time_price = "%{x|%H:%M}<br>%{y:.2f}p/kWh"
         hover_template_price = "%{y:.2f}p/kWh"
@@ -439,7 +722,7 @@ class GraphFormView(FormView):
                 y=agile.loc[:forecast_end],
                 marker={"symbol": 104, "size": 1, "color": "white"},
                 mode="lines",
-                name="Actual",
+                name=actual_label,
                 hovertemplate=hover_template_price,
             )
         ]
@@ -457,7 +740,13 @@ class GraphFormView(FormView):
                     d = list(d.filter(date_time__lte=limit))
 
                 x = [a.date_time for a in d if (a.date_time >= agile.index[-1] or show_overlap)]
-                y = [a.agile_pred for a in d if (a.date_time >= agile.index[-1] or show_overlap)]
+                source = pd.Series(
+                    index=pd.to_datetime([a.date_time for a in d]),
+                    data=[a.agile_pred for a in d],
+                )
+                if show_export:
+                    source = import_agile_to_export_agile(source, region=region)
+                y = [source.loc[pd.Timestamp(a.date_time)] for a in d if (a.date_time >= agile.index[-1] or show_overlap)]
 
                 df = pd.Series(index=pd.to_datetime(x), data=y).sort_index()
                 try:
@@ -480,10 +769,16 @@ class GraphFormView(FormView):
                 ]
 
                 if (width == 3) and (d[0].agile_high != d[0].agile_low and show_range):
+                    low_source = pd.Series(index=pd.to_datetime([a.date_time for a in d]), data=[a.agile_low for a in d])
+                    high_source = pd.Series(index=pd.to_datetime([a.date_time for a in d]), data=[a.agile_high for a in d])
+                    if show_export:
+                        low_source = import_agile_to_export_agile(low_source, region=region)
+                        high_source = import_agile_to_export_agile(high_source, region=region)
+
                     data = data + [
                         go.Scatter(
                             x=df.index,
-                            y=[a.agile_low for a in d if (a.date_time >= agile.index[-1] or show_overlap)],
+                            y=[low_source.loc[pd.Timestamp(a.date_time)] for a in d if (a.date_time >= agile.index[-1] or show_overlap)],
                             marker={"symbol": 104, "size": 10},
                             mode="lines",
                             line=dict(width=1, color="red"),
@@ -493,7 +788,7 @@ class GraphFormView(FormView):
                         ),
                         go.Scatter(
                             x=df.index,
-                            y=[a.agile_high for a in d if (a.date_time >= agile.index[-1] or show_overlap)],
+                            y=[high_source.loc[pd.Timestamp(a.date_time)] for a in d if (a.date_time >= agile.index[-1] or show_overlap)],
                             marker={"symbol": 104, "size": 10},
                             mode="lines",
                             line=dict(width=1, color="red"),
@@ -510,7 +805,7 @@ class GraphFormView(FormView):
             figure = make_subplots(
                 rows=2,
                 cols=1,
-                subplot_titles=("Agile Price", "Generation and Demand"),
+                subplot_titles=(price_label, "Generation and Demand"),
                 shared_xaxes=True,
                 vertical_spacing=0.1,
             )
@@ -612,7 +907,7 @@ class GraphFormView(FormView):
             figure.append_trace(d, row=1, col=1)
 
         layout = dict(
-            yaxis={"title": "Agile Price [p/kWh]"},
+            yaxis={"title": f"{price_label} [p/kWh]"},
             margin={
                 "r": 5,
                 "t": 50,
@@ -629,7 +924,7 @@ class GraphFormView(FormView):
             paper_bgcolor="#343a40",
         )
         figure.update_yaxes(
-            title_text="Agile Price [p/kWh]",
+            title_text=f"{price_label} [p/kWh]",
             row=1,
             col=1,
             fixedrange=True,
@@ -678,14 +973,6 @@ class GraphFormView(FormView):
         return context
 
     def form_valid(self, form):
-        # print(">>>views.py | GraphFormView | form_valid")
-        # print(form.cleaned_data)
-        context = self.get_context_data(form=form)
-        context = self.update_chart(context=context, **form.cleaned_data)
-
-        return self.render_to_response(context=context)
-
-    def form2_valid(self, form):
         # print(">>>views.py | GraphFormView | form_valid")
         # print(form.cleaned_data)
         context = self.get_context_data(form=form)

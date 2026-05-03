@@ -535,30 +535,51 @@ def get_agile(start=pd.Timestamp("2023-07-01"), tz="GB", region="G"):
     return df.rename("agile")
 
 
-def day_ahead_to_agile(df, reverse=False, region="G"):
+def day_ahead_to_agile(df, reverse=False, region="G", export=False):
     df.index = df.index.tz_convert("GB")
     x = pd.DataFrame(df).set_axis(["In"], axis=1)
     x["Out"] = x["In"]
     x["Peak"] = (x.index.hour >= 16) & (x.index.hour < 19)
 
+    if export:
+        factor, base_adder, peak_adder = regions[region]["export_factors"]
+        if reverse:
+            x.loc[x["Peak"], "Out"] -= peak_adder
+            x["Out"] -= base_adder
+            x["Out"] /= factor
+        else:
+            x["Out"] *= factor
+            x["Out"] += base_adder
+            x.loc[x["Peak"], "Out"] += peak_adder
+            x["Out"] = x["Out"].clip(lower=0)
+
+        name = "day_ahead" if reverse else "agile_export"
+        return x["Out"].rename(name)
+
     shifts = pd.Series(GLOBAL_SETTINGS["SHIFTS"])
     shifts.index = pd.to_datetime(shifts.index).tz_localize("GB")
 
-    shifts = pd.concat([shifts, pd.Series(index=[x.index[-1]], data=[shifts.iloc[-1]])]).sort_index()
-
-    shifts = shifts.resample("30min").ffill().reindex(x.index).ffill().bfill()
+    unique_index = pd.DatetimeIndex(x.index.unique()).sort_values()
+    shifts = pd.concat([shifts, pd.Series(index=[unique_index[-1]], data=[shifts.iloc[-1]])]).sort_index()
+    shifts = shifts.resample("30min").ffill().reindex(unique_index).ffill().bfill()
+    x["Shift"] = shifts.reindex(x.index).to_numpy()
 
     if reverse:
         x.loc[x["Peak"], "Out"] -= regions[region]["factors"][1]
-        x.loc[x["Peak"], "Out"] -= shifts
+        x.loc[x["Peak"], "Out"] -= x.loc[x["Peak"], "Shift"]
         x["Out"] /= regions[region]["factors"][0]
     else:
         x["Out"] *= regions[region]["factors"][0]
         x.loc[x["Peak"], "Out"] += regions[region]["factors"][1]
-        x.loc[x["Peak"], "Out"] += shifts
+        x.loc[x["Peak"], "Out"] += x.loc[x["Peak"], "Shift"]
 
     name = "day_ahead" if reverse else "agile"
     return x["Out"].rename(name)
+
+
+def import_agile_to_export_agile(df, region="G"):
+    day_ahead = day_ahead_to_agile(df, reverse=True, region=region)
+    return day_ahead_to_agile(day_ahead, region=region, export=True)
 
 
 def df_to_Model(df, myModel, update=False):

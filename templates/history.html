@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<div class="container-lg fluid">
+    <div class="row bg-body text-center">
+        <h3>{{region_name}} {% if region != "X" %} (DNO Region {{region}}) {% endif %}</h3>
+    </div>
+    <div class="row">
+        <div class="col-lg-9">
+            <div class="row">{% if graph %} {{ graph|safe }} {% endif %}</div>
+            {% if metrics_table.columns %}
+            <div class="row px-2 pb-4">
+                <div class="table-responsive d-none d-md-block">
+                    <table class="table table-sm table-dark table-striped table-bordered align-middle text-end">
+                        <thead>
+                            <tr>
+                                <th scope="col" class="text-start">Metric</th>
+                                {% for column in metrics_table.columns %}
+                                <th scope="col">
+                                    {{ column.label }}<br />
+                                    <span class="fw-normal text-body-secondary">n={{ column.n }}</span>
+                                </th>
+                                {% endfor %}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in metrics_table.rows %}
+                            <tr>
+                                <th scope="row" class="text-start">{{ row.label }}</th>
+                                {% for value in row.values %}
+                                <td>{{ value }}</td>
+                                {% endfor %}
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                <div class="table-responsive d-md-none">
+                    <table class="table table-sm table-dark table-striped table-bordered align-middle text-end">
+                        <thead>
+                            <tr>
+                                <th scope="col" class="text-start">Offset</th>
+                                <th scope="col">n</th>
+                                <th scope="col">MAE</th>
+                                <th scope="col">RMSE</th>
+                                <th scope="col">Bias</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in metrics_table.mobile_rows %}
+                            <tr>
+                                <th scope="row" class="text-start">{{ row.label }}</th>
+                                <td>{{ row.n }}</td>
+                                <td>{{ row.mae }}</td>
+                                <td>{{ row.rmse }}</td>
+                                <td>{{ row.bias }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        <div class="col-lg-3 bg-body">
+            <form method="get" action="{% url 'history' region %}" class="p-3">
+                <div class="mb-3">
+                    <label for="regionSelect" class="form-label">Region</label>
+                    <select id="regionSelect" class="form-select">
+                        {% for key, value in REGIONS.items %}
+                        <option value="{{ key }}" {% if key == region %}selected{% endif %}>{{ key }} - {{ value }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label for="bucketSelect" class="form-label">Prediction Offset</label>
+                    <select id="bucketSelect" name="offset_days" class="form-select">
+                        {% for option in offset_options %}
+                        <option value="{{ option.value }}" {% if option.value == offset_days %}selected{% endif %}>
+                            {{ option.label }} ahead
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label for="windowSelect" class="form-label">Date Window</label>
+                    <select id="windowSelect" name="window" class="form-select">
+                        {% for option in window_options %}
+                        <option value="{{ option.key }}" {% if option.key == window_key %}selected{% endif %}>
+                            {{ option.label }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div id="customDateControls">
+                    <div class="mb-3">
+                        <label for="startDateInput" class="form-label">Start Date</label>
+                        <input
+                            id="startDateInput"
+                            name="start_date"
+                            type="date"
+                            value="{{ custom_start_date }}"
+                            class="form-control"
+                        />
+                    </div>
+                    <div class="mb-3">
+                        <label for="endDateInput" class="form-label">End Date</label>
+                        <input
+                            id="endDateInput"
+                            name="end_date"
+                            type="date"
+                            value="{{ custom_end_date }}"
+                            class="form-control"
+                        />
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary w-100">Update</button>
+            </form>
+            <div class="px-3 pb-3">
+                <div class="small text-body-secondary">
+                    Showing {{ actual_count }} actual prices and {{ prediction_count }} predictions for {{ offset_label }} ahead.
+                </div>
+            </div>
+            <div class="px-3 pb-3">
+                <div class="border-top pt-3 small text-body-secondary">
+                    <p class="mb-2">
+                        This chart compares the actual Agile price with predictions made for the selected lead time.
+                    </p>
+                    <p class="mb-2">
+                        The prediction offset is measured from when the forecast was created to the price slot being predicted.
+                    </p>
+                    <p class="mb-2">
+                        MAE is the average absolute error, in p/kWh.
+                    </p>
+                    <p class="mb-2">
+                        RMSE is similar but gives more weight to larger errors.
+                    </p>
+                    <p class="mb-0">
+                        Bias is the average signed error, so positive means predictions were too high and negative means they were too low.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.addEventListener("DOMContentLoaded", () => {
+        const regionSelect = document.getElementById("regionSelect");
+        const windowSelect = document.getElementById("windowSelect");
+        const customDateControls = document.getElementById("customDateControls");
+
+        const updateCustomDateVisibility = () => {
+            customDateControls.classList.toggle("d-none", windowSelect.value !== "custom");
+        };
+
+        regionSelect.addEventListener("change", () => {
+            const params = new URLSearchParams(new FormData(regionSelect.form));
+            window.location.href = `/history/${regionSelect.value}/?${params.toString()}`;
+        });
+        windowSelect.addEventListener("change", updateCustomDateVisibility);
+        updateCustomDateVisibility();
+    });
+</script>
+
+{% endblock content %}
