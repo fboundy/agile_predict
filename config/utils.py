@@ -58,6 +58,130 @@ def get_gb60():
     return price
 
 
+def get_gas_ttf_history(start=None, end=None):
+    def as_utc(value):
+        timestamp = pd.Timestamp(value)
+        if timestamp.tzinfo is None:
+            return timestamp.tz_localize("UTC")
+        return timestamp.tz_convert("UTC")
+
+    start = as_utc(start or "2023-07-01")
+    end = as_utc(end or pd.Timestamp.now(tz="UTC")) + pd.Timedelta("1D")
+    url = "https://query2.finance.yahoo.com/v8/finance/chart/TTF=F"
+    params = {"range": "max", "interval": "1d"}
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    try:
+        response = requests.get(url, params=params, headers=headers, timeout=30)
+        response.raise_for_status()
+        result = response.json()["chart"]["result"][0]
+        timestamps = result["timestamp"]
+        closes = result["indicators"]["quote"][0]["close"]
+    except Exception:
+        logger.exception("Unable to download Yahoo TTF=F gas prices")
+        return pd.Series(dtype=float, name="gas_ttf")
+
+    gas = pd.Series(
+        data=closes,
+        index=pd.to_datetime(timestamps, unit="s", utc=True),
+        name="gas_ttf",
+        dtype=float,
+    ).dropna()
+    gas.index = gas.index.tz_convert("GB")
+    gas = gas.sort_index()
+    return gas[(gas.index >= start.tz_convert("GB")) & (gas.index <= end.tz_convert("GB"))]
+
+
+def gas_ttf_at(created_at, gas_history=None):
+    created_at = pd.Timestamp(created_at)
+    if created_at.tzinfo is None:
+        created_at = created_at.tz_localize("UTC")
+    created_at = created_at.tz_convert("GB")
+
+    gas_history = gas_history if gas_history is not None else get_gas_ttf_history(end=created_at)
+    if len(gas_history) == 0:
+        return None
+
+    gas = gas_history[gas_history.index <= created_at]
+    if len(gas) == 0:
+        return float(gas_history.iloc[0])
+    return float(gas.iloc[-1])
+
+
+def nuclear_availability_to_half_hourly(df, start=None, end=None):
+    if len(df) == 0:
+        return pd.Series(dtype=float, name="nuclear")
+
+    data = df.copy()
+    data["forecastDate"] = pd.to_datetime(data["forecastDate"]).dt.tz_localize("GB")
+    data = data.sort_values(["forecastDate", "publishTime"])
+    data = data.drop_duplicates("forecastDate", keep="last")
+    series = data.set_index("forecastDate")["outputUsable"].astype(float).rename("nuclear")
+
+    def as_gb(value):
+        timestamp = pd.Timestamp(value)
+        if timestamp.tzinfo is None:
+            return timestamp.tz_localize("GB")
+        return timestamp.tz_convert("GB")
+
+    start = as_gb(start or series.index.min())
+    end = as_gb(end or (series.index.max() + pd.Timedelta("1D") - pd.Timedelta("30min")))
+
+    series = series.reindex(pd.date_range(series.index.min(), series.index.max(), freq="1D", tz="GB")).ffill()
+    half_hourly = series.reindex(pd.date_range(start.floor("D"), end.ceil("D"), freq="30min", tz="GB")).ffill()
+    return half_hourly.loc[start:end].rename("nuclear")
+
+
+def get_latest_nuclear_forecast(start=None, end=None):
+    url = "https://data.elexon.co.uk/bmrs/api/v1/forecast/availability/daily"
+    params = {"fuelType": "NUCLEAR", "format": "json"}
+    try:
+        response = requests.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        df = pd.DataFrame(response.json()["data"])
+    except Exception:
+        logger.exception("Unable to download latest nuclear availability forecast")
+        return pd.Series(dtype=float, name="nuclear")
+
+    return nuclear_availability_to_half_hourly(df, start=start, end=end)
+
+
+def get_nuclear_estimate_for_forecast_date(forecast_date, created_at):
+    forecast_date = pd.Timestamp(forecast_date).tz_convert("GB").normalize()
+    created_at = pd.Timestamp(created_at).tz_convert("UTC")
+    data = get_nuclear_availability_evolution(forecast_date)
+    if len(data) == 0:
+        return None
+
+    known = data[data["publishTime"] <= created_at].sort_values("publishTime")
+    if len(known) == 0:
+        known = data.sort_values("publishTime").head(1)
+    return float(known.iloc[-1]["outputUsable"])
+
+
+def get_nuclear_availability_evolution(forecast_date):
+    forecast_date = pd.Timestamp(forecast_date).tz_convert("GB").normalize()
+    url = "https://data.elexon.co.uk/bmrs/api/v1/forecast/availability/daily/evolution"
+    params = {
+        "fuelType": "NUCLEAR",
+        "forecastDate": forecast_date.strftime("%Y-%m-%d"),
+        "format": "json",
+    }
+    try:
+        response = requests.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        data = pd.DataFrame(response.json()["data"])
+    except Exception:
+        logger.warning("Unable to download nuclear availability evolution for %s", forecast_date.date())
+        return pd.DataFrame()
+
+    if len(data) == 0:
+        return pd.DataFrame()
+
+    data["publishTime"] = pd.to_datetime(data["publishTime"], utc=True)
+    return data
+
+
 def _oct_time(d):
     # print(d)
     return datetime(
@@ -226,7 +350,19 @@ def get_latest_history(start):
 
     hist = hist.drop([f"{c}_f" for c in meteo_cols if c in hist.columns], axis=1)
 
-    all_cols = ["total_wind", "bm_wind", "solar", "demand"] + meteo_cols
+    gas = get_gas_ttf_history(start=start)
+    if len(gas) > 0:
+        hist["gas_ttf"] = gas.reindex(hist.index, method="ffill").bfill()
+    else:
+        hist["gas_ttf"] = 0
+
+    nuclear = get_latest_nuclear_forecast(start=hist.index.min(), end=hist.index.max())
+    if len(nuclear) > 0:
+        hist["nuclear"] = nuclear.reindex(hist.index, method="ffill").bfill()
+    else:
+        hist["nuclear"] = 0
+
+    all_cols = ["total_wind", "bm_wind", "solar", "nuclear", "gas_ttf", "demand"] + meteo_cols
     missing_cols = [c for c in all_cols if c not in hist.columns]
     if len(missing_cols) > 0:
         logger.error(f">>> ERROR: No historic data for {missing_cols} ")
@@ -325,7 +461,15 @@ def get_latest_forecast():
     df.loc[df["da_wind"] > 0, "bm_wind"] = df["da_wind"]
     df.drop("da_wind", axis=1, inplace=True)
 
-    all_cols = ["emb_wind", "bm_wind", "solar", "demand", "temp_2m", "wind_10m", "rad"]
+    nuclear = get_latest_nuclear_forecast(start=df.index.min(), end=df.index.max())
+    if len(nuclear) > 0:
+        df["nuclear"] = nuclear.reindex(df.index, method="ffill").bfill()
+    else:
+        df["nuclear"] = 0
+
+    df["gas_ttf"] = gas_ttf_at(pd.Timestamp.now(tz="UTC"))
+
+    all_cols = ["emb_wind", "bm_wind", "solar", "nuclear", "gas_ttf", "demand", "temp_2m", "wind_10m", "rad"]
     missing_cols += [c for c in all_cols if c not in df.columns]
     if len(missing_cols) > 0:
         logger.error("No forecast data for columns=%s", missing_cols)
@@ -538,6 +682,7 @@ def get_agile(start=pd.Timestamp("2023-07-01"), tz="GB", region="G"):
 def day_ahead_to_agile(df, reverse=False, region="G", export=False):
     df.index = df.index.tz_convert("GB")
     x = pd.DataFrame(df).set_axis(["In"], axis=1)
+    x["In"] = x["In"].astype(float)
     x["Out"] = x["In"]
     x["Peak"] = (x.index.hour >= 16) & (x.index.hour < 19)
 
@@ -561,7 +706,8 @@ def day_ahead_to_agile(df, reverse=False, region="G", export=False):
 
     unique_index = pd.DatetimeIndex(x.index.unique()).sort_values()
     shifts = pd.concat([shifts, pd.Series(index=[unique_index[-1]], data=[shifts.iloc[-1]])]).sort_index()
-    shifts = shifts.resample("30min").ffill().reindex(unique_index).ffill().bfill()
+    shifts = shifts.resample("30min").ffill()
+    shifts = shifts.reindex(shifts.index.union(unique_index)).sort_index().ffill().bfill().reindex(unique_index)
     x["Shift"] = shifts.reindex(x.index).to_numpy()
 
     if reverse:

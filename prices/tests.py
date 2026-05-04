@@ -6,8 +6,14 @@ from django.utils import timezone
 
 from config.settings import GLOBAL_SETTINGS
 from config.utils import day_ahead_to_agile
+from prices.forecast_features import (
+    build_training_data,
+    FEATURE_SETS,
+    latest_prediction_features,
+    resolve_feature_columns,
+)
 from prices.forms import ForecastForm
-from prices.models import AgileData, Forecasts, PriceHistory
+from prices.models import AgileData, ExternalForecast, Forecasts, PriceHistory
 
 
 class HistoryViewTests(TestCase):
@@ -76,7 +82,8 @@ class HistoryViewTests(TestCase):
 
         for offset_days, predicted in [(0, 1), (1, -2)]:
             date_time = created_at + timedelta(days=offset_days, hours=1)
-            PriceHistory.objects.create(date_time=date_time, agile=0, day_ahead=0)
+            day_ahead = day_ahead_to_agile(pd.Series([0], index=[date_time]), reverse=True, region="X").iloc[0]
+            PriceHistory.objects.create(date_time=date_time, agile=0, day_ahead=day_ahead)
             AgileData.objects.create(
                 forecast=forecast,
                 region="X",
@@ -95,6 +102,58 @@ class HistoryViewTests(TestCase):
         self.assertContains(response, "Offset")
         self.assertContains(response, "+1.00")
         self.assertContains(response, "-2.00")
+
+    def test_history_gx_offers_external_comparison_without_dropdown_region(self):
+        created_at = timezone.now() - timedelta(hours=6)
+        ExternalForecast.objects.create(
+            source=ExternalForecast.SOURCE_X2R,
+            region="G",
+            forecast_name="x2r test",
+            source_created_at=created_at,
+            date_time=created_at + timedelta(hours=1),
+            agile_pred=12,
+        )
+
+        response = self.client.get("/history/Gx/?compare_x2r=1")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Compare AgileForecast")
+        self.assertContains(response, "Compare X2R")
+        self.assertContains(response, "X2R comparison predictions")
+        self.assertNotContains(response, 'value="GX"')
+
+    def test_history_gx_metrics_table_includes_selected_external_forecasts(self):
+        created_at = timezone.now() - timedelta(hours=6)
+
+        for offset_minutes, actual_price, predicted_price in [(60, 10, 12), (90, 10, 14)]:
+            date_time = created_at + timedelta(minutes=offset_minutes)
+            day_ahead = day_ahead_to_agile(pd.Series([actual_price], index=[date_time]), reverse=True, region="G").iloc[0]
+            PriceHistory.objects.create(date_time=date_time, agile=actual_price, day_ahead=day_ahead)
+            ExternalForecast.objects.create(
+                source=ExternalForecast.SOURCE_X2R,
+                region="G",
+                forecast_name="x2r metrics test",
+                source_created_at=created_at,
+                date_time=date_time,
+                agile_pred=predicted_price,
+            )
+
+        response = self.client.get("/history/Gx/?compare_x2r=1&offset_days=0")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "X2R MAE")
+        self.assertContains(response, "X2R RMSE")
+        self.assertContains(response, "X2R Bias")
+        self.assertContains(response, "3.00")
+        self.assertContains(response, "3.16")
+        self.assertContains(response, "+3.00")
+
+    def test_history_regular_region_does_not_offer_external_comparison(self):
+        response = self.client.get("/history/G/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Compare AgileForecast")
+        self.assertNotContains(response, "Compare X2R")
 
 
 class ExportPricingTests(TestCase):
@@ -129,3 +188,54 @@ class ExportPricingTests(TestCase):
         form = ForecastForm()
 
         self.assertIn("show_export_pricing", form.fields)
+
+
+class ForecastFeatureTests(TestCase):
+    def test_resolve_feature_columns_supports_named_sets_and_drops(self):
+        features = resolve_feature_columns(feature_set="weather", drop_features=["rad"])
+
+        self.assertIn("temp_2m", features)
+        self.assertNotIn("rad", features)
+        self.assertEqual(list(FEATURE_SETS["weather"]).count("rad"), 1)
+
+    def test_resolve_feature_columns_supports_explicit_feature_list(self):
+        features = resolve_feature_columns(explicit_features="demand, peak, weekend")
+
+        self.assertEqual(features, ["demand", "peak", "weekend"])
+
+    def test_build_training_data_uses_supplied_feature_set(self):
+        index = pd.to_datetime(["2026-05-01T22:00:00Z"])
+        created_at = pd.to_datetime(["2026-05-01T16:15:00Z"])
+        df = pd.DataFrame(
+            index=index,
+            data={
+                "forecast_id": [1],
+                "created_at": created_at,
+                "ag_start": pd.to_datetime(["2026-05-01T22:00:00Z"]),
+                "ag_end": pd.to_datetime(["2026-05-02T22:00:00Z"]),
+                "days_ago": [1],
+                "demand": [30],
+                "peak": [0],
+                "weekend": [0],
+            },
+        )
+        forecasts = pd.DataFrame(index=[1])
+        prices = pd.DataFrame(index=index, data={"day_ahead": [95]})
+
+        train_X, train_y = build_training_data(df, forecasts, prices, ["demand", "weekend"], max_days=7)
+
+        self.assertEqual(list(train_X.columns), ["demand", "weekend"])
+        self.assertEqual(train_y.iloc[0], 95)
+
+    def test_latest_prediction_features_preserves_requested_columns(self):
+        fc = pd.DataFrame(
+            data={
+                "demand": [30],
+                "emb_wind": [5],
+                "weekend": [0],
+            }
+        )
+
+        features = latest_prediction_features(fc, ["emb_wind", "demand"])
+
+        self.assertEqual(list(features.columns), ["emb_wind", "demand"])

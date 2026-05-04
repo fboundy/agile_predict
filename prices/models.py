@@ -52,6 +52,33 @@ class PlotImage(models.Model):
         return self.filename
 
 
+class ExternalForecast(models.Model):
+    SOURCE_AGILEFORECAST = "agileforecast"
+    SOURCE_X2R = "x2r"
+
+    SOURCE_CHOICES = [
+        (SOURCE_AGILEFORECAST, "AgileForecast"),
+        (SOURCE_X2R, "X2R"),
+    ]
+
+    source = models.CharField(max_length=32, choices=SOURCE_CHOICES)
+    region = models.CharField(max_length=2)
+    forecast_name = models.CharField(max_length=128, blank=True)
+    source_created_at = models.DateTimeField()
+    downloaded_at = models.DateTimeField(auto_now_add=True)
+    date_time = models.DateTimeField()
+    agile_pred = models.FloatField()
+    agile_low = models.FloatField(null=True, blank=True)
+    agile_high = models.FloatField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["source", "region", "source_created_at"]),
+            models.Index(fields=["source", "region", "date_time"]),
+        ]
+        unique_together = ("source", "region", "source_created_at", "date_time")
+
+
 class Forecasts(models.Model):
     name = models.CharField(unique=True, max_length=64)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -85,6 +112,8 @@ class History(models.Model):
     total_wind = models.FloatField()
     bm_wind = models.FloatField()
     solar = models.FloatField()
+    nuclear = models.FloatField(default=0)
+    gas_ttf = models.FloatField(null=True, blank=True)
     temp_2m = models.FloatField()
     wind_10m = models.FloatField()
     rad = models.FloatField()
@@ -100,6 +129,8 @@ class ForecastData(models.Model):
     bm_wind = models.FloatField()
     solar = models.FloatField()
     emb_wind = models.FloatField()
+    nuclear = models.FloatField(default=0)
+    gas_ttf = models.FloatField(null=True, blank=True)
     temp_2m = models.FloatField()
     wind_10m = models.FloatField()
     rad = models.FloatField()

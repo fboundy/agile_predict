@@ -24,7 +24,7 @@ from config.settings import GLOBAL_SETTINGS
 from config.utils import day_ahead_to_agile, import_agile_to_export_agile
 
 from .forms import ForecastForm
-from .models import AgileData, ForecastData, Forecasts, History, PlotImage, PriceHistory, UpdateJob
+from .models import AgileData, ExternalForecast, ForecastData, Forecasts, History, PlotImage, PriceHistory, UpdateJob
 
 regions = GLOBAL_SETTINGS["REGIONS"]
 PRIOR_DAYS = 2
@@ -46,10 +46,14 @@ def _update_options(request):
     if "skip_kde_plot" not in request.POST and "skip_kde_plot" not in request.GET:
         options["skip_kde_plot"] = True
 
-    for key in ["min_fd", "min_ad", "max_days", "train_frac", "drop_last"]:
+    for key in ["min_fd", "min_ad", "max_days", "train_frac", "drop_last", "feature_set", "features"]:
         value = request.POST.get(key, request.GET.get(key))
         if value not in {None, ""}:
             options[key] = value
+
+    drop_feature = request.POST.getlist("drop_feature") or request.GET.getlist("drop_feature")
+    if drop_feature:
+        options["drop_feature"] = drop_feature
 
     ignore_forecast = request.POST.getlist("ignore_forecast") or request.GET.getlist("ignore_forecast")
     if ignore_forecast:
@@ -503,9 +507,43 @@ class HistoryView(TemplateView):
             predicted.index = pd.to_datetime(predicted.index)
         return predicted
 
-    def build_metrics_table(self, actual, forecast_rows):
-        columns = []
-        metrics_by_key = {"mae": [], "rmse": [], "bias": []}
+    def build_external_predicted_series(self, forecast_rows, start_hours, end_hours):
+        predicted_by_date_time = {}
+        for row in forecast_rows:
+            lead_hours = (row.date_time - row.source_created_at).total_seconds() / 3600
+            if lead_hours < start_hours or lead_hours >= end_hours:
+                continue
+            if row.date_time not in predicted_by_date_time:
+                predicted_by_date_time[row.date_time] = row.agile_pred
+
+        predicted = pd.Series(predicted_by_date_time).sort_index()
+        if len(predicted) > 0:
+            predicted.index = pd.to_datetime(predicted.index)
+        return predicted
+
+    def format_metric_values(self, metrics):
+        if metrics is None:
+            return {
+                "n": "",
+                "mae": "",
+                "rmse": "",
+                "bias": "",
+            }
+
+        return {
+            "n": metrics["n"],
+            "mae": f"{metrics['mae']:.2f}",
+            "rmse": f"{metrics['rmse']:.2f}",
+            "bias": f"{metrics['bias']:+.2f}",
+        }
+
+    def build_metrics_table(self, actual, forecast_rows, external_rows_by_label=None):
+        external_rows_by_label = external_rows_by_label or {}
+        columns_by_offset = {}
+        metric_sets = {
+            "AgilePredict": {},
+            **{label: {} for label in external_rows_by_label},
+        }
 
         for offset_days in range(self.max_offset_days + 1):
             predicted = self.build_predicted_series(
@@ -514,43 +552,87 @@ class HistoryView(TemplateView):
                 (offset_days + 1) * 24,
             )
             metrics = self.calculate_error_metrics(actual, predicted)
-            if metrics is None:
-                continue
-
-            columns.append(
-                {
+            if metrics is not None:
+                columns_by_offset[offset_days] = {
                     "label": self.format_offset_label(offset_days),
                     "n": metrics["n"],
                 }
-            )
-            metrics_by_key["mae"].append(f"{metrics['mae']:.2f}")
-            metrics_by_key["rmse"].append(f"{metrics['rmse']:.2f}")
-            metrics_by_key["bias"].append(f"{metrics['bias']:+.2f}")
+                metric_sets["AgilePredict"][offset_days] = metrics
+
+            for label, external_rows in external_rows_by_label.items():
+                external_predicted = self.build_external_predicted_series(
+                    external_rows,
+                    offset_days * 24,
+                    (offset_days + 1) * 24,
+                )
+                external_metrics = self.calculate_error_metrics(actual, external_predicted)
+                if external_metrics is None:
+                    continue
+
+                if offset_days not in columns_by_offset:
+                    columns_by_offset[offset_days] = {
+                        "label": self.format_offset_label(offset_days),
+                        "n": "",
+                    }
+                metric_sets[label][offset_days] = external_metrics
+
+        columns = [
+            {
+                "offset": offset_days,
+                **column,
+            }
+            for offset_days, column in sorted(columns_by_offset.items())
+        ]
+
+        rows = []
+        mobile_rows = []
+
+        for source_label, metrics_by_offset in metric_sets.items():
+            if not metrics_by_offset:
+                continue
+
+            row_prefix = "" if source_label == "AgilePredict" else f"{source_label} "
+            for metric_key, metric_label in [("mae", "MAE"), ("rmse", "RMSE"), ("bias", "Bias")]:
+                rows.append(
+                    {
+                        "label": f"{row_prefix}{metric_label}",
+                        "values": [
+                            self.format_metric_values(metrics_by_offset.get(column["offset"]))[metric_key]
+                            for column in columns
+                        ],
+                    }
+                )
+
+            for column in columns:
+                values = self.format_metric_values(metrics_by_offset.get(column["offset"]))
+                if not values["n"]:
+                    continue
+
+                mobile_rows.append(
+                    {
+                        "source": source_label,
+                        "label": column["label"],
+                        "n": values["n"],
+                        "mae": values["mae"],
+                        "rmse": values["rmse"],
+                        "bias": values["bias"],
+                    }
+                )
 
         return {
             "columns": columns,
-            "rows": [
-                {"label": "MAE", "values": metrics_by_key["mae"]},
-                {"label": "RMSE", "values": metrics_by_key["rmse"]},
-                {"label": "Bias", "values": metrics_by_key["bias"]},
-            ],
-            "mobile_rows": [
-                {
-                    "label": column["label"],
-                    "n": column["n"],
-                    "mae": metrics_by_key["mae"][index],
-                    "rmse": metrics_by_key["rmse"][index],
-                    "bias": metrics_by_key["bias"][index],
-                }
-                for index, column in enumerate(columns)
-            ],
+            "rows": rows,
+            "mobile_rows": mobile_rows,
         }
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         region = self.kwargs.get("region", "X").upper()
-        if region not in regions:
+        compare_external_region = region == "GX"
+        data_region = "G" if compare_external_region else region
+        if not compare_external_region and region not in regions:
             region = "X"
+            data_region = "X"
 
         try:
             offset_days = int(self.request.GET.get("offset_days", 1))
@@ -561,8 +643,19 @@ class HistoryView(TemplateView):
         end_hours = (offset_days + 1) * 24
         offset_label = self.format_offset_label(offset_days)
 
+        compare_agileforecast = compare_external_region and _truthy(self.request.GET.get("compare_agileforecast"))
+        compare_x2r = compare_external_region and _truthy(self.request.GET.get("compare_x2r"))
+
         context["region"] = region
-        context["region_name"] = regions.get(region, {"name": ""})["name"]
+        context["data_region"] = data_region
+        context["compare_external_region"] = compare_external_region
+        context["compare_agileforecast"] = compare_agileforecast
+        context["compare_x2r"] = compare_x2r
+        context["region_name"] = (
+            "North Western England External Comparison"
+            if compare_external_region
+            else regions.get(region, {"name": ""})["name"]
+        )
         context["offset_days"] = offset_days
         context["offset_label"] = offset_label
         context["offset_options"] = [
@@ -585,17 +678,38 @@ class HistoryView(TemplateView):
 
         if actual_rows:
             day_ahead = pd.Series(data=[row[1] for row in actual_rows], index=[row[0] for row in actual_rows])
-            actual = day_ahead_to_agile(day_ahead, region=region).sort_index()
+            actual = day_ahead_to_agile(day_ahead, region=data_region).sort_index()
         else:
             actual = pd.Series(dtype=float)
 
         forecast_rows = list(
-            AgileData.objects.filter(region=region, date_time__gte=start, date_time__lte=end)
+            AgileData.objects.filter(region=data_region, date_time__gte=start, date_time__lte=end)
             .select_related("forecast")
             .order_by("date_time", "-forecast__created_at")
         )
         predicted = self.build_predicted_series(forecast_rows, start_hours, end_hours)
-        metrics_table = self.build_metrics_table(actual, forecast_rows)
+
+        external_sources = []
+        if compare_external_region:
+            if compare_agileforecast:
+                external_sources.append(
+                    (ExternalForecast.SOURCE_AGILEFORECAST, "AgileForecast", "#0dcaf0")
+                )
+            if compare_x2r:
+                external_sources.append((ExternalForecast.SOURCE_X2R, "X2R", "#fd7e14"))
+
+        external_rows_by_label = {}
+        for source, label, _color in external_sources:
+            external_rows_by_label[label] = list(
+                ExternalForecast.objects.filter(
+                    source=source,
+                    region=data_region,
+                    date_time__gte=start,
+                    date_time__lte=end,
+                ).order_by("date_time", "-source_created_at")
+            )
+
+        metrics_table = self.build_metrics_table(actual, forecast_rows, external_rows_by_label)
 
         figure = make_subplots(rows=1, cols=1)
         hover_template_price = "%{x|%d %b %H:%M}<br>%{y:.2f}p/kWh"
@@ -613,6 +727,24 @@ class HistoryView(TemplateView):
             )
 
         prediction_segment_count = self.add_prediction_traces(figure, predicted, offset_label, hover_template_price)
+        external_counts = []
+        if compare_external_region:
+            for source, label, color in external_sources:
+                external_rows = external_rows_by_label[label]
+                external_predicted = self.build_external_predicted_series(external_rows, start_hours, end_hours)
+                external_counts.append({"label": label, "count": len(external_predicted)})
+                if len(external_predicted) > 0:
+                    figure.add_trace(
+                        go.Scatter(
+                            x=external_predicted.index.tz_convert("GB"),
+                            y=external_predicted,
+                            line={"color": color, "width": 2, "dash": "dot"},
+                            mode="lines",
+                            name=f"{label} {offset_label} ahead",
+                            hovertemplate=hover_template_price,
+                        )
+                    )
+
         error_metrics = self.calculate_error_metrics(actual, predicted)
         if error_metrics is None:
             title = f"Agile Price History - {offset_label} ahead"
@@ -658,6 +790,7 @@ class HistoryView(TemplateView):
             },
         )
         context["prediction_count"] = len(predicted)
+        context["external_counts"] = external_counts
         context["prediction_segment_count"] = prediction_segment_count
         context["error_metrics"] = error_metrics
         context["metrics_table"] = metrics_table
@@ -815,16 +948,17 @@ class GraphFormView(FormView):
 
             f = Forecasts.objects.filter(id__in=forecasts_to_plot).order_by("-created_at")[0]
             d = ForecastData.objects.filter(forecast=f, date_time__lte=forecast_end).order_by("date_time")
+            forecast_points = list(d)
             logger.debug(
                 "Graph generation/demand data forecast_id=%s forecast_end=%s rows=%s",
                 f.id,
                 forecast_end,
-                d.count(),
+                len(forecast_points),
             )
             figure.add_trace(
                 go.Scatter(
-                    x=[a.date_time for a in d],
-                    y=[(a.demand + a.solar + a.emb_wind) / 1000 for a in d],
+                    x=[a.date_time for a in forecast_points],
+                    y=[(a.demand + a.solar + a.emb_wind) / 1000 for a in forecast_points],
                     line={"color": "cyan", "width": 3},
                     name="Forecast National Demand",
                 ),
@@ -834,9 +968,22 @@ class GraphFormView(FormView):
 
             figure.add_trace(
                 go.Scatter(
-                    x=[a.date_time for a in d],
-                    y=[a.bm_wind / 1000 for a in d],
+                    x=[a.date_time for a in forecast_points],
+                    y=[a.nuclear / 1000 for a in forecast_points],
                     fill="tozeroy",
+                    line={"color": "rgba(160,160,160,1)"},
+                    fillcolor="rgba(180,180,180,0.8)",
+                    name="Forecast Nuclear",
+                ),
+                row=2,
+                col=1,
+            )
+
+            figure.add_trace(
+                go.Scatter(
+                    x=[a.date_time for a in forecast_points],
+                    y=[(a.nuclear + a.bm_wind) / 1000 for a in forecast_points],
+                    fill="tonexty",
                     line={"color": "rgba(63,127,63)"},
                     fillcolor="rgba(127,255,127,0.8)",
                     name="Forecast Metered Wind",
@@ -847,8 +994,8 @@ class GraphFormView(FormView):
 
             figure.add_trace(
                 go.Scatter(
-                    x=[a.date_time for a in d],
-                    y=[(a.emb_wind + a.bm_wind) / 1000 for a in d],
+                    x=[a.date_time for a in forecast_points],
+                    y=[(a.nuclear + a.emb_wind + a.bm_wind) / 1000 for a in forecast_points],
                     fill="tonexty",
                     line={"color": "blue", "width": 1},
                     fillcolor="rgba(127,127,255,0.8)",
@@ -860,8 +1007,8 @@ class GraphFormView(FormView):
 
             figure.add_trace(
                 go.Scatter(
-                    x=[a.date_time for a in d],
-                    y=[(a.solar + a.emb_wind + a.bm_wind) / 1000 for a in d],
+                    x=[a.date_time for a in forecast_points],
+                    y=[(a.nuclear + a.solar + a.emb_wind + a.bm_wind) / 1000 for a in forecast_points],
                     fill="tonexty",
                     line={"color": "lightgray", "width": 3},
                     fillcolor="rgba(255,255,127,0.8)",
