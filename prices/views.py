@@ -7,6 +7,7 @@ import time
 import pandas as pd
 import plotly.graph_objects as go
 from django.conf import settings
+from django.db.models import Count, Sum
 from django.core.cache import cache
 from django.http import HttpResponse, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404
@@ -23,8 +24,20 @@ from plotly.subplots import make_subplots
 from config.settings import GLOBAL_SETTINGS
 from config.utils import day_ahead_to_agile, import_agile_to_export_agile
 
+from .external_forecasts import fetch_agileforecast, fetch_x2r
 from .forms import ForecastForm
-from .models import AgileData, ExternalForecast, ForecastData, Forecasts, History, PlotImage, PriceHistory, UpdateJob
+from .models import (
+    AgileData,
+    ExternalForecast,
+    ForecastData,
+    Forecasts,
+    History,
+    PlotImage,
+    PriceHistory,
+    RequestClientSeen,
+    RequestMetric,
+    UpdateJob,
+)
 
 regions = GLOBAL_SETTINGS["REGIONS"]
 PRIOR_DAYS = 2
@@ -33,6 +46,11 @@ logger = logging.getLogger("prices.web")
 
 def _truthy(value):
     return str(value).lower() in {"1", "true", "yes", "on"}
+
+
+def _can_use_admin_only_features(request):
+    user = getattr(request, "user", None)
+    return getattr(user, "is_staff", False) or getattr(settings, "LOCAL_REALTIME_EXTERNAL_FORECASTS", False)
 
 
 def _update_options(request):
@@ -386,6 +404,57 @@ class StatsView(TemplateView):
         return context
 
 
+class MetricsView(TemplateView):
+    template_name = "metrics.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        days = 14
+        start_date = timezone.localdate() - timedelta(days=days - 1)
+
+        request_rows = (
+            RequestMetric.objects.filter(date__gte=start_date)
+            .values("date", "surface")
+            .annotate(requests=Sum("request_count"))
+            .order_by("-date", "surface")
+        )
+        unique_rows = {
+            (row["date"], row["surface"]): row["unique_clients"]
+            for row in RequestClientSeen.objects.filter(date__gte=start_date)
+            .values("date", "surface")
+            .annotate(unique_clients=Count("client_hash"))
+        }
+
+        daily_rows = []
+        for row in request_rows:
+            daily_rows.append(
+                {
+                    **row,
+                    "unique_clients": unique_rows.get((row["date"], row["surface"]), 0),
+                }
+            )
+
+        top_paths = (
+            RequestMetric.objects.filter(date__gte=start_date)
+            .values("surface", "path")
+            .annotate(requests=Sum("request_count"))
+            .order_by("-requests")[:25]
+        )
+
+        hourly_rows = (
+            RequestMetric.objects.filter(date=timezone.localdate())
+            .values("hour", "surface")
+            .annotate(requests=Sum("request_count"))
+            .order_by("hour", "surface")
+        )
+
+        context["daily_rows"] = daily_rows
+        context["top_paths"] = top_paths
+        context["hourly_rows"] = hourly_rows
+        context["days"] = days
+        return context
+
+
 class HistoryView(TemplateView):
     template_name = "history.html"
     max_offset_days = 14
@@ -628,11 +697,10 @@ class HistoryView(TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         region = self.kwargs.get("region", "X").upper()
-        compare_external_region = region == "GX"
-        data_region = "G" if compare_external_region else region
-        if not compare_external_region and region not in regions:
+        if region not in regions:
             region = "X"
-            data_region = "X"
+        data_region = region
+        can_compare_external = data_region == "G" and _can_use_admin_only_features(self.request)
 
         try:
             offset_days = int(self.request.GET.get("offset_days", 1))
@@ -643,19 +711,15 @@ class HistoryView(TemplateView):
         end_hours = (offset_days + 1) * 24
         offset_label = self.format_offset_label(offset_days)
 
-        compare_agileforecast = compare_external_region and _truthy(self.request.GET.get("compare_agileforecast"))
-        compare_x2r = compare_external_region and _truthy(self.request.GET.get("compare_x2r"))
+        compare_agileforecast = can_compare_external and _truthy(self.request.GET.get("compare_agileforecast"))
+        compare_x2r = can_compare_external and _truthy(self.request.GET.get("compare_x2r"))
 
         context["region"] = region
         context["data_region"] = data_region
-        context["compare_external_region"] = compare_external_region
+        context["can_compare_external"] = can_compare_external
         context["compare_agileforecast"] = compare_agileforecast
         context["compare_x2r"] = compare_x2r
-        context["region_name"] = (
-            "North Western England External Comparison"
-            if compare_external_region
-            else regions.get(region, {"name": ""})["name"]
-        )
+        context["region_name"] = regions.get(region, {"name": ""})["name"]
         context["offset_days"] = offset_days
         context["offset_label"] = offset_label
         context["offset_options"] = [
@@ -690,7 +754,7 @@ class HistoryView(TemplateView):
         predicted = self.build_predicted_series(forecast_rows, start_hours, end_hours)
 
         external_sources = []
-        if compare_external_region:
+        if can_compare_external:
             if compare_agileforecast:
                 external_sources.append(
                     (ExternalForecast.SOURCE_AGILEFORECAST, "AgileForecast", "#0dcaf0")
@@ -728,7 +792,7 @@ class HistoryView(TemplateView):
 
         prediction_segment_count = self.add_prediction_traces(figure, predicted, offset_label, hover_template_price)
         external_counts = []
-        if compare_external_region:
+        if can_compare_external:
             for source, label, color in external_sources:
                 external_rows = external_rows_by_label[label]
                 external_predicted = self.build_external_predicted_series(external_rows, start_hours, end_hours)
@@ -806,8 +870,46 @@ class GraphFormView(FormView):
         kwargs = super(GraphFormView, self).get_form_kwargs()
         # kwargs["region"] = self.kwargs.get("region", "X").upper()
         kwargs["prefix"] = "test"
+        kwargs["local_realtime_external_forecasts"] = _can_use_admin_only_features(self.request)
         # print(kwargs)
         return kwargs
+
+    def fetch_live_external_forecasts(self, region, show_agileforecast, show_x2r):
+        if not _can_use_admin_only_features(getattr(self, "request", None)):
+            return [], []
+
+        forecasts = []
+        errors = []
+        sources = []
+        if show_agileforecast:
+            sources.append(("AgileForecast", "#0dcaf0", fetch_agileforecast))
+        if show_x2r:
+            sources.append(("X2R", "#fd7e14", fetch_x2r))
+
+        for label, color, fetcher in sources:
+            try:
+                forecast = fetcher(region)
+            except Exception as exc:
+                logger.warning("Unable to fetch live %s forecast for region %s: %s", label, region, exc)
+                errors.append(f"{label}: {exc}")
+                continue
+
+            forecasts.append(
+                {
+                    "label": label,
+                    "color": color,
+                    **forecast,
+                }
+            )
+
+        return forecasts, errors
+
+    def filter_forecast_rows_for_plot(self, rows, actual_end, plot_end, show_overlap):
+        return [
+            row
+            for row in rows
+            if row["date_time"] <= plot_end and (show_overlap or row["date_time"] >= actual_end)
+        ]
 
     def update_chart(self, context, **kwargs):
         region = context["region"]
@@ -819,6 +921,8 @@ class GraphFormView(FormView):
         show_range = kwargs.get("show_range_on_most_recent_forecast", True)
         show_overlap = kwargs.get("show_forecast_overlap", False)
         show_export = kwargs.get("show_export_pricing", False)
+        show_live_agileforecast = kwargs.get("show_live_agileforecast", False)
+        show_live_x2r = kwargs.get("show_live_x2r", False)
         # print(">>> views.py | GraphFormView | update_chart")
         # print(forecasts_to_plot)
 
@@ -831,6 +935,7 @@ class GraphFormView(FormView):
             forecast_end = first_forecast_data[48 * days_to_plot].date_time
         else:
             forecast_end = [d.date_time for d in first_forecast_data][-1]
+        plot_end = forecast_end
 
         # print(f"Forecast End: {forecast_end}")
         price_start = PriceHistory.objects.all().order_by("-date_time")[48 * PRIOR_DAYS].date_time
@@ -851,8 +956,8 @@ class GraphFormView(FormView):
 
         data = data + [
             go.Scatter(
-                x=agile.loc[:forecast_end].index.tz_convert("GB"),
-                y=agile.loc[:forecast_end],
+                x=agile.loc[:plot_end].index.tz_convert("GB"),
+                y=agile.loc[:plot_end],
                 marker={"symbol": 104, "size": 1, "color": "white"},
                 mode="lines",
                 name=actual_label,
@@ -871,15 +976,16 @@ class GraphFormView(FormView):
                     # print(limit)
                 else:
                     d = list(d.filter(date_time__lte=limit))
+                d = [row for row in d if row.date_time <= plot_end]
 
-                x = [a.date_time for a in d if (a.date_time >= agile.index[-1] or show_overlap)]
+                x = [a.date_time for a in d if a.date_time <= plot_end and (a.date_time >= agile.index[-1] or show_overlap)]
                 source = pd.Series(
                     index=pd.to_datetime([a.date_time for a in d]),
                     data=[a.agile_pred for a in d],
                 )
                 if show_export:
                     source = import_agile_to_export_agile(source, region=region)
-                y = [source.loc[pd.Timestamp(a.date_time)] for a in d if (a.date_time >= agile.index[-1] or show_overlap)]
+                y = [source.loc[pd.Timestamp(a.date_time)] for a in d if a.date_time <= plot_end and (a.date_time >= agile.index[-1] or show_overlap)]
 
                 df = pd.Series(index=pd.to_datetime(x), data=y).sort_index()
                 try:
@@ -911,7 +1017,11 @@ class GraphFormView(FormView):
                     data = data + [
                         go.Scatter(
                             x=df.index,
-                            y=[low_source.loc[pd.Timestamp(a.date_time)] for a in d if (a.date_time >= agile.index[-1] or show_overlap)],
+                            y=[
+                                low_source.loc[pd.Timestamp(a.date_time)]
+                                for a in d
+                                if a.date_time <= plot_end and (a.date_time >= agile.index[-1] or show_overlap)
+                            ],
                             marker={"symbol": 104, "size": 10},
                             mode="lines",
                             line=dict(width=1, color="red"),
@@ -921,7 +1031,11 @@ class GraphFormView(FormView):
                         ),
                         go.Scatter(
                             x=df.index,
-                            y=[high_source.loc[pd.Timestamp(a.date_time)] for a in d if (a.date_time >= agile.index[-1] or show_overlap)],
+                            y=[
+                                high_source.loc[pd.Timestamp(a.date_time)]
+                                for a in d
+                                if a.date_time <= plot_end and (a.date_time >= agile.index[-1] or show_overlap)
+                            ],
                             marker={"symbol": 104, "size": 10},
                             mode="lines",
                             line=dict(width=1, color="red"),
@@ -933,6 +1047,48 @@ class GraphFormView(FormView):
                         ),
                     ]
                 width = 1
+
+        live_external_forecasts, live_external_errors = self.fetch_live_external_forecasts(
+            region,
+            show_live_agileforecast,
+            show_live_x2r,
+        )
+        live_external_counts = []
+        for live_forecast in live_external_forecasts:
+            rows = self.filter_forecast_rows_for_plot(
+                live_forecast["rows"],
+                agile.index[-1],
+                plot_end,
+                show_overlap,
+            )
+            if not rows:
+                live_external_counts.append({"label": live_forecast["label"], "count": 0})
+                continue
+
+            source = pd.Series(
+                index=pd.to_datetime([row["date_time"] for row in rows]),
+                data=[row["agile_pred"] for row in rows],
+            ).sort_index()
+            if show_export:
+                source = import_agile_to_export_agile(source, region=region)
+            try:
+                source.index = source.index.tz_convert("GB")
+            except TypeError:
+                source.index = source.index.tz_localize("GB")
+
+            created_at = pd.Timestamp(live_forecast["source_created_at"]).tz_convert("GB")
+            live_external_counts.append({"label": live_forecast["label"], "count": len(source)})
+            data.append(
+                go.Scatter(
+                    x=source.index,
+                    y=source,
+                    marker={"symbol": 104, "size": 10},
+                    mode="lines",
+                    line={"color": live_forecast["color"], "width": 2, "dash": "dot"},
+                    name=f"{live_forecast['label']} Live ({created_at.strftime('%d-%b %H:%M')})",
+                    hovertemplate=hover_template_price,
+                )
+            )
 
         if show_generation_and_demand:
             figure = make_subplots(
@@ -1103,6 +1259,9 @@ class GraphFormView(FormView):
                 ]
             }
         )
+        context["live_external_forecasts_enabled"] = _can_use_admin_only_features(self.request)
+        context["live_external_counts"] = live_external_counts
+        context["live_external_errors"] = live_external_errors
 
         return context
 

@@ -99,6 +99,32 @@ def download_agileforecast_region_g():
     return count
 
 
+def fetch_agileforecast(region):
+    url = f"https://agileforecast.co.uk/api/{region.upper()}/"
+    response = requests.get(url, timeout=15)
+    response.raise_for_status()
+    payload = response.json()
+    if isinstance(payload, list):
+        payload = payload[0] if payload else {}
+
+    source_created_at = _parse_timestamp(payload["created_at"])
+    rows = [
+        {
+            "date_time": _parse_timestamp(row["date_time"]),
+            "agile_pred": float(row["agile_pred"]),
+            "agile_low": float(row["agile_low"]) if row.get("agile_low") is not None else None,
+            "agile_high": float(row["agile_high"]) if row.get("agile_high") is not None else None,
+        }
+        for row in payload.get("prices", [])
+    ]
+    return {
+        "source": ExternalForecast.SOURCE_AGILEFORECAST,
+        "name": payload.get("name", "AgileForecast"),
+        "source_created_at": source_created_at,
+        "rows": rows,
+    }
+
+
 def download_x2r_region_g():
     source = ExternalForecast.SOURCE_X2R
     if _downloaded_today(source):
@@ -123,6 +149,30 @@ def download_x2r_region_g():
     count = _save_rows(source, REGION, forecast_name, source_created_at, rows)
     logger.info("Downloaded X2R region G rows=%s created_at=%s", count, source_created_at)
     return count
+
+
+def fetch_x2r(region):
+    url = f"https://api.x2r.uk/agile/{region.upper()}"
+    response = requests.get(url, timeout=15)
+    response.raise_for_status()
+    payload = response.json()
+
+    source_created_at = _parse_timestamp(payload["forecast_at"])
+    rows = [
+        {
+            "date_time": _parse_timestamp(row["date"]),
+            "agile_pred": float(row["price"]),
+            "agile_low": None,
+            "agile_high": None,
+        }
+        for row in payload.get("prices", {}).get("forecast", [])
+    ]
+    return {
+        "source": ExternalForecast.SOURCE_X2R,
+        "name": f"X2R {payload.get('region', region.upper())} {payload.get('forecast_at', '')}",
+        "source_created_at": source_created_at,
+        "rows": rows,
+    }
 
 
 def download_daily_external_forecasts():

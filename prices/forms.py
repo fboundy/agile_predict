@@ -1,4 +1,5 @@
 from django import forms
+from django.conf import settings
 from crispy_forms.helper import FormHelper
 from crispy_forms.bootstrap import Accordion, AccordionGroup
 from crispy_forms.layout import Submit, Field, Layout
@@ -37,8 +38,22 @@ class ForecastForm(forms.Form):
         required=False,
         help_text="Show Agile Outgoing export prices instead of Agile import prices",
     )
+    show_live_agileforecast = forms.BooleanField(
+        label="Show live AgileForecast",
+        initial=False,
+        required=False,
+    )
+    show_live_x2r = forms.BooleanField(
+        label="Show live X2R",
+        initial=False,
+        required=False,
+    )
 
     def __init__(self, *args, **kwargs):
+        local_realtime_external_forecasts = kwargs.pop(
+            "local_realtime_external_forecasts",
+            getattr(settings, "LOCAL_REALTIME_EXTERNAL_FORECASTS", False),
+        )
         super().__init__(*args, **kwargs)
 
         self.helper = FormHelper()
@@ -50,20 +65,34 @@ class ForecastForm(forms.Form):
         self.fields["forecasts_to_plot"].choices = forecast_choices
         self.fields["forecasts_to_plot"].initial = forecast_choices[0] if forecast_choices else None
 
+        option_fields = [
+            Field("days_to_plot", small=True),
+            Field("show_export_pricing"),
+            Field("show_generation_and_demand"),
+            Field("show_range_on_most_recent_forecast"),
+            Field(
+                "show_forecast_overlap",
+                title=self.base_fields["show_forecast_overlap"].help_text,
+                data_bs_toggle="tooltip",
+                data_bs_placement="top",
+            ),
+        ]
+        if local_realtime_external_forecasts:
+            option_fields.extend(
+                [
+                    Field("show_live_agileforecast"),
+                    Field("show_live_x2r"),
+                ]
+            )
+        else:
+            self.fields.pop("show_live_agileforecast", None)
+            self.fields.pop("show_live_x2r", None)
+
         self.helper.layout = Layout(
             Accordion(
                 AccordionGroup(
                     "Options",
-                    Field("days_to_plot", small=True),
-                    Field("show_export_pricing"),
-                    Field("show_generation_and_demand"),
-                    Field("show_range_on_most_recent_forecast"),
-                    Field(
-                        "show_forecast_overlap",
-                        title=self.base_fields["show_forecast_overlap"].help_text,
-                        data_bs_toggle="tooltip",
-                        data_bs_placement="top",
-                    ),
+                    *option_fields,
                 ),
                 AccordionGroup(
                     "Forecasts",

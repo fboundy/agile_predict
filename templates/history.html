@@ -4,7 +4,7 @@
 
 <div class="container-lg fluid">
     <div class="row bg-body text-center">
-        <h3>{{region_name}} {% if region != "X" and not compare_external_region %} (DNO Region {{region}}) {% endif %}</h3>
+        <h3>{{region_name}} {% if region != "X" %} (DNO Region {{region}}) {% endif %}</h3>
     </div>
     <div class="row">
         <div class="col-lg-9">
@@ -66,16 +66,16 @@
             {% endif %}
         </div>
         <div class="col-lg-3 bg-body">
-            <form method="get" action="{% url 'history' region %}" class="p-3">
+            <form id="historyForm" method="get" action="{% url 'history' region %}" class="p-3">
                 <div class="mb-3">
                     <label for="regionSelect" class="form-label">Region</label>
-                    <select id="regionSelect" class="form-select">
+                    <select id="regionSelect" name="region" class="form-select">
                         {% for key, value in REGIONS.items %}
                         <option value="{{ key }}" {% if key == data_region %}selected{% endif %}>{{ key }} - {{ value }}</option>
                         {% endfor %}
                     </select>
                 </div>
-                {% if compare_external_region %}
+                {% if can_compare_external %}
                 <div class="mb-3">
                     <div class="form-check">
                         <input
@@ -188,9 +188,18 @@
             customDateControls.classList.toggle("d-none", windowSelect.value !== "custom");
         };
 
-        regionSelect.addEventListener("change", () => {
+        const selectedRegionUrl = () => {
             const params = new URLSearchParams(new FormData(regionSelect.form));
-            window.location.href = `/history/${regionSelect.value}/?${params.toString()}`;
+            params.delete("region");
+            return `/history/${regionSelect.value}/?${params.toString()}`;
+        };
+
+        regionSelect.form.addEventListener("submit", (event) => {
+            event.preventDefault();
+            window.location.href = selectedRegionUrl();
+        });
+        regionSelect.addEventListener("change", () => {
+            window.location.href = selectedRegionUrl();
         });
         windowSelect.addEventListener("change", updateCustomDateVisibility);
         updateCustomDateVisibility();

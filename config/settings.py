@@ -32,6 +32,8 @@ SECRET_KEY = env("SECRET_KEY")
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = env.bool("DEBUG", default=False)
+ENV = env("ENV", default="production")
+LOCAL_REALTIME_EXTERNAL_FORECASTS = DEBUG and ENV.lower() in {"development", "local"}
 
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["agilepredict.com", ".agilepredict.com", ".fly.dev"])
 UPDATE_TOKEN = env("UPDATE_TOKEN", default="")
@@ -122,6 +124,7 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
+    "prices.middleware.RequestMetricsMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
