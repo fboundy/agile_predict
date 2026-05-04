@@ -521,9 +521,29 @@ class HistoryView(TemplateView):
             predicted.index = pd.to_datetime(predicted.index)
         return predicted
 
-    def build_metrics_table(self, actual, forecast_rows):
-        columns = []
-        metrics_by_key = {"mae": [], "rmse": [], "bias": []}
+    def format_metric_values(self, metrics):
+        if metrics is None:
+            return {
+                "n": "",
+                "mae": "",
+                "rmse": "",
+                "bias": "",
+            }
+
+        return {
+            "n": metrics["n"],
+            "mae": f"{metrics['mae']:.2f}",
+            "rmse": f"{metrics['rmse']:.2f}",
+            "bias": f"{metrics['bias']:+.2f}",
+        }
+
+    def build_metrics_table(self, actual, forecast_rows, external_rows_by_label=None):
+        external_rows_by_label = external_rows_by_label or {}
+        columns_by_offset = {}
+        metric_sets = {
+            "AgilePredict": {},
+            **{label: {} for label in external_rows_by_label},
+        }
 
         for offset_days in range(self.max_offset_days + 1):
             predicted = self.build_predicted_series(
@@ -532,36 +552,77 @@ class HistoryView(TemplateView):
                 (offset_days + 1) * 24,
             )
             metrics = self.calculate_error_metrics(actual, predicted)
-            if metrics is None:
-                continue
-
-            columns.append(
-                {
+            if metrics is not None:
+                columns_by_offset[offset_days] = {
                     "label": self.format_offset_label(offset_days),
                     "n": metrics["n"],
                 }
-            )
-            metrics_by_key["mae"].append(f"{metrics['mae']:.2f}")
-            metrics_by_key["rmse"].append(f"{metrics['rmse']:.2f}")
-            metrics_by_key["bias"].append(f"{metrics['bias']:+.2f}")
+                metric_sets["AgilePredict"][offset_days] = metrics
+
+            for label, external_rows in external_rows_by_label.items():
+                external_predicted = self.build_external_predicted_series(
+                    external_rows,
+                    offset_days * 24,
+                    (offset_days + 1) * 24,
+                )
+                external_metrics = self.calculate_error_metrics(actual, external_predicted)
+                if external_metrics is None:
+                    continue
+
+                if offset_days not in columns_by_offset:
+                    columns_by_offset[offset_days] = {
+                        "label": self.format_offset_label(offset_days),
+                        "n": "",
+                    }
+                metric_sets[label][offset_days] = external_metrics
+
+        columns = [
+            {
+                "offset": offset_days,
+                **column,
+            }
+            for offset_days, column in sorted(columns_by_offset.items())
+        ]
+
+        rows = []
+        mobile_rows = []
+
+        for source_label, metrics_by_offset in metric_sets.items():
+            if not metrics_by_offset:
+                continue
+
+            row_prefix = "" if source_label == "AgilePredict" else f"{source_label} "
+            for metric_key, metric_label in [("mae", "MAE"), ("rmse", "RMSE"), ("bias", "Bias")]:
+                rows.append(
+                    {
+                        "label": f"{row_prefix}{metric_label}",
+                        "values": [
+                            self.format_metric_values(metrics_by_offset.get(column["offset"]))[metric_key]
+                            for column in columns
+                        ],
+                    }
+                )
+
+            for column in columns:
+                values = self.format_metric_values(metrics_by_offset.get(column["offset"]))
+                if not values["n"]:
+                    continue
+
+                mobile_rows.append(
+                    {
+                        "source": source_label,
+                        "label": column["label"],
+                        "n": values["n"],
+                        "mae": values["mae"],
+                        "rmse": values["rmse"],
+                        "bias": values["bias"],
+                    }
+                )
 
         return {
             "columns": columns,
-            "rows": [
-                {"label": "MAE", "values": metrics_by_key["mae"]},
-                {"label": "RMSE", "values": metrics_by_key["rmse"]},
-                {"label": "Bias", "values": metrics_by_key["bias"]},
-            ],
-            "mobile_rows": [
-                {
-                    "label": column["label"],
-                    "n": column["n"],
-                    "mae": metrics_by_key["mae"][index],
-                    "rmse": metrics_by_key["rmse"][index],
-                    "bias": metrics_by_key["bias"][index],
-                }
-                for index, column in enumerate(columns)
-            ],
+            "rows": rows,
+            "mobile_rows": mobile_rows,
         }
 
     def get_context_data(self, **kwargs):
@@ -627,7 +688,28 @@ class HistoryView(TemplateView):
             .order_by("date_time", "-forecast__created_at")
         )
         predicted = self.build_predicted_series(forecast_rows, start_hours, end_hours)
-        metrics_table = self.build_metrics_table(actual, forecast_rows)
+
+        external_sources = []
+        if compare_external_region:
+            if compare_agileforecast:
+                external_sources.append(
+                    (ExternalForecast.SOURCE_AGILEFORECAST, "AgileForecast", "#0dcaf0")
+                )
+            if compare_x2r:
+                external_sources.append((ExternalForecast.SOURCE_X2R, "X2R", "#fd7e14"))
+
+        external_rows_by_label = {}
+        for source, label, _color in external_sources:
+            external_rows_by_label[label] = list(
+                ExternalForecast.objects.filter(
+                    source=source,
+                    region=data_region,
+                    date_time__gte=start,
+                    date_time__lte=end,
+                ).order_by("date_time", "-source_created_at")
+            )
+
+        metrics_table = self.build_metrics_table(actual, forecast_rows, external_rows_by_label)
 
         figure = make_subplots(rows=1, cols=1)
         hover_template_price = "%{x|%d %b %H:%M}<br>%{y:.2f}p/kWh"
@@ -647,23 +729,8 @@ class HistoryView(TemplateView):
         prediction_segment_count = self.add_prediction_traces(figure, predicted, offset_label, hover_template_price)
         external_counts = []
         if compare_external_region:
-            external_sources = []
-            if compare_agileforecast:
-                external_sources.append(
-                    (ExternalForecast.SOURCE_AGILEFORECAST, "AgileForecast", "#0dcaf0")
-                )
-            if compare_x2r:
-                external_sources.append((ExternalForecast.SOURCE_X2R, "X2R", "#fd7e14"))
-
             for source, label, color in external_sources:
-                external_rows = list(
-                    ExternalForecast.objects.filter(
-                        source=source,
-                        region=data_region,
-                        date_time__gte=start,
-                        date_time__lte=end,
-                    ).order_by("date_time", "-source_created_at")
-                )
+                external_rows = external_rows_by_label[label]
                 external_predicted = self.build_external_predicted_series(external_rows, start_hours, end_hours)
                 external_counts.append({"label": label, "count": len(external_predicted)})
                 if len(external_predicted) > 0:

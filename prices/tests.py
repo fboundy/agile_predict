@@ -122,6 +122,32 @@ class HistoryViewTests(TestCase):
         self.assertContains(response, "X2R comparison predictions")
         self.assertNotContains(response, 'value="GX"')
 
+    def test_history_gx_metrics_table_includes_selected_external_forecasts(self):
+        created_at = timezone.now() - timedelta(hours=6)
+
+        for offset_minutes, actual_price, predicted_price in [(60, 10, 12), (90, 10, 14)]:
+            date_time = created_at + timedelta(minutes=offset_minutes)
+            day_ahead = day_ahead_to_agile(pd.Series([actual_price], index=[date_time]), reverse=True, region="G").iloc[0]
+            PriceHistory.objects.create(date_time=date_time, agile=actual_price, day_ahead=day_ahead)
+            ExternalForecast.objects.create(
+                source=ExternalForecast.SOURCE_X2R,
+                region="G",
+                forecast_name="x2r metrics test",
+                source_created_at=created_at,
+                date_time=date_time,
+                agile_pred=predicted_price,
+            )
+
+        response = self.client.get("/history/Gx/?compare_x2r=1&offset_days=0")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "X2R MAE")
+        self.assertContains(response, "X2R RMSE")
+        self.assertContains(response, "X2R Bias")
+        self.assertContains(response, "3.00")
+        self.assertContains(response, "3.16")
+        self.assertContains(response, "+3.00")
+
     def test_history_regular_region_does_not_offer_external_comparison(self):
         response = self.client.get("/history/G/")
 

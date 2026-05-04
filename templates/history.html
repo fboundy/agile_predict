@@ -40,6 +40,7 @@
                     <table class="table table-sm table-dark table-striped table-bordered align-middle text-end">
                         <thead>
                             <tr>
+                                <th scope="col" class="text-start">Source</th>
                                 <th scope="col" class="text-start">Offset</th>
                                 <th scope="col">n</th>
                                 <th scope="col">MAE</th>
@@ -50,6 +51,7 @@
                         <tbody>
                             {% for row in metrics_table.mobile_rows %}
                             <tr>
+                                <th scope="row" class="text-start">{{ row.source }}</th>
                                 <th scope="row" class="text-start">{{ row.label }}</th>
                                 <td>{{ row.n }}</td>
                                 <td>{{ row.mae }}</td>

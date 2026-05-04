@@ -88,6 +88,28 @@
 
         <div style="width: 100%; overflow: hidden">{% block content %} {% endblock content %}</div>
 
+        <footer class="container-lg py-4">
+            <div class="border-top pt-3 small text-body-secondary">
+                <p class="mb-2">
+                    AgilePredict uses data from third-party upstream sources, including energy market, weather,
+                    generation, demand, and pricing data providers. Contains BMRS data &copy; Elexon Limited copyright
+                    and database right. Supported by National Energy SO Open Data. Weather data by
+                    <a href="https://open-meteo.com" class="link-secondary">Open-Meteo.com</a>. All data and forecasts
+                    are provided for private, non-commercial use only.
+                </p>
+                <p class="mb-2">
+                    Forecasts are estimates and may be incomplete, delayed, inaccurate, or affected by errors in
+                    upstream data or modelling assumptions. No warranty of any kind is given as to the availability,
+                    accuracy, completeness, reliability, or fitness for any purpose of any data, forecast, chart, API
+                    response, or other output provided by this service.
+                </p>
+                <p class="mb-0">
+                    You should not rely on AgilePredict as the sole basis for financial, operational, or energy-use
+                    decisions.
+                </p>
+            </div>
+        </footer>
+
         <script>
             document.addEventListener("DOMContentLoaded", (event) => {
                 const toggleButton = document.getElementById("colorModeToggle");

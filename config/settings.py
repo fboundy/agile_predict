@@ -15,7 +15,7 @@ import os
 from environs import Env
 
 env = Env()
-env.read_env()
+env.read_env(override=True)
 
 # import dj_database_url
 #
