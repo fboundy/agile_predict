@@ -1,3 +1,4 @@
+from django.contrib.admin.views.decorators import staff_member_required
 from django.urls import path
 from .views import (
     AboutView,
@@ -6,6 +7,7 @@ from .views import (
     GlossaryView,
     GraphFormView,
     HistoryView,
+    MetricsView,
     StatsView,
     run_latest_agile,
     run_update,
@@ -20,6 +22,7 @@ urlpatterns = [
     path("stats/plot/<path:filename>", stats_plot, name="stats_plot"),
     path("color", ColorView.as_view(), name="color"),
     path("stats", StatsView.as_view(), name="api_how_to"),
+    path("metrics", staff_member_required(MetricsView.as_view()), name="metrics"),
     path("api_how_to", ApiHowToView.as_view(), name="api_how_to"),
     path("glossary", GlossaryView.as_view(), name="glossary"),
     path("about", AboutView.as_view(), name="about"),

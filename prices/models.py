@@ -79,6 +79,54 @@ class ExternalForecast(models.Model):
         unique_together = ("source", "region", "source_created_at", "date_time")
 
 
+class RequestMetric(models.Model):
+    SURFACE_WEB = "web"
+    SURFACE_API = "api"
+    SURFACE_UPDATE = "update"
+    SURFACE_ADMIN = "admin"
+    SURFACE_STATIC = "static"
+
+    SURFACE_CHOICES = [
+        (SURFACE_WEB, "Web"),
+        (SURFACE_API, "API"),
+        (SURFACE_UPDATE, "Update"),
+        (SURFACE_ADMIN, "Admin"),
+        (SURFACE_STATIC, "Static"),
+    ]
+
+    date = models.DateField()
+    hour = models.PositiveSmallIntegerField()
+    surface = models.CharField(max_length=16, choices=SURFACE_CHOICES)
+    path = models.CharField(max_length=255)
+    method = models.CharField(max_length=8)
+    status_code = models.PositiveSmallIntegerField()
+    request_count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["date", "surface"]),
+            models.Index(fields=["date", "hour"]),
+        ]
+        unique_together = ("date", "hour", "surface", "path", "method", "status_code")
+        ordering = ["-date", "-hour", "surface", "path"]
+
+    def __str__(self):
+        return f"{self.date} {self.hour:02d}:00 {self.surface} {self.path} {self.request_count}"
+
+
+class RequestClientSeen(models.Model):
+    date = models.DateField()
+    surface = models.CharField(max_length=16, choices=RequestMetric.SURFACE_CHOICES)
+    client_hash = models.CharField(max_length=64)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["date", "surface"]),
+        ]
+        unique_together = ("date", "surface", "client_hash")
+        ordering = ["-date", "surface"]
+
+
 class Forecasts(models.Model):
     name = models.CharField(unique=True, max_length=64)
     created_at = models.DateTimeField(auto_now_add=True)

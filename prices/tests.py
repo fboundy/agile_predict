@@ -1,7 +1,9 @@
 from datetime import timedelta
+from unittest.mock import patch
 
 import pandas as pd
-from django.test import TestCase
+from django.contrib.auth.models import User
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from config.settings import GLOBAL_SETTINGS
@@ -13,7 +15,8 @@ from prices.forecast_features import (
     resolve_feature_columns,
 )
 from prices.forms import ForecastForm
-from prices.models import AgileData, ExternalForecast, Forecasts, PriceHistory
+from prices.models import AgileData, ExternalForecast, Forecasts, PriceHistory, RequestClientSeen, RequestMetric
+from prices.views import GraphFormView
 
 
 class HistoryViewTests(TestCase):
@@ -26,6 +29,13 @@ class HistoryViewTests(TestCase):
         self.assertContains(response, "Date Window")
         self.assertContains(response, "Last 2 Weeks")
         self.assertContains(response, 'type="date"')
+
+    def test_history_view_marks_selected_region(self):
+        response = self.client.get("/history/G/?offset_days=2")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'action="/history/G/"')
+        self.assertContains(response, '<option value="G" selected>G - North Western England</option>', html=True)
 
     def test_history_prediction_lines_use_successive_time_slot_runs(self):
         created_at = timezone.now() - timedelta(hours=6)
@@ -103,7 +113,9 @@ class HistoryViewTests(TestCase):
         self.assertContains(response, "+1.00")
         self.assertContains(response, "-2.00")
 
-    def test_history_gx_offers_external_comparison_without_dropdown_region(self):
+    def test_history_region_g_offers_external_comparison_for_staff(self):
+        user = User.objects.create_user(username="history-staff", password="pw", is_staff=True)
+        self.client.force_login(user)
         created_at = timezone.now() - timedelta(hours=6)
         ExternalForecast.objects.create(
             source=ExternalForecast.SOURCE_X2R,
@@ -114,15 +126,16 @@ class HistoryViewTests(TestCase):
             agile_pred=12,
         )
 
-        response = self.client.get("/history/Gx/?compare_x2r=1")
+        response = self.client.get("/history/G/?compare_x2r=1")
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Compare AgileForecast")
         self.assertContains(response, "Compare X2R")
         self.assertContains(response, "X2R comparison predictions")
-        self.assertNotContains(response, 'value="GX"')
 
-    def test_history_gx_metrics_table_includes_selected_external_forecasts(self):
+    def test_history_region_g_metrics_table_includes_selected_external_forecasts_for_staff(self):
+        user = User.objects.create_user(username="history-metrics-staff", password="pw", is_staff=True)
+        self.client.force_login(user)
         created_at = timezone.now() - timedelta(hours=6)
 
         for offset_minutes, actual_price, predicted_price in [(60, 10, 12), (90, 10, 14)]:
@@ -138,7 +151,7 @@ class HistoryViewTests(TestCase):
                 agile_pred=predicted_price,
             )
 
-        response = self.client.get("/history/Gx/?compare_x2r=1&offset_days=0")
+        response = self.client.get("/history/G/?compare_x2r=1&offset_days=0")
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "X2R MAE")
@@ -148,7 +161,8 @@ class HistoryViewTests(TestCase):
         self.assertContains(response, "3.16")
         self.assertContains(response, "+3.00")
 
-    def test_history_regular_region_does_not_offer_external_comparison(self):
+    @override_settings(LOCAL_REALTIME_EXTERNAL_FORECASTS=False)
+    def test_history_region_g_does_not_offer_external_comparison_to_anonymous_user(self):
         response = self.client.get("/history/G/")
 
         self.assertEqual(response.status_code, 200)
@@ -188,6 +202,99 @@ class ExportPricingTests(TestCase):
         form = ForecastForm()
 
         self.assertIn("show_export_pricing", form.fields)
+
+
+class LocalRealtimeExternalForecastTests(TestCase):
+    @override_settings(LOCAL_REALTIME_EXTERNAL_FORECASTS=False)
+    def test_forecast_form_hides_live_external_options_by_default(self):
+        form = ForecastForm()
+
+        self.assertNotIn("show_live_agileforecast", form.fields)
+        self.assertNotIn("show_live_x2r", form.fields)
+
+    def test_forecast_form_shows_live_external_options_when_enabled(self):
+        form = ForecastForm(local_realtime_external_forecasts=True)
+
+        self.assertIn("show_live_agileforecast", form.fields)
+        self.assertIn("show_live_x2r", form.fields)
+
+    @override_settings(LOCAL_REALTIME_EXTERNAL_FORECASTS=False)
+    @patch("prices.views.fetch_agileforecast")
+    def test_view_does_not_fetch_live_external_forecasts_when_disabled(self, fetch_agileforecast):
+        view = GraphFormView()
+
+        forecasts, errors = view.fetch_live_external_forecasts("G", True, False)
+
+        self.assertEqual(forecasts, [])
+        self.assertEqual(errors, [])
+        fetch_agileforecast.assert_not_called()
+
+    @override_settings(LOCAL_REALTIME_EXTERNAL_FORECASTS=True)
+    @patch("prices.views.fetch_agileforecast")
+    def test_view_fetches_live_external_forecasts_when_enabled(self, fetch_agileforecast):
+        fetch_agileforecast.return_value = {
+            "name": "Region | G test",
+            "source_created_at": timezone.now(),
+            "rows": [],
+        }
+        view = GraphFormView()
+
+        forecasts, errors = view.fetch_live_external_forecasts("G", True, False)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(forecasts[0]["label"], "AgileForecast")
+        fetch_agileforecast.assert_called_once_with("G")
+
+    def test_live_forecast_rows_are_limited_to_plot_date_range(self):
+        now = timezone.now()
+        rows = [
+            {"date_time": now - timedelta(minutes=30), "agile_pred": 1},
+            {"date_time": now + timedelta(minutes=30), "agile_pred": 2},
+            {"date_time": now + timedelta(hours=2), "agile_pred": 3},
+        ]
+        view = GraphFormView()
+
+        filtered = view.filter_forecast_rows_for_plot(
+            rows,
+            actual_end=now,
+            plot_end=now + timedelta(hours=1),
+            show_overlap=False,
+        )
+
+        self.assertEqual([row["agile_pred"] for row in filtered], [2])
+
+
+class RequestMetricsTests(TestCase):
+    def test_request_metric_records_web_and_unique_client(self):
+        response = self.client.get("/about", HTTP_USER_AGENT="metrics-test")
+
+        self.assertEqual(response.status_code, 200)
+        metric = RequestMetric.objects.get(surface=RequestMetric.SURFACE_WEB, path="/about")
+        self.assertEqual(metric.request_count, 1)
+        self.assertEqual(RequestClientSeen.objects.filter(surface=RequestMetric.SURFACE_WEB).count(), 1)
+
+    def test_repeated_same_client_increments_requests_without_new_unique_client(self):
+        for _ in range(2):
+            self.client.get("/about", HTTP_USER_AGENT="same-client")
+
+        metric = RequestMetric.objects.get(surface=RequestMetric.SURFACE_WEB, path="/about")
+        self.assertEqual(metric.request_count, 2)
+        self.assertEqual(RequestClientSeen.objects.filter(surface=RequestMetric.SURFACE_WEB).count(), 1)
+
+    def test_metrics_page_requires_staff_login(self):
+        response = self.client.get("/metrics")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/admin/login/", response["Location"])
+
+    def test_metrics_page_renders_for_staff_user(self):
+        user = User.objects.create_user(username="staff", password="pw", is_staff=True)
+        self.client.force_login(user)
+
+        response = self.client.get("/metrics")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Daily Requests")
 
 
 class ForecastFeatureTests(TestCase):

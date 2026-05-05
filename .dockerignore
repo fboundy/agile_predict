@@ -1,11 +1,15 @@
 fly.toml
 .git/
 *.sqlite3
+*.sqlite3.*
+*.sqlite3-*
 .local/
 bin/
 .env
+.env.*
 .vscode/
 logs/
+*.log
 static/
 plots/
 environment.yml

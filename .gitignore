@@ -1,11 +1,17 @@
 __pycache__/
+*.py[cod]
 .venv/
 .local/
 *.sqlite3
+*.sqlite3.*
+*.sqlite3-*
 *.bat
 .vscode/
 .env
+.env.*
+!.env.example
 .creds.txt
 logs/
+*.log
 static/
 plots/

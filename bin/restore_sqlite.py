@@ -10,23 +10,15 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_BACKUP = ROOT_DIR / ".local" / "backup.sql"
 DEFAULT_SQLITE = ROOT_DIR / "db.sqlite3"
 
-TABLES = {
-    "auth_group",
-    "auth_group_permissions",
-    "auth_permission",
-    "auth_user",
-    "auth_user_groups",
-    "auth_user_user_permissions",
-    "django_admin_log",
-    "django_content_type",
-    "django_migrations",
-    "django_session",
-    "prices_agiledata",
-    "prices_forecastdata",
-    "prices_forecasts",
-    "prices_history",
-    "prices_pricehistory",
-}
+
+def increase_csv_field_limit():
+    limit = sys.maxsize
+    while True:
+        try:
+            csv.field_size_limit(limit)
+            return
+        except OverflowError:
+            limit = limit // 10
 
 
 def parse_copy_header(line):
@@ -41,12 +33,49 @@ def parse_copy_header(line):
 def parse_copy_value(value):
     if value == r"\N":
         return None
+    if value.startswith(r"\x"):
+        try:
+            return bytes.fromhex(value[2:])
+        except ValueError:
+            pass
     return value.replace(r"\t", "\t").replace(r"\n", "\n").replace(r"\\", "\\")
+
+
+def get_sqlite_tables(conn):
+    rows = conn.execute(
+        """
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name NOT LIKE 'sqlite_%'
+        """
+    )
+    return {row[0] for row in rows}
+
+
+def reset_sqlite_sequence(conn, table):
+    sequence_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence'"
+    ).fetchone()
+    if not sequence_exists:
+        return
+
+    columns = {
+        row[1]
+        for row in conn.execute(f'PRAGMA table_info("{table}")')
+    }
+    if "id" not in columns:
+        return
+
+    max_id = conn.execute(f'SELECT MAX(id) FROM "{table}"').fetchone()[0]
+    if max_id is not None:
+        conn.execute("UPDATE sqlite_sequence SET seq = ? WHERE name = ?", (max_id, table))
 
 
 def import_copy_sections(sql_path, sqlite_path):
     conn = sqlite3.connect(sqlite_path)
     conn.execute("PRAGMA foreign_keys = OFF")
+    tables = get_sqlite_tables(conn)
 
     current = None
     inserted = {}
@@ -58,7 +87,7 @@ def import_copy_sections(sql_path, sqlite_path):
                 if header is None:
                     continue
                 table, columns = header
-                if table not in TABLES:
+                if table not in tables:
                     current = ("skip", table, columns, None)
                     continue
                 placeholders = ",".join(["?"] * len(columns))
@@ -79,6 +108,9 @@ def import_copy_sections(sql_path, sqlite_path):
             values = next(csv.reader([line], delimiter="\t", escapechar=None, quoting=csv.QUOTE_NONE))
             conn.execute(statement, [parse_copy_value(value) for value in values])
             inserted[table] += 1
+
+    for table in inserted:
+        reset_sqlite_sequence(conn, table)
 
     conn.commit()
     conn.execute("PRAGMA foreign_keys = ON")
@@ -101,6 +133,16 @@ def main():
     if not sql_path.exists():
         raise SystemExit(f"Backup file not found: {sql_path}")
 
+    env_database_url = os.environ.get("DATABASE_URL", "")
+    expected_database_url = f"sqlite:///{sqlite_path}"
+    if env_database_url and env_database_url != expected_database_url:
+        raise SystemExit(
+            "DATABASE_URL must point at the SQLite database being restored.\n"
+            f"Expected: {expected_database_url}\n"
+            f"Found:    {env_database_url}"
+        )
+    os.environ["DATABASE_URL"] = expected_database_url
+
     if sqlite_path.exists():
         sqlite_path.unlink()
 
@@ -117,4 +159,5 @@ def main():
 
 
 if __name__ == "__main__":
+    increase_csv_field_limit()
     main()

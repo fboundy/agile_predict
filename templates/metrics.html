@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-lg py-4">
+    <div class="row mb-3">
+        <div class="col">
+            <h1 class="h3">Metrics</h1>
+            <p class="text-body-secondary mb-0">Request totals and approximate unique clients for the last {{ days }} days.</p>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-lg-7">
+            <h2 class="h5">Daily Requests</h2>
+            <div class="table-responsive">
+                <table class="table table-sm table-striped align-middle">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Surface</th>
+                            <th class="text-end">Requests</th>
+                            <th class="text-end">Unique Clients</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in daily_rows %}
+                        <tr>
+                            <td>{{ row.date }}</td>
+                            <td>{{ row.surface }}</td>
+                            <td class="text-end">{{ row.requests }}</td>
+                            <td class="text-end">{{ row.unique_clients }}</td>
+                        </tr>
+                        {% empty %}
+                        <tr><td colspan="4">No metrics recorded yet.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="col-lg-5">
+            <h2 class="h5">Today By Hour</h2>
+            <div class="table-responsive">
+                <table class="table table-sm table-striped align-middle">
+                    <thead>
+                        <tr>
+                            <th>Hour</th>
+                            <th>Surface</th>
+                            <th class="text-end">Requests</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in hourly_rows %}
+                        <tr>
+                            <td>{{ row.hour|stringformat:"02d" }}:00</td>
+                            <td>{{ row.surface }}</td>
+                            <td class="text-end">{{ row.requests }}</td>
+                        </tr>
+                        {% empty %}
+                        <tr><td colspan="3">No requests today.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mt-4">
+        <div class="col">
+            <h2 class="h5">Top Paths</h2>
+            <div class="table-responsive">
+                <table class="table table-sm table-striped align-middle">
+                    <thead>
+                        <tr>
+                            <th>Surface</th>
+                            <th>Path</th>
+                            <th class="text-end">Requests</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in top_paths %}
+                        <tr>
+                            <td>{{ row.surface }}</td>
+                            <td><code>{{ row.path }}</code></td>
+                            <td class="text-end">{{ row.requests }}</td>
+                        </tr>
+                        {% empty %}
+                        <tr><td colspan="3">No path data recorded yet.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

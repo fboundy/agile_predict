@@ -12,6 +12,24 @@
             <div class="row">
                 <form method="post">{% csrf_token %} {% crispy form form.helper %}</form>
             </div>
+            {% if live_external_forecasts_enabled and live_external_counts %}
+            <div class="row mt-2 small">
+                <div class="col">
+                    {% for item in live_external_counts %}
+                    <div>{{ item.label }} live points: {{ item.count }}</div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            {% if live_external_forecasts_enabled and live_external_errors %}
+            <div class="row mt-2 small text-warning">
+                <div class="col">
+                    {% for error in live_external_errors %}
+                    <div>{{ error }}</div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
 
             <div class="accordion" id="accordionExample">
                 {% if history_errors or forecast_errors %}
