@@ -64,7 +64,16 @@ def _update_options(request):
     if "skip_kde_plot" not in request.POST and "skip_kde_plot" not in request.GET:
         options["skip_kde_plot"] = True
 
-    for key in ["min_fd", "min_ad", "max_days", "train_frac", "drop_last", "feature_set", "features"]:
+    for key in [
+        "min_fd",
+        "min_ad",
+        "max_days",
+        "train_frac",
+        "drop_last",
+        "feature_set",
+        "features",
+        "xgboost_params",
+    ]:
         value = request.POST.get(key, request.GET.get(key))
         if value not in {None, ""}:
             options[key] = value

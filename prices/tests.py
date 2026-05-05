@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pandas as pd
 from django.contrib.auth.models import User
-from django.test import TestCase, override_settings
+from django.test import RequestFactory, TestCase, override_settings
 from django.utils import timezone
 
 from config.settings import GLOBAL_SETTINGS
@@ -15,8 +15,10 @@ from prices.forecast_features import (
     resolve_feature_columns,
 )
 from prices.forms import ForecastForm
+from prices.management.commands.update import Command as UpdateCommand
+from prices.management.commands.update import XGBOOST_PARAMETER_SETS
 from prices.models import AgileData, ExternalForecast, Forecasts, PriceHistory, RequestClientSeen, RequestMetric
-from prices.views import GraphFormView
+from prices.views import GraphFormView, _update_options
 
 
 class HistoryViewTests(TestCase):
@@ -346,3 +348,26 @@ class ForecastFeatureTests(TestCase):
         features = latest_prediction_features(fc, ["emb_wind", "demand"])
 
         self.assertEqual(list(features.columns), ["emb_wind", "demand"])
+
+
+class UpdateOptionTests(TestCase):
+    def test_update_options_include_xgboost_params(self):
+        request = RequestFactory().get("/update", {"xgboost_params": "regularized_dart"})
+
+        options = _update_options(request)
+
+        self.assertEqual(options["xgboost_params"], "regularized_dart")
+
+    def test_xgboost_parameter_sets_include_current_default_and_alternatives(self):
+        self.assertEqual(
+            set(XGBOOST_PARAMETER_SETS),
+            {"current_dart", "conservative_gbtree", "shallow_regularized", "regularized_dart"},
+        )
+        self.assertEqual(XGBOOST_PARAMETER_SETS["current_dart"]["booster"], "dart")
+
+    def test_update_command_defaults_to_regularized_dart(self):
+        parser = UpdateCommand().create_parser("manage.py", "update")
+
+        options = parser.parse_args([])
+
+        self.assertEqual(options.xgboost_params, "regularized_dart")

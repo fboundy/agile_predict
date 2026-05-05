@@ -174,6 +174,8 @@ class ForecastData(models.Model):
     forecast = models.ForeignKey(Forecasts, related_name="data", on_delete=models.CASCADE)
     date_time = models.DateTimeField()
     day_ahead = models.FloatField(null=True)
+    day_ahead_classified = models.FloatField(null=True, blank=True)
+    plunge_probability = models.FloatField(null=True, blank=True)
     bm_wind = models.FloatField()
     solar = models.FloatField()
     emb_wind = models.FloatField()

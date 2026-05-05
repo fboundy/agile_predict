@@ -8,6 +8,11 @@ bin/
 .env
 .env.*
 .vscode/
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
 logs/
 *.log
 static/
