@@ -656,9 +656,12 @@ def get_agile(start=pd.Timestamp("2023-07-01"), tz="GB", region="G"):
     code = f"E-1R-{product}-{region}"
     url = url + f"/electricity-tariffs/{code}/standard-unit-rates/"
 
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
     x = []
     while end > start:
-        # print(start, end)
         params = {
             "page_size": 1500,
             "order_by": "period",
@@ -666,10 +669,35 @@ def get_agile(start=pd.Timestamp("2023-07-01"), tz="GB", region="G"):
             "period_to": _oct_time(end),
         }
 
-        r = requests.get(url, params=params)
-        if "results" in r.json():
-            x = x + r.json()["results"]
+        try:
+            r = requests.get(url, params=params, headers=headers, timeout=30)
+            r.raise_for_status()
+            
+            data = r.json()
+            if "results" in data and data["results"]:
+                x = x + data["results"]
+            else:
+                logger.warning("No results returned from Octopus Agile API for period.")
+                break
+                
+        except Exception as e:
+            logger.error(f"Failed to fetch Octopus Agile rates: {e}")
+            if 'r' in locals() and hasattr(r, 'text'):
+                logger.debug(f"Raw response snippet: {r.text[:200]}")
+            break
+
+        # Safety catch: prevent infinite loop if data isn't moving
+        if not x:
+            break
+            
         end = pd.Timestamp(x[-1]["valid_from"]).ceil("24h")
+        
+        # Add a brief 0.5s pause to avoid triggering anti-spam triggers 
+        # during the deep historical backfill loop
+        time.sleep(0.5)
+
+    if not x:
+        return pd.Series(dtype=float, name="agile")
 
     df = pd.DataFrame(x).set_index("valid_from")[["value_inc_vat"]]
     df.index = pd.to_datetime(df.index)
@@ -677,7 +705,6 @@ def get_agile(start=pd.Timestamp("2023-07-01"), tz="GB", region="G"):
     df = df.sort_index()["value_inc_vat"]
     df = df[~df.index.duplicated()]
     return df.rename("agile")
-
 
 def day_ahead_to_agile(df, reverse=False, region="G", export=False):
     df.index = df.index.tz_convert("GB")
