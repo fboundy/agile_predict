@@ -281,15 +281,13 @@ class Command(BaseCommand):
             ad = AgileData.objects.filter(forecast=f)
             dt = pd.to_datetime(f.name).tz_localize("GB")
             days = (pd.Timestamp.now(tz="GB") - dt).days
-            if fd.count() < min_fd or ad.count() < min_ad:
+            if fd.count() < min_fd:
                 fail = " <- Fail"
             else:
                 fail = " <- Manual"
                 if days < max_days * 2:
                     for hour in [6, 10, 11, 16, 22]:
                         if f"{hour:02d}:15" in f.name:
-                            keep.append(f.id)
-                            fail = ""
                 else:
                     fail = "<- Old"
             if debug:
@@ -442,195 +440,200 @@ class Command(BaseCommand):
                         factor = GLOBAL_SETTINGS["REGIONS"]["X"]["factors"][0]
 
                         logger.info(f"Predicting holdout/test dataset ({len(test_X)} rows)")
-                        results = test_X[["dt", "day_ahead"]].copy()
-                        results["pred"] = xg_model.predict(test_X[features])
-                        logger.info("Finished holdout/test predictions")
+                        if len(test_X) > 0:
+                            results = test_X[["dt", "day_ahead"]].copy()
+                            results["pred"] = xg_model.predict(test_X[features])
+                            logger.info("Finished holdout/test predictions")
 
-                        # Add required columns before plotting
-                        results["forecast_created"] = test_X["created_at"]
-                        results["target_time"] = test_X.index
-                        results["next_agile"] = (test_X.index >= test_X["ag_start"]) & (
-                            test_X.index < test_X["ag_end"]
-                        )
-                        results["error"] = (results["day_ahead"] - results["pred"]) * factor
+                            # Add required columns before plotting
+                            results["forecast_created"] = test_X["created_at"]
+                            results["target_time"] = test_X.index
+                            results["next_agile"] = (test_X.index >= test_X["ag_start"]) & (
+                                test_X.index < test_X["ag_end"]
+                            )
+                            results["error"] = (results["day_ahead"] - results["pred"]) * factor
 
-                        def save_plot(fig, name):
-                            plot_path = os.path.join(PLOT_DIR, f"{name}.png")
-                            fig.savefig(plot_path, bbox_inches="tight")
-                            plt.close(fig)
-                            publish_plot(plot_path)
+                            def save_plot(fig, name):
+                                plot_path = os.path.join(PLOT_DIR, f"{name}.png")
+                                fig.savefig(plot_path, bbox_inches="tight")
+                                plt.close(fig)
+                                publish_plot(plot_path)
 
-                        PLOT_DIR = Path(os.path.join("plots", "trends"))
-                        logger.info(f"Writing trend plot to {PLOT_DIR}")
-                        PLOT_DIR.mkdir(parents=True, exist_ok=True)
-                        for f in PLOT_DIR.glob("*.png"):
-                            f.unlink()
-                        clear_published_plots("trends/")
+                            PLOT_DIR = Path(os.path.join("plots", "trends"))
+                            logger.info(f"Writing trend plot to {PLOT_DIR}")
+                            PLOT_DIR.mkdir(parents=True, exist_ok=True)
+                            for f in PLOT_DIR.glob("*.png"):
+                                f.unlink()
+                            clear_published_plots("trends/")
 
-                        fig, ax = plt.subplots(figsize=(16, 6))
-                        ff = pd.concat(
-                            [
-                                ff,
-                                pd.DataFrame(
-                                    index=[ff.index[-1] + 1],
-                                    data={
-                                        "created_at": [pd.Timestamp(new_name, tz="GB")],
-                                        "mean": [-np.mean(scores)],
-                                        "stdev": [np.std(scores)],
-                                    },
-                                ),
-                            ]
-                        )
-
-                        ax.plot(ff["created_at"], ff["mean"] * factor, lw=2, color="black", marker="o")
-                        ax.fill_between(
-                            ff["created_at"],
-                            (ff["mean"] - ff["stdev"]) * factor,
-                            (ff["mean"] + ff["stdev"]) * factor,
-                            color="yellow",
-                            alpha=0.3,
-                            label="±1 Stdev",
-                        )
-
-                        ax.set_ylabel("Predicted Agile Price RMSE [p/kWh]")
-                        ax.set_xlabel("Forecast Date/Time")
-                        ax.set_ylim(0)
-                        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-                        ax.xaxis.set_major_formatter(mdates.DateFormatter("%d-%b\n%H:%M"))
-                        fig.autofmt_xdate()  # rotates and aligns labels
-                        save_plot(fig, "trend")
-                        logger.info("Saved trend plot")
-
-                        # Directory to save plots
-                        PLOT_DIR = Path(os.path.join("plots", "stats_plots"))
-                        logger.info(f"Writing stats plots to {PLOT_DIR}")
-                        PLOT_DIR.mkdir(parents=True, exist_ok=True)
-
-                        # Clean old files (optional)
-                        for f in PLOT_DIR.glob("*.png"):
-                            f.unlink()
-                        clear_published_plots("stats_plots/")
-
-                        # 1. Prediction vs Actual over Time
-                        fig, ax = plt.subplots(figsize=(16, 6))
-
-                        subset = results[results["next_agile"]].sort_values("target_time")
-                        ax.plot(subset["target_time"], subset["day_ahead"], label="Actual", color="black")
-                        ax.plot(
-                            subset["target_time"],
-                            subset["pred"],
-                            label="Trained Model Prediction",
-                            alpha=0.4,
-                            markersize=2.5,
-                            color="red",
-                            lw=0,
-                            marker="o",
-                        )
-
-                        subset = results[~results["next_agile"]].sort_values("target_time")
-                        sc = ax.scatter(
-                            x=subset["target_time"],
-                            y=subset["pred"],
-                            label="Predicted",
-                            alpha=0.4,
-                            c=subset["dt"],
-                            lw=0,
-                            marker="o",
-                            cmap="viridis",
-                        )
-                        cbar = fig.colorbar(sc, ax=ax)
-                        cbar.set_label("Days Ahead (dt)")
-
-                        # Format datetime axis
-                        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-                        ax.xaxis.set_major_formatter(mdates.DateFormatter("%d-%b\n%H:%M"))
-                        fig.autofmt_xdate()  # rotates and aligns labels
-
-                        ax.set_title("Training Dataset - Actual vs Predicted")
-                        ax.set_ylabel("£/MWh")
-                        ax.legend()
-                        save_plot(fig, "1_actual_vs_predicted_over_time")
-                        logger.info("Saved stats plot 1/5: actual vs predicted over time")
-
-                        # 2. Prediction vs Actual Scatter
-                        fig, ax = plt.subplots(figsize=(8, 6))
-                        sc = ax.scatter(
-                            results["day_ahead"], results["pred"], alpha=0.2, c=results["dt"], cmap="plasma"
-                        )
-                        cbar = fig.colorbar(sc, ax=ax)
-                        cbar.set_label("Days Ahead (dt)")
-                        ax.plot(
-                            [results["day_ahead"].min(), results["day_ahead"].max()],
-                            [results["day_ahead"].min(), results["day_ahead"].max()],
-                            "--",
-                            color="gray",
-                        )
-                        ax.set_xlabel("Actual Day-Ahead Price [£/MWh]")
-                        ax.set_ylabel("Predicted Price [£/MWh]")
-                        ax.set_title("Prediction vs Actual")
-                        save_plot(fig, "2_scatters")
-                        logger.info("Saved stats plot 2/5: prediction vs actual scatter")
-
-                        # 3. Residuals
-                        fig, ax = plt.subplots(figsize=(8, 6))
-                        residuals = (results["day_ahead"] - results["pred"]) * factor
-                        sns.histplot(residuals, bins=50, kde=True, ax=ax)
-                        ax.set_title("Residuals Distribution")
-                        ax.set_xlabel("Error (Actual - Predicted) [p/kWh]")
-                        save_plot(fig, "3_residuals")
-                        logger.info("Saved stats plot 3/5: residuals distribution")
-
-                        if skip_kde_plot:
-                            logger.info("Skipped stats plot 4/5: forecast error by horizon KDE")
-                        else:
-                            # 4. Forecast Error by Horizon
-                            logger.info("Generating stats plot 4/5: forecast error by horizon KDE")
-                            fig, ax = plt.subplots(figsize=(8, 6))
-                            kde = sns.kdeplot(
-                                data=results,
-                                x="dt",
-                                y="error",
-                                fill=True,
-                                cmap="Oranges",
-                                levels=10,
-                                ax=ax,
+                            fig, ax = plt.subplots(figsize=(16, 6))
+                            ff = pd.concat(
+                                [
+                                    ff,
+                                    pd.DataFrame(
+                                        index=[ff.index[-1] + 1],
+                                        data={
+                                            "created_at": [pd.Timestamp(new_name, tz="GB")],
+                                            "mean": [-np.mean(scores)],
+                                            "stdev": [np.std(scores)],
+                                        },
+                                    ),
+                                ]
                             )
 
-                            # Add a colorbar
-                            # cbar = plt.colorbar(kde.collections[0], ax=ax)
-                            # cbar.set_label("Density")
-                            # sns.scatterplot(
-                            #     data=results,
-                            #     x="dt",
-                            #     y=residuals,
-                            #     alpha=0.3,
-                            #     ax=ax,
-                            #     color="grey",
-                            #     linewidth=0,
-                            # )
-                            ax.set_title("2D KDE: Forecast Error by Horizon")
-                            ax.set_xlabel("Days Ahead (dt)")
-                            ax.set_ylabel("Error (Actual - Predicted) [p/kWh]")
-                            save_plot(fig, "4_kde_error_by_horizon")
-                            logger.info("Saved stats plot 4/5: forecast error by horizon")
+                            ax.plot(ff["created_at"], ff["mean"] * factor, lw=2, color="black", marker="o")
+                            ax.fill_between(
+                                ff["created_at"],
+                                (ff["mean"] - ff["stdev"]) * factor,
+                                (ff["mean"] + ff["stdev"]) * factor,
+                                color="yellow",
+                                alpha=0.3,
+                                label="±1 Stdev",
+                            )
 
-                        # 5. Feature Importance (XGBoost built-in)
-                        fig, ax = plt.subplots(figsize=(8, 6))
-                        xg.plot_importance(xg_model, ax=ax, importance_type="gain", show_values=False)
-                        ax.set_title("XGBoost Feature Importance (Gain)")
-                        save_plot(fig, "5_feature_importance")
-                        logger.info("Saved stats plot 5/5: feature importance")
+                            ax.set_ylabel("Predicted Agile Price RMSE [p/kWh]")
+                            ax.set_xlabel("Forecast Date/Time")
+                            ax.set_ylim(0)
+                            ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+                            ax.xaxis.set_major_formatter(mdates.DateFormatter("%d-%b\n%H:%M"))
+                            fig.autofmt_xdate()  # rotates and aligns labels
+                            save_plot(fig, "trend")
+                            logger.info("Saved trend plot")
 
-                        # fig, ax = plt.subplots(figsize=(8, 6))
-                        # bins = [0, 1, 2, 3, 5, 10, 15]
-                        # labels = [f"{i}-{j}" for i, j in zip(bins[:-1], bins[1:])]
-                        # results["horizon_bucket"] = pd.cut(results["dt"], bins=bins, labels=labels, right=True)
-                        # ax = sns.violinplot(data=results, x="horizon_bucket", y="error")
-                        # ax.set_xlabel("Days Ahead (dt)")
-                        # ax.set_ylabel("Error (Actual - Predicted) [£/MWh]")
-                        # ax.set_title("Error Distribution by Time Horion Bin")
-                        # ax.legend()
-                        # save_plot(fig, "6_binned_error_v_time")
+                            # Directory to save plots
+                            PLOT_DIR = Path(os.path.join("plots", "stats_plots"))
+                            logger.info(f"Writing stats plots to {PLOT_DIR}")
+                            PLOT_DIR.mkdir(parents=True, exist_ok=True)
+
+                            # Clean old files (optional)
+                            for f in PLOT_DIR.glob("*.png"):
+                                f.unlink()
+                            clear_published_plots("stats_plots/")
+
+                            # 1. Prediction vs Actual over Time
+                            fig, ax = plt.subplots(figsize=(16, 6))
+
+                            subset = results[results["next_agile"]].sort_values("target_time")
+                            ax.plot(subset["target_time"], subset["day_ahead"], label="Actual", color="black")
+                            ax.plot(
+                                subset["target_time"],
+                                subset["pred"],
+                                label="Trained Model Prediction",
+                                alpha=0.4,
+                                markersize=2.5,
+                                color="red",
+                                lw=0,
+                                marker="o",
+                            )
+
+                            subset = results[~results["next_agile"]].sort_values("target_time")
+                            sc = ax.scatter(
+                                x=subset["target_time"],
+                                y=subset["pred"],
+                                label="Predicted",
+                                alpha=0.4,
+                                c=subset["dt"],
+                                lw=0,
+                                marker="o",
+                                cmap="viridis",
+                            )
+                            cbar = fig.colorbar(sc, ax=ax)
+                            cbar.set_label("Days Ahead (dt)")
+
+                            # Format datetime axis
+                            ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+                            ax.xaxis.set_major_formatter(mdates.DateFormatter("%d-%b\n%H:%M"))
+                            fig.autofmt_xdate()  # rotates and aligns labels
+
+                            ax.set_title("Training Dataset - Actual vs Predicted")
+                            ax.set_ylabel("£/MWh")
+                            ax.legend()
+                            save_plot(fig, "1_actual_vs_predicted_over_time")
+                            logger.info("Saved stats plot 1/5: actual vs predicted over time")
+
+                            # 2. Prediction vs Actual Scatter
+                            fig, ax = plt.subplots(figsize=(8, 6))
+                            sc = ax.scatter(
+                                results["day_ahead"], results["pred"], alpha=0.2, c=results["dt"], cmap="plasma"
+                            )
+                            cbar = fig.colorbar(sc, ax=ax)
+                            cbar.set_label("Days Ahead (dt)")
+                            ax.plot(
+                                [results["day_ahead"].min(), results["day_ahead"].max()],
+                                [results["day_ahead"].min(), results["day_ahead"].max()],
+                                "--",
+                                color="gray",
+                            )
+                            ax.set_xlabel("Actual Day-Ahead Price [£/MWh]")
+                            ax.set_ylabel("Predicted Price [£/MWh]")
+                            ax.set_title("Prediction vs Actual")
+                            save_plot(fig, "2_scatters")
+                            logger.info("Saved stats plot 2/5: prediction vs actual scatter")
+
+                            # 3. Residuals
+                            fig, ax = plt.subplots(figsize=(8, 6))
+                            residuals = (results["day_ahead"] - results["pred"]) * factor
+                            sns.histplot(residuals, bins=50, kde=True, ax=ax)
+                            ax.set_title("Residuals Distribution")
+                            ax.set_xlabel("Error (Actual - Predicted) [p/kWh]")
+                            save_plot(fig, "3_residuals")
+                            logger.info("Saved stats plot 3/5: residuals distribution")
+
+                            if skip_kde_plot:
+                                logger.info("Skipped stats plot 4/5: forecast error by horizon KDE")
+                            else:
+                                # 4. Forecast Error by Horizon
+                                logger.info("Generating stats plot 4/5: forecast error by horizon KDE")
+                                fig, ax = plt.subplots(figsize=(8, 6))
+                                kde = sns.kdeplot(
+                                    data=results,
+                                    x="dt",
+                                    y="error",
+                                    fill=True,
+                                    cmap="Oranges",
+                                    levels=10,
+                                    ax=ax,
+                                )
+
+                                # Add a colorbar
+                                # cbar = plt.colorbar(kde.collections[0], ax=ax)
+                                # cbar.set_label("Density")
+                                # sns.scatterplot(
+                                #     data=results,
+                                #     x="dt",
+                                #     y=residuals,
+                                #     alpha=0.3,
+                                #     ax=ax,
+                                #     color="grey",
+                                #     linewidth=0,
+                                # )
+                                ax.set_title("2D KDE: Forecast Error by Horizon")
+                                ax.set_xlabel("Days Ahead (dt)")
+                                ax.set_ylabel("Error (Actual - Predicted) [p/kWh]")
+                                save_plot(fig, "4_kde_error_by_horizon")
+                                logger.info("Saved stats plot 4/5: forecast error by horizon")
+
+                            # 5. Feature Importance (XGBoost built-in)
+                            fig, ax = plt.subplots(figsize=(8, 6))
+                            xg.plot_importance(xg_model, ax=ax, importance_type="gain", show_values=False)
+                            ax.set_title("XGBoost Feature Importance (Gain)")
+                            save_plot(fig, "5_feature_importance")
+                            logger.info("Saved stats plot 5/5: feature importance")
+
+                            # fig, ax = plt.subplots(figsize=(8, 6))
+                            # bins = [0, 1, 2, 3, 5, 10, 15]
+                            # labels = [f"{i}-{j}" for i, j in zip(bins[:-1], bins[1:])]
+                            # results["horizon_bucket"] = pd.cut(results["dt"], bins=bins, labels=labels, right=True)
+                            # ax = sns.violinplot(data=results, x="horizon_bucket", y="error")
+                            # ax.set_xlabel("Days Ahead (dt)")
+                            # ax.set_ylabel("Error (Actual - Predicted) [£/MWh]")
+                            # ax.set_title("Error Distribution by Time Horion Bin")
+                            # ax.legend()
+                            # save_plot(fig, "6_binned_error_v_time")
+
+                        else:
+                            logger.info("Skipping holdout validation charts due to initial low data density.")
+                            results = pd.DataFrame()
 
                     fc = add_latest_forecast_features(fc)
                     if len(ff) > 0:
@@ -734,31 +737,40 @@ class Command(BaseCommand):
                     scale_factors = pd.concat(sfs)
 
                     if debug:
-                        for i, sf in enumerate(sfs):
-                            if len(sf.index) > 0:
-                                logger.info(f"idx{i}: {sf.index[0]}:{sf.index[-1]}\n{sf}")
-                        logger.info(f"Scale factors\n{scale_factors}")
+                            for i, sf in enumerate(sfs):
+                                if len(sf.index) > 0:
+                                    logger.info(f"idx{i}: {sf.index[0]}:{sf.index[-1]}\n{sf}")
+                            logger.info(f"Scale factors\n{scale_factors}")
 
-                    scale_factors = pd.concat([scale_factors, prices.reindex(scale_factors.index).fillna(0)], axis=1)
+                    # 1. Rename columns uniquely before concatenating to avoid multi-column collision
+                    renamed_prices = prices.reindex(scale_factors.index).fillna(0).rename(
+                        columns={"day_ahead": "hist_day_ahead", "agile": "hist_agile"}
+                    )
+                    scale_factors = pd.concat([scale_factors, renamed_prices], axis=1)
                     logger.info(f"Applying scale factors ({len(scale_factors)} rows)")
 
                     if debug:
                         logger.info(f"Scale Factors:\n{scale_factors}")
 
-                    fc["day_ahead"] = fc["day_ahead"] * scale_factors["mult"] + scale_factors["day_ahead"] * (
+                    # 2. Cleanly fill fallback None/NaN items with 0 for fresh boots
+                    model_pred = fc["day_ahead"].astype(float).fillna(0)
+                    model_pred_low = fc["day_ahead_low"].astype(float).fillna(0)
+                    model_pred_high = fc["day_ahead_high"].astype(float).fillna(0)
+
+                    # 3. Update all math calculations to reference 'hist_day_ahead'
+                    fc["day_ahead"] = model_pred * scale_factors["mult"] + scale_factors["hist_day_ahead"] * (
                         1 - scale_factors["mult"]
                     )
                     fc["day_ahead_low"] = (
-                        fc["day_ahead_low"] * scale_factors["mult"]
-                        + scale_factors["day_ahead"] * (1 - scale_factors["mult"])
+                        model_pred_low * scale_factors["mult"]
+                        + scale_factors["hist_day_ahead"] * (1 - scale_factors["mult"])
                         - scale_factors["shift"]
                     )
                     fc["day_ahead_high"] = (
-                        fc["day_ahead_high"] * scale_factors["mult"]
-                        + scale_factors["day_ahead"] * (1 - scale_factors["mult"])
+                        model_pred_high * scale_factors["mult"]
+                        + scale_factors["hist_day_ahead"] * (1 - scale_factors["mult"])
                         + scale_factors["shift"]
                     )
-
                     if debug:
                         logger.info(
                             pd.concat([scale_factors, fc[["day_ahead", "day_ahead_low", "day_ahead_high"]]], axis=1)
@@ -807,7 +819,15 @@ class Command(BaseCommand):
                         logger.info(f"Forecast\n{fc}")
 
                     refresh_db_connection("before saving forecast rows")
-                    this_forecast = Forecasts(name=new_name, mean=-np.mean(scores), stdev=np.std(scores))
+                    # Fallback metrics if the training loop block was skipped on a fresh installation
+                    if 'scores' not in locals():
+                        mean_score = 0.0
+                        stdev_score = 0.0
+                    else:
+                        mean_score = -np.mean(scores)
+                        stdev_score = np.std(scores)
+
+                    this_forecast = Forecasts(name=new_name, mean=mean_score, stdev=stdev_score)
                     logger.info(f"Saving forecast record: {new_name}")
                     this_forecast.save()
                     fc["forecast"] = this_forecast

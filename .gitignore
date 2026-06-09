@@ -9,3 +9,4 @@ __pycache__/
 logs/
 static/
 plots/
+docker-compose.yml
