@@ -6,7 +6,6 @@ __pycache__/
 .vscode/
 .env
 .creds.txt
-logs/
 static/
 plots/
 docker-compose.yml

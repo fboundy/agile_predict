@@ -737,14 +737,18 @@ def day_ahead_to_agile(df, reverse=False, region="G", export=False):
     shifts = shifts.reindex(shifts.index.union(unique_index)).sort_index().ffill().bfill().reindex(unique_index)
     x["Shift"] = shifts.reindex(x.index).to_numpy()
 
+    vat = GLOBAL_SETTINGS["VAT"]
+
     if reverse:
+        x["Out"] /= (1 + vat)
         x.loc[x["Peak"], "Out"] -= regions[region]["factors"][1]
-        x.loc[x["Peak"], "Out"] -= x.loc[x["Peak"], "Shift"]
+        x["Out"] -= x["Shift"]
         x["Out"] /= regions[region]["factors"][0]
     else:
         x["Out"] *= regions[region]["factors"][0]
         x.loc[x["Peak"], "Out"] += regions[region]["factors"][1]
-        x.loc[x["Peak"], "Out"] += x.loc[x["Peak"], "Shift"]
+        x["Out"] += x["Shift"]
+        x["Out"] *= (1 + vat)
 
     name = "day_ahead" if reverse else "agile"
     return x["Out"].rename(name)

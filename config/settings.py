@@ -261,8 +261,9 @@ GLOBAL_SETTINGS = {
     "AGILE_RELEASE_TIME": "16:00",
     "SHIFTS": {
         "2020-01-01 00:00:00": 0.0,
-        "2026-04-01 00:00:00": -3.5,
+        "2026-04-01 00:00:00": -3.3333,
     },
+    "VAT": 0.05,
     "REGIONS": {
         "X": {
             "name": "National Average",
