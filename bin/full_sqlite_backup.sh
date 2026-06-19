@@ -46,6 +46,16 @@ LATEST_FILE="${FULL_BACKUP_DIR}/latest.sqlite3.gz"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 echo "================ $(date) ================"
+
+# Capture the incremental state high-water marks BEFORE taking the backup so
+# there is no gap: the state records the point-in-time T0, the backup snapshot
+# is consistent at T1 >= T0, and future incrementals start from T0 (any rows
+# between T0 and T1 are in the full backup AND re-exported by the first
+# incremental, which is safe because import uses update_or_create).
+echo "Initializing incremental backup state"
+cd "$ROOT_DIR"
+"$PYTHON_BIN" manage.py export_incremental --initialize-state --state "${INCREMENTAL_DIR}/state.json"
+
 echo "Starting full SQLite backup"
 echo "SQLite: $SQLITE_DB"
 echo "Output: $BACKUP_FILE"
@@ -84,10 +94,6 @@ PY
 
 cp "$BACKUP_FILE" "$LATEST_FILE"
 echo "Updated latest full backup: $LATEST_FILE"
-
-echo "Initializing incremental backup state after full backup"
-cd "$ROOT_DIR"
-"$PYTHON_BIN" manage.py export_incremental --initialize-state --state "${INCREMENTAL_DIR}/state.json"
 
 find "$FULL_BACKUP_DIR" -name 'db_*.sqlite3.gz' -type f -printf '%T@ %p\n' \
     | sort -rn \

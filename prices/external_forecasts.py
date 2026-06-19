@@ -167,7 +167,7 @@ def _convert_x2r_region_g_rows_to_national_average(rows):
     return [
         {
             **row,
-            "agile_pred": float(national_average.loc[pd.Timestamp(row["date_time"])]),
+            "agile_pred": float(national_average.loc[pd.Timestamp(row["date_time"]).tz_convert("GB")]),
         }
         for row in rows
     ]

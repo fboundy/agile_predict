@@ -77,21 +77,13 @@ class Command(BaseCommand):
 
         price_history = PriceHistory.objects.order_by("date_time")
         if last_price_history:
-            price_history = price_history.filter(date_time__gte=last_price_history)
-        price_history_rows = [
-            row
-            for row in price_history.values("date_time", "day_ahead", "agile")
-            if last_price_history is None or row["date_time"] > last_price_history
-        ]
+            price_history = price_history.filter(date_time__gt=last_price_history)
+        price_history_rows = list(price_history.values("date_time", "day_ahead", "agile"))
 
         forecasts = Forecasts.objects.order_by("created_at", "id")
         if last_forecast_created:
-            forecasts = forecasts.filter(created_at__gte=last_forecast_created)
-        forecasts = [
-            forecast
-            for forecast in forecasts
-            if last_forecast_created is None or forecast.created_at > last_forecast_created
-        ]
+            forecasts = forecasts.filter(created_at__gt=last_forecast_created)
+        forecasts = list(forecasts)
 
         forecast_ids = [forecast.id for forecast in forecasts]
         forecast_data = ForecastData.objects.filter(forecast_id__in=forecast_ids).order_by("forecast_id", "date_time")
@@ -230,6 +222,7 @@ class Command(BaseCommand):
                 "date_time",
                 "day_ahead",
                 "day_ahead_classified",
+                "day_ahead_extra_trees",
                 "plunge_probability",
                 "bm_wind",
                 "solar",

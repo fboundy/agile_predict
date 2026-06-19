@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import logging
 
 from django.conf import settings
 from django.db import IntegrityError, OperationalError, ProgrammingError, transaction
@@ -8,6 +9,8 @@ from django.utils import timezone
 
 from .models import RequestClientSeen, RequestMetric
 
+
+logger = logging.getLogger(__name__)
 
 IGNORED_PREFIXES = (
     "/static/",
@@ -91,4 +94,5 @@ class RequestMetricsMiddleware:
                     client_hash=hash_client(date, request),
                 )
         except (IntegrityError, OperationalError, ProgrammingError):
+            logger.debug("Failed to record request metric for %s", request.path_info, exc_info=True)
             return

@@ -299,6 +299,9 @@ class StatsView(TemplateView):
             return context
 
         logger.info("Building stats context")
+        if not PriceHistory.objects.exists():
+            context.update({"stats": "", "trend_plot_url": None, "plot_files": []})
+            return context
         agile_actuals_end = pd.Timestamp(PriceHistory.objects.all().order_by("-date_time")[0].date_time)
         agile_actuals_start = agile_actuals_end - pd.Timedelta("7D")
 
@@ -796,9 +799,11 @@ class HistoryView(TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        region = "Z"
-        data_region = "Z"
-        raw_day_ahead = True
+        region = self.kwargs.get("region", "Z").upper()
+        if region not in regions:
+            region = "Z"
+        data_region = region
+        raw_day_ahead = _is_raw_day_ahead_region(region)
         can_compare_external = True
         price_display = _price_display(region)
 
@@ -1070,7 +1075,12 @@ class GraphFormView(FormView):
         plot_end = forecast_end
 
         # print(f"Forecast End: {forecast_end}")
-        price_start = PriceHistory.objects.all().order_by("-date_time")[48 * PRIOR_DAYS].date_time
+        ph_qs = PriceHistory.objects.order_by("-date_time")
+        try:
+            price_start = ph_qs[48 * PRIOR_DAYS].date_time
+        except IndexError:
+            last_ph = ph_qs.last()
+            price_start = last_ph.date_time if last_ph is not None else forecast_start
         # print(f"Price Start: {price_start}")
 
         start = min(forecast_start, price_start)
