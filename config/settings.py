@@ -272,6 +272,11 @@ GLOBAL_SETTINGS = {
             "factors": (0.2136, 12.21),
             "export_factors": (0.0950, 0.9979, 5.8464),
         },
+        "Z": {
+            "name": "Day Ahead Price",
+            "factors": (1.0, 0.0),
+            "raw_day_ahead": True,
+        },
         "A": {
             "name": "Eastern England",
             "factors": (0.21, 13),

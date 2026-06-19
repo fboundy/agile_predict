@@ -2,6 +2,7 @@ import gzip
 import json
 from pathlib import Path
 
+from django.contrib.auth.models import Group, User
 from django.core.management.base import BaseCommand
 from django.forms.models import model_to_dict
 from django.utils import timezone
@@ -46,7 +47,7 @@ def write_state(path, state):
 
 
 class Command(BaseCommand):
-    help = "Export PriceHistory and new Forecast rows since the last incremental backup marker."
+    help = "Export forecast changes and a Django auth snapshot for incremental backup."
 
     def add_arguments(self, parser):
         parser.add_argument("--state", default=str(DEFAULT_STATE))
@@ -95,12 +96,28 @@ class Command(BaseCommand):
         forecast_ids = [forecast.id for forecast in forecasts]
         forecast_data = ForecastData.objects.filter(forecast_id__in=forecast_ids).order_by("forecast_id", "date_time")
         agile_data = AgileData.objects.filter(forecast_id__in=forecast_ids).order_by("forecast_id", "region", "date_time")
+        users = User.objects.order_by("username")
+        groups = Group.objects.order_by("name")
+        user_groups = User.groups.through.objects.select_related("user", "group").order_by("user__username", "group__name")
+        group_permissions = Group.permissions.through.objects.select_related(
+            "group",
+            "permission__content_type",
+        ).order_by("group__name", "permission__content_type__app_label", "permission__codename")
+        user_permissions = User.user_permissions.through.objects.select_related(
+            "user",
+            "permission__content_type",
+        ).order_by("user__username", "permission__content_type__app_label", "permission__codename")
 
         counts = {
             "PriceHistory": len(price_history_rows),
             "Forecasts": len(forecast_ids),
             "ForecastData": forecast_data.count(),
             "AgileData": agile_data.count(),
+            "AuthUser": users.count(),
+            "AuthGroup": groups.count(),
+            "AuthUserGroup": user_groups.count(),
+            "AuthGroupPermission": group_permissions.count(),
+            "AuthUserPermission": user_permissions.count(),
         }
 
         max_price_history = None
@@ -119,6 +136,88 @@ class Command(BaseCommand):
             for row in price_history_rows:
                 max_price_history = row["date_time"]
                 handle.write(json.dumps(serialize_row("PriceHistory", row, ["date_time"]), sort_keys=True) + "\n")
+
+            for group in groups:
+                row = {"name": group.name}
+                handle.write(json.dumps(serialize_row("AuthGroup", row, ["name"]), sort_keys=True) + "\n")
+
+            for user in users:
+                row = model_to_dict(
+                    user,
+                    fields=[
+                        "username",
+                        "password",
+                        "email",
+                        "first_name",
+                        "last_name",
+                        "is_staff",
+                        "is_active",
+                        "is_superuser",
+                    ],
+                )
+                row["last_login"] = user.last_login
+                row["date_joined"] = user.date_joined
+                handle.write(json.dumps(serialize_row("AuthUser", row, ["username"]), sort_keys=True) + "\n")
+
+            for user_group in user_groups:
+                row = {
+                    "username": user_group.user.username,
+                    "group_name": user_group.group.name,
+                }
+                handle.write(
+                    json.dumps(serialize_row("AuthUserGroup", row, ["username", "group_name"]), sort_keys=True)
+                    + "\n"
+                )
+
+            for group_permission in group_permissions:
+                permission = group_permission.permission
+                row = {
+                    "group_name": group_permission.group.name,
+                    "permission_app_label": permission.content_type.app_label,
+                    "permission_model": permission.content_type.model,
+                    "permission_codename": permission.codename,
+                }
+                handle.write(
+                    json.dumps(
+                        serialize_row(
+                            "AuthGroupPermission",
+                            row,
+                            [
+                                "group_name",
+                                "permission_app_label",
+                                "permission_model",
+                                "permission_codename",
+                            ],
+                        ),
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+
+            for user_permission in user_permissions:
+                permission = user_permission.permission
+                row = {
+                    "username": user_permission.user.username,
+                    "permission_app_label": permission.content_type.app_label,
+                    "permission_model": permission.content_type.model,
+                    "permission_codename": permission.codename,
+                }
+                handle.write(
+                    json.dumps(
+                        serialize_row(
+                            "AuthUserPermission",
+                            row,
+                            [
+                                "username",
+                                "permission_app_label",
+                                "permission_model",
+                                "permission_codename",
+                            ],
+                        ),
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
 
             for forecast in forecasts:
                 row = model_to_dict(forecast, fields=["name", "mean", "stdev"])

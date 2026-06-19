@@ -4,7 +4,7 @@
 
 <div class="container-lg fluid">
     <div class="row bg-body text-center">
-        <h3>{{region_name}} {% if region != "X" %} (DNO Region {{region}}) {% endif %}</h3>
+        <h3>{{region_name}}</h3>
     </div>
     <div class="row">
         <div class="col-lg-9">
@@ -15,7 +15,8 @@
                     <table class="table table-sm table-dark table-striped table-bordered align-middle text-end">
                         <thead>
                             <tr>
-                                <th scope="col" class="text-start">Metric</th>
+                                <th scope="col" class="text-start">Model</th>
+                                <th scope="col" class="text-start">Parameter</th>
                                 {% for column in metrics_table.columns %}
                                 <th scope="col">
                                     {{ column.label }}<br />
@@ -27,7 +28,8 @@
                         <tbody>
                             {% for row in metrics_table.rows %}
                             <tr>
-                                <th scope="row" class="text-start">{{ row.label }}</th>
+                                <th scope="row" class="text-start">{{ row.model }}</th>
+                                <th scope="row" class="text-start">{{ row.parameter }}</th>
                                 {% for value in row.values %}
                                 <td>{{ value }}</td>
                                 {% endfor %}
@@ -40,7 +42,7 @@
                     <table class="table table-sm table-dark table-striped table-bordered align-middle text-end">
                         <thead>
                             <tr>
-                                <th scope="col" class="text-start">Source</th>
+                                <th scope="col" class="text-start">Model</th>
                                 <th scope="col" class="text-start">Offset</th>
                                 <th scope="col">n</th>
                                 <th scope="col">MAE</th>
@@ -66,16 +68,7 @@
             {% endif %}
         </div>
         <div class="col-lg-3 bg-body">
-            <form id="historyForm" method="get" action="{% url 'history' region %}" class="p-3">
-                <div class="mb-3">
-                    <label for="regionSelect" class="form-label">Region</label>
-                    <select id="regionSelect" name="region" class="form-select">
-                        {% for key, value in REGIONS.items %}
-                        <option value="{{ key }}" {% if key == data_region %}selected{% endif %}>{{ key }} - {{ value }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                {% if can_compare_external %}
+            <form id="historyForm" method="get" action="{% url 'history' %}" class="p-3">
                 <div class="mb-3">
                     <div class="form-check">
                         <input
@@ -100,7 +93,6 @@
                         <label for="compareX2R" class="form-check-label">Compare X2R</label>
                     </div>
                 </div>
-                {% endif %}
                 <div class="mb-3">
                     <label for="bucketSelect" class="form-label">Prediction Offset</label>
                     <select id="bucketSelect" name="offset_days" class="form-select">
@@ -158,13 +150,13 @@
             <div class="px-3 pb-3">
                 <div class="border-top pt-3 small text-body-secondary">
                     <p class="mb-2">
-                        This chart compares the actual Agile price with predictions made for the selected lead time.
+                        This chart compares the actual {{ price_label|lower }} with predictions made for the selected lead time.
                     </p>
                     <p class="mb-2">
                         The prediction offset is measured from when the forecast was created to the price slot being predicted.
                     </p>
                     <p class="mb-2">
-                        MAE is the average absolute error, in p/kWh.
+                        MAE is the average absolute error, in {{ price_unit }}.
                     </p>
                     <p class="mb-2">
                         RMSE is similar but gives more weight to larger errors.
@@ -180,7 +172,6 @@
 
 <script>
     document.addEventListener("DOMContentLoaded", () => {
-        const regionSelect = document.getElementById("regionSelect");
         const windowSelect = document.getElementById("windowSelect");
         const customDateControls = document.getElementById("customDateControls");
 
@@ -188,19 +179,6 @@
             customDateControls.classList.toggle("d-none", windowSelect.value !== "custom");
         };
 
-        const selectedRegionUrl = () => {
-            const params = new URLSearchParams(new FormData(regionSelect.form));
-            params.delete("region");
-            return `/history/${regionSelect.value}/?${params.toString()}`;
-        };
-
-        regionSelect.form.addEventListener("submit", (event) => {
-            event.preventDefault();
-            window.location.href = selectedRegionUrl();
-        });
-        regionSelect.addEventListener("change", () => {
-            window.location.href = selectedRegionUrl();
-        });
         windowSelect.addEventListener("change", updateCustomDateVisibility);
         updateCustomDateVisibility();
     });

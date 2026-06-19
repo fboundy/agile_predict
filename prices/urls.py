@@ -8,6 +8,8 @@ from .views import (
     GraphFormView,
     HistoryView,
     MetricsView,
+    RegisterView,
+    SiteLoginView,
     StatsView,
     run_latest_agile,
     run_update,
@@ -16,6 +18,8 @@ from .views import (
 )
 
 urlpatterns = [
+    path("accounts/login/", SiteLoginView.as_view(), name="login"),
+    path("accounts/register/", RegisterView.as_view(), name="register"),
     path("update", run_update, name="run_update"),
     path("update/latest_agile", run_latest_agile, name="run_latest_agile"),
     path("update/status", update_status, name="update_status"),
@@ -27,6 +31,7 @@ urlpatterns = [
     path("glossary", GlossaryView.as_view(), name="glossary"),
     path("about", AboutView.as_view(), name="about"),
     path("history", HistoryView.as_view(), name="history"),
+    path("history/", HistoryView.as_view(), name="history"),
     path("history/<str:region>/", HistoryView.as_view(), name="history"),
     path("<str:region>/", GraphFormView.as_view(), name="graph"),
     path("", GraphFormView.as_view(), name="graph"),

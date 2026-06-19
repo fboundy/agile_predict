@@ -6,6 +6,9 @@ from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
+import pandas as pd
+
+from config.utils import day_ahead_to_agile
 from prices.models import ExternalForecast
 
 
@@ -151,8 +154,29 @@ def download_x2r_region_g():
     return count
 
 
+def _convert_x2r_region_g_rows_to_national_average(rows):
+    if not rows:
+        return rows
+
+    source = pd.Series(
+        data=[row["agile_pred"] for row in rows],
+        index=pd.to_datetime([row["date_time"] for row in rows]),
+    )
+    day_ahead = day_ahead_to_agile(source, reverse=True, region="G")
+    national_average = day_ahead_to_agile(day_ahead, region="X")
+    return [
+        {
+            **row,
+            "agile_pred": float(national_average.loc[pd.Timestamp(row["date_time"])]),
+        }
+        for row in rows
+    ]
+
+
 def fetch_x2r(region):
-    url = f"https://api.x2r.uk/agile/{region.upper()}"
+    requested_region = region.upper()
+    source_region = "G" if requested_region == "X" else requested_region
+    url = f"https://api.x2r.uk/agile/{source_region}"
     response = requests.get(url, timeout=15)
     response.raise_for_status()
     payload = response.json()
@@ -167,9 +191,12 @@ def fetch_x2r(region):
         }
         for row in payload.get("prices", {}).get("forecast", [])
     ]
+    if requested_region == "X":
+        rows = _convert_x2r_region_g_rows_to_national_average(rows)
+
     return {
         "source": ExternalForecast.SOURCE_X2R,
-        "name": f"X2R {payload.get('region', region.upper())} {payload.get('forecast_at', '')}",
+        "name": f"X2R {requested_region} {payload.get('forecast_at', '')}",
         "source_created_at": source_created_at,
         "rows": rows,
     }

@@ -2,6 +2,7 @@ import gzip
 import json
 from pathlib import Path
 
+from django.contrib.auth.models import Group, Permission, User
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.utils.dateparse import parse_datetime
@@ -14,6 +15,7 @@ DATETIME_FIELDS = {
     "Forecasts": {"created_at"},
     "ForecastData": {"date_time"},
     "AgileData": {"date_time"},
+    "AuthUser": {"last_login", "date_joined"},
 }
 
 
@@ -36,7 +38,17 @@ class Command(BaseCommand):
         if not path.exists():
             raise SystemExit(f"Incremental backup not found: {path}")
 
-        counts = {"PriceHistory": 0, "Forecasts": 0, "ForecastData": 0, "AgileData": 0}
+        counts = {
+            "PriceHistory": 0,
+            "Forecasts": 0,
+            "ForecastData": 0,
+            "AgileData": 0,
+            "AuthUser": 0,
+            "AuthGroup": 0,
+            "AuthUserGroup": 0,
+            "AuthGroupPermission": 0,
+            "AuthUserPermission": 0,
+        }
         forecast_cache = {}
 
         with transaction.atomic():
@@ -51,7 +63,29 @@ class Command(BaseCommand):
                         for key, value in item["fields"].items()
                     }
 
-                    if model_name == "PriceHistory":
+                    if model_name == "AuthGroup":
+                        Group.objects.update_or_create(
+                            name=fields.pop("name"),
+                            defaults=fields,
+                        )
+                    elif model_name == "AuthUser":
+                        User.objects.update_or_create(
+                            username=fields.pop("username"),
+                            defaults=fields,
+                        )
+                    elif model_name == "AuthUserGroup":
+                        user = User.objects.get(username=fields["username"])
+                        group = Group.objects.get(name=fields["group_name"])
+                        user.groups.add(group)
+                    elif model_name == "AuthGroupPermission":
+                        group = Group.objects.get(name=fields["group_name"])
+                        permission = self.get_permission(fields)
+                        group.permissions.add(permission)
+                    elif model_name == "AuthUserPermission":
+                        user = User.objects.get(username=fields["username"])
+                        permission = self.get_permission(fields)
+                        user.user_permissions.add(permission)
+                    elif model_name == "PriceHistory":
                         PriceHistory.objects.update_or_create(
                             date_time=fields.pop("date_time"),
                             defaults=fields,
@@ -89,3 +123,10 @@ class Command(BaseCommand):
         if name not in cache:
             cache[name] = Forecasts.objects.get(name=name)
         return cache[name]
+
+    def get_permission(self, fields):
+        return Permission.objects.get(
+            content_type__app_label=fields["permission_app_label"],
+            content_type__model=fields["permission_model"],
+            codename=fields["permission_codename"],
+        )

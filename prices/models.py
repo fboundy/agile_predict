@@ -175,6 +175,7 @@ class ForecastData(models.Model):
     date_time = models.DateTimeField()
     day_ahead = models.FloatField(null=True)
     day_ahead_classified = models.FloatField(null=True, blank=True)
+    day_ahead_extra_trees = models.FloatField(null=True, blank=True)
     plunge_probability = models.FloatField(null=True, blank=True)
     bm_wind = models.FloatField()
     solar = models.FloatField()

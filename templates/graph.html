@@ -2,7 +2,7 @@
 
 <div class="container-lg fluid">
     <div class="row bg-body text-center">
-        <h3>{{region_name}} {%if region != "X" %} (DNO Region {{region}}) {%endif%}</h3>
+        <h3>{{region_name}} {% if region != "X" and not is_raw_day_ahead_region %} (DNO Region {{region}}) {% endif %}</h3>
     </div>
     <div class="row">
         <div class="col-lg-9">

@@ -14,6 +14,7 @@ import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 import seaborn as sns
 
+from sklearn.ensemble import ExtraTreesRegressor
 from django.core.cache import cache  # Or store in the database if needed
 from django.db import close_old_connections
 
@@ -55,6 +56,13 @@ CLASSIFIED_MODEL_FEATURES = [
     "weekend",
     "peak",
 ]
+EXTRA_TREES_REGRESSOR_PARAMS = {
+    "n_estimators": 700,
+    "min_samples_leaf": 4,
+    "max_features": 1.0,
+    "random_state": 42,
+    "n_jobs": 1,
+}
 
 XGBOOST_PARAMETER_SETS = {
     "current_dart": {
@@ -245,6 +253,12 @@ def predict_classified_day_ahead(models, features):
     normal_prediction = normal_model.predict(features)
     day_ahead_classified = plunge_probability * plunge_prediction + (1 - plunge_probability) * normal_prediction
     return day_ahead_classified, plunge_probability
+
+
+def fit_extra_trees_day_ahead_model(train_X, train_y, sample_weights):
+    model = ExtraTreesRegressor(**EXTRA_TREES_REGRESSOR_PARAMS)
+    model.fit(train_X, train_y, sample_weight=sample_weights)
+    return model
 
 
 def kde_quantiles(kde, dt, pred, quantiles={"low": 0.1, "mid": 0.5, "high": 0.9}, lim=(0, 150), log_every=25):
@@ -540,6 +554,14 @@ class Command(BaseCommand):
                         logger.info("Finished fitting final XGBoost model")
                         refresh_db_connection("after fitting final XGBoost model")
 
+                        logger.info(
+                            "Fitting experimental ExtraTrees day-ahead model "
+                            f"({len(train_X)} rows, {len(train_X.columns)} features)"
+                        )
+                        extra_trees_model = fit_extra_trees_day_ahead_model(train_X, train_y, sample_weights)
+                        logger.info("Finished fitting experimental ExtraTrees day-ahead model")
+                        refresh_db_connection("after fitting experimental ExtraTrees day-ahead model")
+
                         classified_models = None
                         try:
                             classified_train_X, classified_train_y = build_training_data(
@@ -784,8 +806,13 @@ class Command(BaseCommand):
                     fc = add_latest_forecast_features(fc)
                     if len(ff) > 0:
                         logger.info(f"Predicting latest forecast ({len(fc)} rows)")
-                        fc["day_ahead"] = xg_model.predict(latest_prediction_features(fc, train_X.columns))
+                        prediction_features = latest_prediction_features(fc, train_X.columns)
+                        fc["day_ahead"] = xg_model.predict(prediction_features)
                         logger.info("Finished latest forecast prediction")
+
+                        logger.info("Predicting latest forecast with experimental ExtraTrees model")
+                        fc["day_ahead_extra_trees"] = extra_trees_model.predict(prediction_features)
+                        logger.info("Finished experimental ExtraTrees prediction")
 
                         if classified_models is not None:
                             logger.info("Predicting latest forecast with classified day-ahead model")
@@ -858,6 +885,7 @@ class Command(BaseCommand):
                     else:
                         fc["day_ahead"] = None
                         fc["day_ahead_classified"] = None
+                        fc["day_ahead_extra_trees"] = None
                         fc["plunge_probability"] = None
                         fc["day_ahead_low"] = None
                         fc["day_ahead_high"] = None
@@ -913,6 +941,9 @@ class Command(BaseCommand):
                     fc["day_ahead_classified"] = fc["day_ahead_classified"] * scale_factors["mult"] + scale_factors[
                         "day_ahead"
                     ] * (1 - scale_factors["mult"])
+                    fc["day_ahead_extra_trees"] = fc["day_ahead_extra_trees"] * scale_factors["mult"] + scale_factors[
+                        "day_ahead"
+                    ] * (1 - scale_factors["mult"])
                     fc["day_ahead_low"] = (
                         fc["day_ahead_low"] * scale_factors["mult"]
                         + scale_factors["day_ahead"] * (1 - scale_factors["mult"])
@@ -926,9 +957,25 @@ class Command(BaseCommand):
 
                     if debug:
                         logger.info(
-                            pd.concat([scale_factors, fc[["day_ahead", "day_ahead_low", "day_ahead_high"]]], axis=1)
+                            pd.concat(
+                                [
+                                    scale_factors,
+                                    fc[
+                                        [
+                                            "day_ahead",
+                                            "day_ahead_extra_trees",
+                                            "day_ahead_low",
+                                            "day_ahead_high",
+                                        ]
+                                    ],
+                                ],
+                                axis=1,
+                            )
                         )
 
+                    agile_regions = [
+                        region for region in regions if not GLOBAL_SETTINGS["REGIONS"][region].get("raw_day_ahead")
+                    ]
                     ag = pd.concat(
                         [
                             pd.DataFrame(
@@ -946,10 +993,10 @@ class Command(BaseCommand):
                                     .round(2),
                                 },
                             )
-                            for region in regions
+                            for region in agile_regions
                         ]
                     )
-                    logger.info(f"Prepared agile forecast data ({len(ag)} rows across {len(regions)} regions)")
+                    logger.info(f"Prepared agile forecast data ({len(ag)} rows across {len(agile_regions)} regions)")
 
                     # fc = fc[list(fd.columns)[3:]]
                     fc = fc[
@@ -965,6 +1012,7 @@ class Command(BaseCommand):
                             "demand",
                             "day_ahead",
                             "day_ahead_classified",
+                            "day_ahead_extra_trees",
                             "plunge_probability",
                         ]
                     ]

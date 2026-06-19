@@ -7,11 +7,15 @@ import time
 import pandas as pd
 import plotly.graph_objects as go
 from django.conf import settings
+from django.contrib import messages
+from django.contrib.auth.models import Group
+from django.contrib.auth.views import LoginView
 from django.db.models import Count, Sum
 from django.core.cache import cache
+from django.core.mail import send_mail
 from django.http import HttpResponse, HttpResponseForbidden, JsonResponse
-from django.shortcuts import get_object_or_404
-from django.urls import reverse
+from django.shortcuts import get_object_or_404, redirect
+from django.urls import reverse, reverse_lazy
 from django.utils.dateparse import parse_date
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -25,7 +29,7 @@ from config.settings import GLOBAL_SETTINGS
 from config.utils import day_ahead_to_agile, import_agile_to_export_agile
 
 from .external_forecasts import fetch_agileforecast, fetch_x2r
-from .forms import ForecastForm
+from .forms import ForecastForm, RegistrationForm
 from .models import (
     AgileData,
     ExternalForecast,
@@ -42,6 +46,34 @@ from .models import (
 regions = GLOBAL_SETTINGS["REGIONS"]
 PRIOR_DAYS = 2
 logger = logging.getLogger("prices.web")
+USER_GROUP_NAME = "Users"
+PRIVILEGED_GROUP_NAME = "Privileged Users"
+
+
+def _is_raw_day_ahead_region(region):
+    return regions.get(region, {}).get("raw_day_ahead", False)
+
+
+def _price_display(region, show_export=False):
+    if _is_raw_day_ahead_region(region):
+        return {
+            "label": "Day Ahead Price",
+            "actual_label": "Actual Day Ahead",
+            "unit": "£/MWh",
+            "axis_title": "Day Ahead Price [£/MWh]",
+            "hover_time_price": "%{x|%H:%M}<br>%{y:.2f} £/MWh",
+            "hover_price": "%{y:.2f} £/MWh",
+        }
+
+    label = "Agile Export Price" if show_export else "Agile Price"
+    return {
+        "label": label,
+        "actual_label": "Actual Export" if show_export else "Actual",
+        "unit": "p/kWh",
+        "axis_title": f"{label} [p/kWh]",
+        "hover_time_price": "%{x|%H:%M}<br>%{y:.2f}p/kWh",
+        "hover_price": "%{y:.2f}p/kWh",
+    }
 
 
 def _truthy(value):
@@ -50,7 +82,11 @@ def _truthy(value):
 
 def _can_use_admin_only_features(request):
     user = getattr(request, "user", None)
-    return getattr(user, "is_staff", False) or getattr(settings, "LOCAL_REALTIME_EXTERNAL_FORECASTS", False)
+    if not getattr(user, "is_authenticated", False):
+        return False
+    if getattr(user, "is_staff", False):
+        return True
+    return user.groups.filter(name=PRIVILEGED_GROUP_NAME).exists()
 
 
 def _update_options(request):
@@ -464,6 +500,50 @@ class MetricsView(TemplateView):
         return context
 
 
+class SiteLoginView(LoginView):
+    template_name = "registration/login.html"
+    redirect_authenticated_user = True
+    next_page = reverse_lazy("graph")
+
+
+class RegisterView(FormView):
+    template_name = "registration/register.html"
+    form_class = RegistrationForm
+    success_url = reverse_lazy("login")
+
+    def dispatch(self, request, *args, **kwargs):
+        if request.user.is_authenticated:
+            return redirect("graph")
+        return super().dispatch(request, *args, **kwargs)
+
+    def form_valid(self, form):
+        user = form.save(commit=False)
+        user.email = form.cleaned_data["email"]
+        user.is_active = False
+        user.save()
+
+        users_group, _created = Group.objects.get_or_create(name=USER_GROUP_NAME)
+        user.groups.add(users_group)
+
+        send_mail(
+            subject="AgilePredict registration request",
+            message=(
+                "A new AgilePredict user has registered and is awaiting approval.\n\n"
+                f"Username: {user.username}\n"
+                f"Email: {user.email}\n"
+            ),
+            from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
+            recipient_list=["foboundy@gmail.com"],
+            fail_silently=False,
+        )
+
+        messages.success(
+            self.request,
+            "Registration submitted. Access will be approved on a case by case basis by the site administrators.",
+        )
+        return super().form_valid(form)
+
+
 class HistoryView(TemplateView):
     template_name = "history.html"
     max_offset_days = 14
@@ -571,21 +651,21 @@ class HistoryView(TemplateView):
             "bias": errors.mean(),
         }
 
-    def build_predicted_series(self, forecast_rows, start_hours, end_hours):
+    def build_predicted_series(self, forecast_rows, start_hours, end_hours, value_attr="agile_pred"):
         predicted_by_date_time = {}
         for row in forecast_rows:
             lead_hours = (row.date_time - row.forecast.created_at).total_seconds() / 3600
             if lead_hours < start_hours or lead_hours >= end_hours:
                 continue
             if row.date_time not in predicted_by_date_time:
-                predicted_by_date_time[row.date_time] = row.agile_pred
+                predicted_by_date_time[row.date_time] = getattr(row, value_attr)
 
         predicted = pd.Series(predicted_by_date_time).sort_index()
         if len(predicted) > 0:
             predicted.index = pd.to_datetime(predicted.index)
         return predicted
 
-    def build_external_predicted_series(self, forecast_rows, start_hours, end_hours):
+    def build_external_predicted_series(self, forecast_rows, start_hours, end_hours, raw_day_ahead=False):
         predicted_by_date_time = {}
         for row in forecast_rows:
             lead_hours = (row.date_time - row.source_created_at).total_seconds() / 3600
@@ -597,6 +677,8 @@ class HistoryView(TemplateView):
         predicted = pd.Series(predicted_by_date_time).sort_index()
         if len(predicted) > 0:
             predicted.index = pd.to_datetime(predicted.index)
+            if raw_day_ahead:
+                predicted = day_ahead_to_agile(predicted, reverse=True, region="G")
         return predicted
 
     def format_metric_values(self, metrics):
@@ -615,7 +697,14 @@ class HistoryView(TemplateView):
             "bias": f"{metrics['bias']:+.2f}",
         }
 
-    def build_metrics_table(self, actual, forecast_rows, external_rows_by_label=None):
+    def build_metrics_table(
+        self,
+        actual,
+        forecast_rows,
+        external_rows_by_label=None,
+        forecast_value_attr="agile_pred",
+        external_raw_day_ahead=False,
+    ):
         external_rows_by_label = external_rows_by_label or {}
         columns_by_offset = {}
         metric_sets = {
@@ -628,6 +717,7 @@ class HistoryView(TemplateView):
                 forecast_rows,
                 offset_days * 24,
                 (offset_days + 1) * 24,
+                value_attr=forecast_value_attr,
             )
             metrics = self.calculate_error_metrics(actual, predicted)
             if metrics is not None:
@@ -642,6 +732,7 @@ class HistoryView(TemplateView):
                     external_rows,
                     offset_days * 24,
                     (offset_days + 1) * 24,
+                    raw_day_ahead=external_raw_day_ahead,
                 )
                 external_metrics = self.calculate_error_metrics(actual, external_predicted)
                 if external_metrics is None:
@@ -669,11 +760,11 @@ class HistoryView(TemplateView):
             if not metrics_by_offset:
                 continue
 
-            row_prefix = "" if source_label == "AgilePredict" else f"{source_label} "
             for metric_key, metric_label in [("mae", "MAE"), ("rmse", "RMSE"), ("bias", "Bias")]:
                 rows.append(
                     {
-                        "label": f"{row_prefix}{metric_label}",
+                        "model": source_label,
+                        "parameter": metric_label,
                         "values": [
                             self.format_metric_values(metrics_by_offset.get(column["offset"]))[metric_key]
                             for column in columns
@@ -705,11 +796,11 @@ class HistoryView(TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        region = self.kwargs.get("region", "X").upper()
-        if region not in regions:
-            region = "X"
-        data_region = region
-        can_compare_external = data_region == "G" and _can_use_admin_only_features(self.request)
+        region = "Z"
+        data_region = "Z"
+        raw_day_ahead = True
+        can_compare_external = True
+        price_display = _price_display(region)
 
         try:
             offset_days = int(self.request.GET.get("offset_days", 1))
@@ -729,6 +820,9 @@ class HistoryView(TemplateView):
         context["compare_agileforecast"] = compare_agileforecast
         context["compare_x2r"] = compare_x2r
         context["region_name"] = regions.get(region, {"name": ""})["name"]
+        context["is_raw_day_ahead_region"] = raw_day_ahead
+        context["price_label"] = price_display["label"]
+        context["price_unit"] = price_display["unit"]
         context["offset_days"] = offset_days
         context["offset_label"] = offset_label
         context["offset_options"] = [
@@ -755,12 +849,25 @@ class HistoryView(TemplateView):
         else:
             actual = pd.Series(dtype=float)
 
-        forecast_rows = list(
-            AgileData.objects.filter(region=data_region, date_time__gte=start, date_time__lte=end)
-            .select_related("forecast")
-            .order_by("date_time", "-forecast__created_at")
+        forecast_value_attr = "day_ahead" if raw_day_ahead else "agile_pred"
+        if raw_day_ahead:
+            forecast_rows = list(
+                ForecastData.objects.filter(date_time__gte=start, date_time__lte=end)
+                .select_related("forecast")
+                .order_by("date_time", "-forecast__created_at")
+            )
+        else:
+            forecast_rows = list(
+                AgileData.objects.filter(region=data_region, date_time__gte=start, date_time__lte=end)
+                .select_related("forecast")
+                .order_by("date_time", "-forecast__created_at")
+            )
+        predicted = self.build_predicted_series(
+            forecast_rows,
+            start_hours,
+            end_hours,
+            value_attr=forecast_value_attr,
         )
-        predicted = self.build_predicted_series(forecast_rows, start_hours, end_hours)
 
         external_sources = []
         if can_compare_external:
@@ -776,16 +883,22 @@ class HistoryView(TemplateView):
             external_rows_by_label[label] = list(
                 ExternalForecast.objects.filter(
                     source=source,
-                    region=data_region,
+                    region="G" if raw_day_ahead else data_region,
                     date_time__gte=start,
                     date_time__lte=end,
                 ).order_by("date_time", "-source_created_at")
             )
 
-        metrics_table = self.build_metrics_table(actual, forecast_rows, external_rows_by_label)
+        metrics_table = self.build_metrics_table(
+            actual,
+            forecast_rows,
+            external_rows_by_label,
+            forecast_value_attr=forecast_value_attr,
+            external_raw_day_ahead=raw_day_ahead,
+        )
 
         figure = make_subplots(rows=1, cols=1)
-        hover_template_price = "%{x|%d %b %H:%M}<br>%{y:.2f}p/kWh"
+        hover_template_price = f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} {price_display['unit']}"
 
         if len(actual) > 0:
             figure.add_trace(
@@ -794,7 +907,7 @@ class HistoryView(TemplateView):
                     y=actual,
                     line={"color": "white", "width": 2},
                     mode="lines",
-                    name="Actual Agile",
+                    name=price_display["actual_label"],
                     hovertemplate=hover_template_price,
                 )
             )
@@ -804,7 +917,12 @@ class HistoryView(TemplateView):
         if can_compare_external:
             for source, label, color in external_sources:
                 external_rows = external_rows_by_label[label]
-                external_predicted = self.build_external_predicted_series(external_rows, start_hours, end_hours)
+                external_predicted = self.build_external_predicted_series(
+                    external_rows,
+                    start_hours,
+                    end_hours,
+                    raw_day_ahead=raw_day_ahead,
+                )
                 external_counts.append({"label": label, "count": len(external_predicted)})
                 if len(external_predicted) > 0:
                     figure.add_trace(
@@ -820,18 +938,18 @@ class HistoryView(TemplateView):
 
         error_metrics = self.calculate_error_metrics(actual, predicted)
         if error_metrics is None:
-            title = f"Agile Price History - {offset_label} ahead"
+            title = f"{price_display['label']} History - {offset_label} ahead"
         else:
             title = (
-                f"Agile Price History - {offset_label} ahead | "
-                f"MAE {error_metrics['mae']:.2f}p/kWh | "
-                f"RMSE {error_metrics['rmse']:.2f}p/kWh | "
-                f"Bias {error_metrics['bias']:+.2f}p/kWh"
+                f"{price_display['label']} History - {offset_label} ahead | "
+                f"MAE {error_metrics['mae']:.2f}{price_display['unit']} | "
+                f"RMSE {error_metrics['rmse']:.2f}{price_display['unit']} | "
+                f"Bias {error_metrics['bias']:+.2f}{price_display['unit']}"
             )
 
         figure.update_layout(
             title={"text": title, "x": 0.5},
-            yaxis={"title": "Agile Price [p/kWh]"},
+            yaxis={"title": price_display["axis_title"]},
             margin={"r": 5, "t": 50},
             legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="right", x=1),
             height=520,
@@ -846,7 +964,7 @@ class HistoryView(TemplateView):
                 dict(dtickrange=[86000000, None], value="%d %b"),
             ],
         )
-        figure.update_yaxes(title_text="Agile Price [p/kWh]", fixedrange=True)
+        figure.update_yaxes(title_text=price_display["axis_title"], fixedrange=True)
 
         context["graph"] = figure.to_html(
             full_html=False,
@@ -877,7 +995,7 @@ class GraphFormView(FormView):
 
     def get_form_kwargs(self):
         kwargs = super(GraphFormView, self).get_form_kwargs()
-        # kwargs["region"] = self.kwargs.get("region", "X").upper()
+        kwargs["region"] = self.kwargs.get("region", "X").upper()
         kwargs["prefix"] = "test"
         kwargs["local_realtime_external_forecasts"] = _can_use_admin_only_features(self.request)
         # print(kwargs)
@@ -932,6 +1050,11 @@ class GraphFormView(FormView):
         show_export = kwargs.get("show_export_pricing", False)
         show_live_agileforecast = kwargs.get("show_live_agileforecast", False)
         show_live_x2r = kwargs.get("show_live_x2r", False)
+        raw_day_ahead = _is_raw_day_ahead_region(region)
+        if raw_day_ahead:
+            show_export = False
+            show_range = False
+        price_display = _price_display(region, show_export=show_export)
         # print(">>> views.py | GraphFormView | update_chart")
         # print(forecasts_to_plot)
 
@@ -956,17 +1079,17 @@ class GraphFormView(FormView):
         p = PriceHistory.objects.filter(date_time__gte=start).order_by("-date_time")
 
         day_ahead = pd.Series(index=[a.date_time for a in p], data=[a.day_ahead for a in p])
-        agile = day_ahead_to_agile(day_ahead, region=region, export=show_export).sort_index()
-        price_label = "Agile Export Price" if show_export else "Agile Price"
-        actual_label = "Actual Export" if show_export else "Actual"
+        actual_price = day_ahead_to_agile(day_ahead, region=region, export=show_export).sort_index()
+        price_label = price_display["label"]
+        actual_label = price_display["actual_label"]
 
-        hover_template_time_price = "%{x|%H:%M}<br>%{y:.2f}p/kWh"
-        hover_template_price = "%{y:.2f}p/kWh"
+        hover_template_time_price = price_display["hover_time_price"]
+        hover_template_price = price_display["hover_price"]
 
         data = data + [
             go.Scatter(
-                x=agile.loc[:plot_end].index.tz_convert("GB"),
-                y=agile.loc[:plot_end],
+                x=actual_price.loc[:plot_end].index.tz_convert("GB"),
+                y=actual_price.loc[:plot_end],
                 marker={"symbol": 104, "size": 1, "color": "white"},
                 mode="lines",
                 name=actual_label,
@@ -977,7 +1100,10 @@ class GraphFormView(FormView):
         limit = None
         width = 3
         for f in Forecasts.objects.filter(id__in=forecasts_to_plot).order_by("-created_at"):
-            d = AgileData.objects.filter(forecast=f, region=region)
+            if raw_day_ahead:
+                d = ForecastData.objects.filter(forecast=f).order_by("date_time")
+            else:
+                d = AgileData.objects.filter(forecast=f, region=region).order_by("date_time")
             if len(d) > 0:
                 if limit is None:
                     d = d[: (48 * days_to_plot)]
@@ -987,14 +1113,22 @@ class GraphFormView(FormView):
                     d = list(d.filter(date_time__lte=limit))
                 d = [row for row in d if row.date_time <= plot_end]
 
-                x = [a.date_time for a in d if a.date_time <= plot_end and (a.date_time >= agile.index[-1] or show_overlap)]
+                x = [
+                    a.date_time
+                    for a in d
+                    if a.date_time <= plot_end and (a.date_time >= actual_price.index[-1] or show_overlap)
+                ]
                 source = pd.Series(
                     index=pd.to_datetime([a.date_time for a in d]),
-                    data=[a.agile_pred for a in d],
+                    data=[a.day_ahead if raw_day_ahead else a.agile_pred for a in d],
                 )
                 if show_export:
                     source = import_agile_to_export_agile(source, region=region)
-                y = [source.loc[pd.Timestamp(a.date_time)] for a in d if a.date_time <= plot_end and (a.date_time >= agile.index[-1] or show_overlap)]
+                y = [
+                    source.loc[pd.Timestamp(a.date_time)]
+                    for a in d
+                    if a.date_time <= plot_end and (a.date_time >= actual_price.index[-1] or show_overlap)
+                ]
 
                 df = pd.Series(index=pd.to_datetime(x), data=y).sort_index()
                 try:
@@ -1002,7 +1136,7 @@ class GraphFormView(FormView):
                 except:
                     df.index = df.index.tz_localize("GB")
 
-                df = df.loc[agile.index[0] :]
+                df = df.loc[actual_price.index[0] :]
 
                 data = data + [
                     go.Scatter(
@@ -1016,7 +1150,7 @@ class GraphFormView(FormView):
                     )
                 ]
 
-                if (width == 3) and (d[0].agile_high != d[0].agile_low and show_range):
+                if (not raw_day_ahead) and (width == 3) and (d[0].agile_high != d[0].agile_low and show_range):
                     low_source = pd.Series(index=pd.to_datetime([a.date_time for a in d]), data=[a.agile_low for a in d])
                     high_source = pd.Series(index=pd.to_datetime([a.date_time for a in d]), data=[a.agile_high for a in d])
                     if show_export:
@@ -1029,7 +1163,7 @@ class GraphFormView(FormView):
                             y=[
                                 low_source.loc[pd.Timestamp(a.date_time)]
                                 for a in d
-                                if a.date_time <= plot_end and (a.date_time >= agile.index[-1] or show_overlap)
+                                if a.date_time <= plot_end and (a.date_time >= actual_price.index[-1] or show_overlap)
                             ],
                             marker={"symbol": 104, "size": 10},
                             mode="lines",
@@ -1043,7 +1177,7 @@ class GraphFormView(FormView):
                             y=[
                                 high_source.loc[pd.Timestamp(a.date_time)]
                                 for a in d
-                                if a.date_time <= plot_end and (a.date_time >= agile.index[-1] or show_overlap)
+                                if a.date_time <= plot_end and (a.date_time >= actual_price.index[-1] or show_overlap)
                             ],
                             marker={"symbol": 104, "size": 10},
                             mode="lines",
@@ -1058,7 +1192,7 @@ class GraphFormView(FormView):
                 width = 1
 
         live_external_forecasts, live_external_errors = self.fetch_live_external_forecasts(
-            region,
+            "G" if raw_day_ahead else region,
             show_live_agileforecast,
             show_live_x2r,
         )
@@ -1066,7 +1200,7 @@ class GraphFormView(FormView):
         for live_forecast in live_external_forecasts:
             rows = self.filter_forecast_rows_for_plot(
                 live_forecast["rows"],
-                agile.index[-1],
+                actual_price.index[-1],
                 plot_end,
                 show_overlap,
             )
@@ -1080,6 +1214,8 @@ class GraphFormView(FormView):
             ).sort_index()
             if show_export:
                 source = import_agile_to_export_agile(source, region=region)
+            elif raw_day_ahead:
+                source = day_ahead_to_agile(source, reverse=True, region="G")
             try:
                 source.index = source.index.tz_convert("GB")
             except TypeError:
@@ -1219,7 +1355,7 @@ class GraphFormView(FormView):
             figure.append_trace(d, row=1, col=1)
 
         layout = dict(
-            yaxis={"title": f"{price_label} [p/kWh]"},
+            yaxis={"title": price_display["axis_title"]},
             margin={
                 "r": 5,
                 "t": 50,
@@ -1236,7 +1372,7 @@ class GraphFormView(FormView):
             paper_bgcolor="#343a40",
         )
         figure.update_yaxes(
-            title_text=f"{price_label} [p/kWh]",
+            title_text=price_display["axis_title"],
             row=1,
             col=1,
             fixedrange=True,
@@ -1280,8 +1416,11 @@ class GraphFormView(FormView):
         # context["form2"] = OptionsForm()
         f = Forecasts.objects.latest("created_at")
         region = self.kwargs.get("region", "X").upper()
+        if region not in regions:
+            region = "X"
         context["region"] = region
         context["region_name"] = regions.get(region, {"name": ""})["name"]
+        context["is_raw_day_ahead_region"] = _is_raw_day_ahead_region(region)
         # print(context)
 
         context = self.update_chart(context=context, forecasts_to_plot=[f.id])

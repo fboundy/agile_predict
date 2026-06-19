@@ -68,7 +68,11 @@ def get_gas_ttf_history(start=None, end=None):
     start = as_utc(start or "2023-07-01")
     end = as_utc(end or pd.Timestamp.now(tz="UTC")) + pd.Timedelta("1D")
     url = "https://query2.finance.yahoo.com/v8/finance/chart/TTF=F"
-    params = {"range": "max", "interval": "1d"}
+    params = {
+        "period1": int(start.timestamp()),
+        "period2": int(end.timestamp()),
+        "interval": "1d",
+    }
     headers = {"User-Agent": "Mozilla/5.0"}
 
     try:
@@ -685,6 +689,11 @@ def day_ahead_to_agile(df, reverse=False, region="G", export=False):
     x["In"] = x["In"].astype(float)
     x["Out"] = x["In"]
     x["Peak"] = (x.index.hour >= 16) & (x.index.hour < 19)
+
+    if regions.get(region, {}).get("raw_day_ahead"):
+        if export:
+            raise ValueError("Export pricing is not available for raw day-ahead prices")
+        return x["Out"].rename("day_ahead")
 
     if export:
         factor, base_adder, peak_adder = regions[region]["export_factors"]

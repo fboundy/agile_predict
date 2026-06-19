@@ -1,43 +1,53 @@
 from datetime import timedelta
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import pandas as pd
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Group, Permission, User
+from django.core import mail
+from django.core.management import call_command
 from django.test import RequestFactory, TestCase, override_settings
 from django.utils import timezone
 
 from config.settings import GLOBAL_SETTINGS
-from config.utils import day_ahead_to_agile
+from config.utils import day_ahead_to_agile, get_gas_ttf_history
 from prices.forecast_features import (
     build_training_data,
     FEATURE_SETS,
     latest_prediction_features,
     resolve_feature_columns,
 )
+from prices.external_forecasts import fetch_x2r
 from prices.forms import ForecastForm
 from prices.management.commands.update import Command as UpdateCommand
+from prices.management.commands.update import EXTRA_TREES_REGRESSOR_PARAMS, fit_extra_trees_day_ahead_model
 from prices.management.commands.update import XGBOOST_PARAMETER_SETS
-from prices.models import AgileData, ExternalForecast, Forecasts, PriceHistory, RequestClientSeen, RequestMetric
+from prices.models import AgileData, ExternalForecast, ForecastData, Forecasts, PriceHistory, RequestClientSeen, RequestMetric
 from prices.views import GraphFormView, _update_options
 
 
 class HistoryViewTests(TestCase):
     def test_history_view_renders_for_region_and_offset(self):
-        response = self.client.get("/history/X/?offset_days=2")
+        response = self.client.get("/history/?offset_days=2")
 
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Day Ahead Price")
         self.assertContains(response, "Prediction Offset")
         self.assertContains(response, "2d ahead")
         self.assertContains(response, "Date Window")
         self.assertContains(response, "Last 2 Weeks")
         self.assertContains(response, 'type="date"')
+        self.assertNotContains(response, "Region</label>")
 
-    def test_history_view_marks_selected_region(self):
+    def test_history_view_ignores_region_url_and_uses_day_ahead(self):
         response = self.client.get("/history/G/?offset_days=2")
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'action="/history/G/"')
-        self.assertContains(response, '<option value="G" selected>G - North Western England</option>', html=True)
+        self.assertContains(response, 'id="historyForm"')
+        self.assertContains(response, "Day Ahead Price")
+        self.assertContains(response, "£/MWh")
+        self.assertNotContains(response, "Region</label>")
 
     def test_history_prediction_lines_use_successive_time_slot_runs(self):
         created_at = timezone.now() - timedelta(hours=6)
@@ -46,16 +56,21 @@ class HistoryViewTests(TestCase):
         forecast.refresh_from_db()
 
         for index, offset_minutes in enumerate([0, 30, 90]):
-            AgileData.objects.create(
+            ForecastData.objects.create(
                 forecast=forecast,
-                region="X",
                 date_time=created_at + timedelta(hours=1, minutes=offset_minutes),
-                agile_pred=index,
-                agile_low=index,
-                agile_high=index,
+                day_ahead=index,
+                bm_wind=0,
+                solar=0,
+                emb_wind=0,
+                nuclear=0,
+                temp_2m=0,
+                wind_10m=0,
+                rad=0,
+                demand=0,
             )
 
-        response = self.client.get("/history/X/?offset_days=0")
+        response = self.client.get("/history/?offset_days=0")
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "3 predictions for &lt;1d ahead")
@@ -69,16 +84,21 @@ class HistoryViewTests(TestCase):
         for index, offset_minutes in enumerate([0, 30]):
             date_time = created_at + timedelta(hours=1, minutes=offset_minutes)
             PriceHistory.objects.create(date_time=date_time, agile=0, day_ahead=0)
-            AgileData.objects.create(
+            ForecastData.objects.create(
                 forecast=forecast,
-                region="X",
                 date_time=date_time,
-                agile_pred=index,
-                agile_low=index,
-                agile_high=index,
+                day_ahead=index,
+                bm_wind=0,
+                solar=0,
+                emb_wind=0,
+                nuclear=0,
+                temp_2m=0,
+                wind_10m=0,
+                rad=0,
+                demand=0,
             )
 
-        response = self.client.get("/history/X/?offset_days=0")
+        response = self.client.get("/history/?offset_days=0")
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "MAE")
@@ -94,30 +114,33 @@ class HistoryViewTests(TestCase):
 
         for offset_days, predicted in [(0, 1), (1, -2)]:
             date_time = created_at + timedelta(days=offset_days, hours=1)
-            day_ahead = day_ahead_to_agile(pd.Series([0], index=[date_time]), reverse=True, region="X").iloc[0]
-            PriceHistory.objects.create(date_time=date_time, agile=0, day_ahead=day_ahead)
-            AgileData.objects.create(
+            PriceHistory.objects.create(date_time=date_time, agile=0, day_ahead=0)
+            ForecastData.objects.create(
                 forecast=forecast,
-                region="X",
                 date_time=date_time,
-                agile_pred=predicted,
-                agile_low=predicted,
-                agile_high=predicted,
+                day_ahead=predicted,
+                bm_wind=0,
+                solar=0,
+                emb_wind=0,
+                nuclear=0,
+                temp_2m=0,
+                wind_10m=0,
+                rad=0,
+                demand=0,
             )
 
-        response = self.client.get("/history/X/?offset_days=0")
+        response = self.client.get("/history/?offset_days=0")
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "<th scope=\"col\" class=\"text-start\">Metric</th>")
+        self.assertContains(response, "<th scope=\"col\" class=\"text-start\">Model</th>")
+        self.assertContains(response, "<th scope=\"col\" class=\"text-start\">Parameter</th>")
         self.assertContains(response, "&lt;1d")
         self.assertContains(response, "1d")
         self.assertContains(response, "Offset")
         self.assertContains(response, "+1.00")
         self.assertContains(response, "-2.00")
 
-    def test_history_region_g_offers_external_comparison_for_staff(self):
-        user = User.objects.create_user(username="history-staff", password="pw", is_staff=True)
-        self.client.force_login(user)
+    def test_history_offers_external_comparison_to_anonymous_user(self):
         created_at = timezone.now() - timedelta(hours=6)
         ExternalForecast.objects.create(
             source=ExternalForecast.SOURCE_X2R,
@@ -128,48 +151,68 @@ class HistoryViewTests(TestCase):
             agile_pred=12,
         )
 
-        response = self.client.get("/history/G/?compare_x2r=1")
+        response = self.client.get("/history/?compare_x2r=1")
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Compare AgileForecast")
         self.assertContains(response, "Compare X2R")
         self.assertContains(response, "X2R comparison predictions")
 
-    def test_history_region_g_metrics_table_includes_selected_external_forecasts_for_staff(self):
-        user = User.objects.create_user(username="history-metrics-staff", password="pw", is_staff=True)
-        self.client.force_login(user)
+    def test_history_metrics_table_includes_selected_external_forecasts_as_day_ahead(self):
         created_at = timezone.now() - timedelta(hours=6)
 
-        for offset_minutes, actual_price, predicted_price in [(60, 10, 12), (90, 10, 14)]:
+        for offset_minutes, actual_price, predicted_day_ahead in [(60, 100, 110), (90, 100, 120)]:
             date_time = created_at + timedelta(minutes=offset_minutes)
-            day_ahead = day_ahead_to_agile(pd.Series([actual_price], index=[date_time]), reverse=True, region="G").iloc[0]
-            PriceHistory.objects.create(date_time=date_time, agile=actual_price, day_ahead=day_ahead)
+            agile_pred = day_ahead_to_agile(pd.Series([predicted_day_ahead], index=[date_time]), region="G").iloc[0]
+            PriceHistory.objects.create(date_time=date_time, agile=0, day_ahead=actual_price)
             ExternalForecast.objects.create(
                 source=ExternalForecast.SOURCE_X2R,
                 region="G",
                 forecast_name="x2r metrics test",
                 source_created_at=created_at,
                 date_time=date_time,
-                agile_pred=predicted_price,
+                agile_pred=agile_pred,
             )
 
-        response = self.client.get("/history/G/?compare_x2r=1&offset_days=0")
+        response = self.client.get("/history/?compare_x2r=1&offset_days=0")
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "X2R MAE")
-        self.assertContains(response, "X2R RMSE")
-        self.assertContains(response, "X2R Bias")
-        self.assertContains(response, "3.00")
-        self.assertContains(response, "3.16")
-        self.assertContains(response, "+3.00")
+        self.assertContains(response, "X2R")
+        self.assertContains(response, "MAE")
+        self.assertContains(response, "RMSE")
+        self.assertContains(response, "Bias")
+        self.assertContains(response, "15.00")
+        self.assertContains(response, "15.81")
+        self.assertContains(response, "+15.00")
 
-    @override_settings(LOCAL_REALTIME_EXTERNAL_FORECASTS=False)
-    def test_history_region_g_does_not_offer_external_comparison_to_anonymous_user(self):
-        response = self.client.get("/history/G/")
+    def test_history_region_z_uses_day_ahead_units_and_forecast_data(self):
+        created_at = timezone.now() - timedelta(hours=6)
+        forecast = Forecasts.objects.create(name="history-day-ahead-test", mean=0, stdev=0)
+        Forecasts.objects.filter(pk=forecast.pk).update(created_at=created_at)
+        forecast.refresh_from_db()
+
+        date_time = created_at + timedelta(hours=1)
+        PriceHistory.objects.create(date_time=date_time, agile=0, day_ahead=100)
+        ForecastData.objects.create(
+            forecast=forecast,
+            date_time=date_time,
+            day_ahead=110,
+            bm_wind=0,
+            solar=0,
+            emb_wind=0,
+            nuclear=0,
+            temp_2m=0,
+            wind_10m=0,
+            rad=0,
+            demand=0,
+        )
+
+        response = self.client.get("/history/?offset_days=0")
 
         self.assertEqual(response.status_code, 200)
-        self.assertNotContains(response, "Compare AgileForecast")
-        self.assertNotContains(response, "Compare X2R")
+        self.assertContains(response, "Day Ahead Price")
+        self.assertContains(response, "£/MWh")
+        self.assertContains(response, "1 predictions for &lt;1d ahead")
 
 
 class ExportPricingTests(TestCase):
@@ -177,7 +220,7 @@ class ExportPricingTests(TestCase):
         regional_factors = [
             GLOBAL_SETTINGS["REGIONS"][region]["export_factors"]
             for region in GLOBAL_SETTINGS["REGIONS"]
-            if region != "X"
+            if region not in {"X", "Z"}
         ]
         expected = tuple(round(sum(values) / len(values), 4) for values in zip(*regional_factors))
 
@@ -205,6 +248,16 @@ class ExportPricingTests(TestCase):
 
         self.assertIn("show_export_pricing", form.fields)
 
+    def test_day_ahead_region_uses_raw_price_and_hides_export_pricing(self):
+        index = pd.to_datetime(["2026-05-01T12:00:00Z", "2026-05-01T16:00:00Z"])
+        day_ahead = pd.Series(index=index, data=[100, 200])
+
+        converted = day_ahead_to_agile(day_ahead, region="Z")
+        form = ForecastForm(region="Z")
+
+        self.assertEqual(converted.tolist(), [100.0, 200.0])
+        self.assertNotIn("show_export_pricing", form.fields)
+
 
 class LocalRealtimeExternalForecastTests(TestCase):
     @override_settings(LOCAL_REALTIME_EXTERNAL_FORECASTS=False)
@@ -231,7 +284,6 @@ class LocalRealtimeExternalForecastTests(TestCase):
         self.assertEqual(errors, [])
         fetch_agileforecast.assert_not_called()
 
-    @override_settings(LOCAL_REALTIME_EXTERNAL_FORECASTS=True)
     @patch("prices.views.fetch_agileforecast")
     def test_view_fetches_live_external_forecasts_when_enabled(self, fetch_agileforecast):
         fetch_agileforecast.return_value = {
@@ -239,7 +291,31 @@ class LocalRealtimeExternalForecastTests(TestCase):
             "source_created_at": timezone.now(),
             "rows": [],
         }
+        user = User.objects.create_user(username="privileged", password="pw")
+        group, _created = Group.objects.get_or_create(name="Privileged Users")
+        user.groups.add(group)
+        request = RequestFactory().get("/")
+        request.user = user
         view = GraphFormView()
+        view.request = request
+
+        forecasts, errors = view.fetch_live_external_forecasts("G", True, False)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(forecasts[0]["label"], "AgileForecast")
+        fetch_agileforecast.assert_called_once_with("G")
+
+    @patch("prices.views.fetch_agileforecast")
+    def test_view_fetches_live_external_forecasts_for_staff(self, fetch_agileforecast):
+        fetch_agileforecast.return_value = {
+            "name": "Region | G test",
+            "source_created_at": timezone.now(),
+            "rows": [],
+        }
+        request = RequestFactory().get("/")
+        request.user = User.objects.create_user(username="external-staff", password="pw", is_staff=True)
+        view = GraphFormView()
+        view.request = request
 
         forecasts, errors = view.fetch_live_external_forecasts("G", True, False)
 
@@ -264,6 +340,101 @@ class LocalRealtimeExternalForecastTests(TestCase):
         )
 
         self.assertEqual([row["agile_pred"] for row in filtered], [2])
+
+
+class RegistrationTests(TestCase):
+    def test_login_page_links_to_registration(self):
+        response = self.client.get("/accounts/login/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Registered users have access to additional analytics")
+        self.assertContains(response, "Register")
+
+    @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+    def test_registration_creates_inactive_user_in_users_group_and_emails_admin(self):
+        response = self.client.post(
+            "/accounts/register/",
+            {
+                "username": "newuser",
+                "email": "newuser@example.com",
+                "password1": "Test-password-12345",
+                "password2": "Test-password-12345",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        user = User.objects.get(username="newuser")
+        self.assertFalse(user.is_active)
+        self.assertTrue(user.groups.filter(name="Users").exists())
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["foboundy@gmail.com"])
+        self.assertIn("newuser@example.com", mail.outbox[0].body)
+
+
+class IncrementalBackupAuthTests(TestCase):
+    def test_incremental_backup_exports_and_imports_users_groups_and_memberships(self):
+        group, _created = Group.objects.get_or_create(name="Privileged Users")
+        permission = Permission.objects.get(
+            content_type__app_label="auth",
+            content_type__model="user",
+            codename="view_user",
+        )
+        group.permissions.add(permission)
+        user = User.objects.create_user(
+            username="backup-user",
+            email="backup@example.com",
+            password="secret-password",
+            is_active=False,
+        )
+        user.groups.add(group)
+        user.user_permissions.add(permission)
+
+        with TemporaryDirectory() as temp_dir:
+            backup_path = Path(temp_dir) / "incremental.jsonl.gz"
+            state_path = Path(temp_dir) / "state.json"
+            call_command("export_incremental", state=str(state_path), output=str(backup_path), no_update_state=True)
+
+            User.objects.filter(username="backup-user").delete()
+            Group.objects.filter(name="Privileged Users").delete()
+
+            call_command("import_incremental", str(backup_path))
+
+        restored_user = User.objects.get(username="backup-user")
+        self.assertEqual(restored_user.email, "backup@example.com")
+        self.assertFalse(restored_user.is_active)
+        self.assertTrue(restored_user.check_password("secret-password"))
+        self.assertTrue(restored_user.groups.filter(name="Privileged Users").exists())
+        self.assertTrue(restored_user.user_permissions.filter(codename="view_user").exists())
+        self.assertTrue(
+            Group.objects.get(name="Privileged Users").permissions.filter(codename="view_user").exists()
+        )
+
+
+class ExternalForecastTests(TestCase):
+    @patch("prices.external_forecasts.requests.get")
+    def test_fetch_x2r_infers_national_average_from_region_g(self, requests_get):
+        date_time = pd.Timestamp("2026-05-01T16:00:00Z")
+        response = requests_get.return_value
+        response.json.return_value = {
+            "region": "G",
+            "forecast_at": "2026-05-01T09:00:00Z",
+            "prices": {
+                "forecast": [
+                    {
+                        "date": date_time.isoformat(),
+                        "price": 20.0,
+                    }
+                ]
+            },
+        }
+
+        forecast = fetch_x2r("X")
+
+        requests_get.assert_called_once_with("https://api.x2r.uk/agile/G", timeout=15)
+        day_ahead = day_ahead_to_agile(pd.Series([20.0], index=[date_time]), reverse=True, region="G")
+        expected = day_ahead_to_agile(day_ahead, region="X").iloc[0]
+        self.assertEqual(forecast["name"], "X2R X 2026-05-01T09:00:00Z")
+        self.assertAlmostEqual(forecast["rows"][0]["agile_pred"], expected)
 
 
 class RequestMetricsTests(TestCase):
@@ -371,3 +542,54 @@ class UpdateOptionTests(TestCase):
         options = parser.parse_args([])
 
         self.assertEqual(options.xgboost_params, "regularized_dart")
+
+    def test_extra_trees_experimental_model_is_configured_for_parallel_prediction(self):
+        self.assertEqual(EXTRA_TREES_REGRESSOR_PARAMS["min_samples_leaf"], 4)
+        self.assertEqual(EXTRA_TREES_REGRESSOR_PARAMS["random_state"], 42)
+        self.assertEqual(EXTRA_TREES_REGRESSOR_PARAMS["n_jobs"], 1)
+
+    def test_extra_trees_model_can_fit_day_ahead_training_matrix(self):
+        train_X = pd.DataFrame(
+            {
+                "bm_wind": [1, 2, 3, 4, 5, 6],
+                "solar": [0, 1, 0, 1, 0, 1],
+                "emb_wind": [2, 2, 3, 3, 4, 4],
+                "demand": [30, 31, 32, 33, 34, 35],
+                "peak": [0, 0, 1, 1, 0, 1],
+                "days_ago": [1, 1, 2, 2, 3, 3],
+                "weekend": [0, 0, 0, 0, 1, 1],
+            }
+        )
+        train_y = pd.Series([60, 62, 80, 82, 70, 90])
+        sample_weights = pd.Series([1, 1, 2, 2, 1, 2])
+
+        model = fit_extra_trees_day_ahead_model(train_X, train_y, sample_weights)
+        predictions = model.predict(train_X)
+
+        self.assertEqual(len(predictions), len(train_X))
+
+
+class GasTtfHistoryTests(TestCase):
+    @patch("config.utils.requests.get")
+    def test_gas_ttf_history_uses_bounded_daily_yahoo_request(self, requests_get):
+        response = requests_get.return_value
+        response.json.return_value = {
+            "chart": {
+                "result": [
+                    {
+                        "timestamp": [1767225600],
+                        "indicators": {"quote": [{"close": [42.5]}]},
+                    }
+                ]
+            }
+        }
+
+        gas = get_gas_ttf_history(start="2026-01-01", end="2026-01-03")
+
+        requests_get.assert_called_once()
+        params = requests_get.call_args.kwargs["params"]
+        self.assertEqual(params["interval"], "1d")
+        self.assertIn("period1", params)
+        self.assertIn("period2", params)
+        self.assertNotIn("range", params)
+        self.assertEqual(gas.iloc[0], 42.5)

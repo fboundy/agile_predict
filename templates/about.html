@@ -1,23 +1,31 @@
-{% extends "base.html" %} {% load crispy_forms_tags %} {% load tz %} {% block content %}
+{% extends "base.html" %}
 
-<div class="container-lg fluid">
-    <div class="row">
-        <div class="col-lg p-4">
-            <div class="card bg-dark-subtle p-3">
-                <h4>About AgilePredict</h4>
+{% block content %}
+
+<div class="container-lg py-4">
+    <div class="row g-4">
+        <div class="col-12">
+            <div class="card bg-dark-subtle p-4">
+                <h3 class="mb-3">About AgilePredict</h3>
                 <p>
-                    This model attempts to forecasts Octopus Agile electricity prices up to 14 days in advance using a
-                    Machine Learning model trained on data from the Balancing Mechanism Reporting System (<a
-                        href="https://bmrs.elexon.co.uk/"
-                        >BRMS</a
-                    >), National Grid Electricity Supply Operator (<a href="https://www.nationalgrideso.com/data-portal"
-                        >NG ESO</a
-                    >) and weather data from <a href="https://open-meteo.com">open-meteo.com</a>. The table below lists
-                    the features used in the model.
+                    AgilePredict forecasts wholesale day-ahead electricity prices and converts those forecasts into
+                    Octopus Agile import prices for each supported region. The raw day-ahead price is also available as
+                    Region Z and is shown in &pound;/MWh.
                 </p>
+                <p>
+                    The model is trained on historical prices, demand, generation forecasts, and selected weather inputs.
+                    Current forecasts are generated with a regularised XGBoost DART regressor. Experimental outputs from
+                    a classified plunge/normal model and an Extra Trees regressor are stored alongside the main forecast
+                    for analysis, but the published Agile price forecast uses the main XGBoost day-ahead prediction.
+                </p>
+            </div>
+        </div>
 
-                <div class="table-responsive mb-3">
-                    <table class="table table-bordered table-sm table-hover">
+        <div class="col-12">
+            <div class="card bg-dark-subtle p-4">
+                <h4 class="mb-3">Current Model Inputs</h4>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm table-hover align-middle">
                         <thead class="table-light">
                             <tr>
                                 <th>Feature</th>
@@ -27,118 +35,111 @@
                         </thead>
                         <tbody>
                             <tr>
-                                <td>bm_wind</td>
+                                <td><code>bm_wind</code></td>
                                 <td>Forecast metered wind generation</td>
-                                <td>NG ESO (Day Ahead from BMRS)</td>
+                                <td>Elexon BMRS / NESO</td>
                             </tr>
                             <tr>
-                                <td>solar</td>
+                                <td><code>solar</code></td>
                                 <td>Embedded solar generation forecast</td>
-                                <td>NG ESO</td>
+                                <td>NESO</td>
                             </tr>
                             <tr>
-                                <td>demand</td>
-                                <td>Forecast electricity demand</td>
-                                <td>BMRS + NG ESO</td>
+                                <td><code>emb_wind</code></td>
+                                <td>Embedded wind generation forecast</td>
+                                <td>NESO</td>
                             </tr>
                             <tr>
-                                <td>peak</td>
-                                <td>Binary flag for expected daily peak hours</td>
+                                <td><code>demand</code></td>
+                                <td>Forecast national electricity demand</td>
+                                <td>Elexon BMRS / NESO</td>
+                            </tr>
+                            <tr>
+                                <td><code>peak</code></td>
+                                <td>Flag for the 16:00 to 19:00 peak pricing window</td>
                                 <td>Derived</td>
                             </tr>
                             <tr>
-                                <td>days_ago</td>
-                                <td>Number of days from forecast publication to target</td>
+                                <td><code>days_ago</code></td>
+                                <td>Age of the forecast when making the prediction</td>
                                 <td>Derived</td>
                             </tr>
                             <tr>
-                                <td>wind_10m</td>
-                                <td>Surface wind speed forecast at 10m elevation</td>
-                                <td>open-meteo.com</td>
-                            </tr>
-                            <tr>
-                                <td>weekend</td>
-                                <td>Binary indicator for weekends</td>
+                                <td><code>weekend</code></td>
+                                <td>Weekend indicator</td>
                                 <td>Derived</td>
                             </tr>
                         </tbody>
                     </table>
                 </div>
-
-                <h5 class="mt-4">How the Forecast Works</h5>
-                <p>
-                    AgilePredict uses an <strong>XGBoost Gradient Boosting Regressor</strong> to forecast electricity
-                    prices based on a blend of weather and energy market data. Here's an overview of how it works:
-                </p>
-                <ul>
-                    <li>
-                        <strong>Data Collection:</strong> Forecasts and actual prices are sourced from NG ESO, BMRS,
-                        Open-Meteo, and historical Agile data.
-                    </li>
-                    <li>
-                        <strong>Feature Engineering:</strong> Time-based and derived features like peak hours, days
-                        since forecast, and weekend indicators are calculated.
-                    </li>
-                    <li>
-                        <strong>Training Focus:</strong> The model trains on the data closest to 16:15 daily (aligned
-                        with auction timing) and targets the PM auction period (22:00–22:00 next day).
-                    </li>
-                    <li>
-                        <strong>Modeling:</strong> The XGBoost model is trained using log-weighted errors to better
-                        capture high-volatility pricing. It uses cross-validation to validate accuracy.
-                    </li>
-                    <li>
-                        <strong>Prediction:</strong> New forecasts are generated, and confidence intervals are estimated
-                        using Kernel Density Estimation (KDE).
-                    </li>
-                    <li>
-                        <strong>Blending:</strong> Model outputs are blended with actual prices and extended into future
-                        time slots. Forecasts include a central prediction, and low/high bounds.
-                    </li>
-                    <li>
-                        <strong>Publishing:</strong> Results are stored and published for multiple UK regions with
-                        Agile-compatible pricing.
-                    </li>
-                </ul>
-
-                <p>
-                    The forecasts are updated automatically four times per day: at 06:15, 10:15, 16:15, and 22:15. The
-                    accuracy tends to be stronger for general trends rather than exact half-hour slots, especially
-                    further into the future.
-                </p>
-
-                <p>
-                    AgilePredict is a work in progress. Please use the forecasts with care and always check with
-                    official pricing when it matters.
+                <p class="mb-0 small text-body-secondary">
+                    The production feature set is generation-focused.
                 </p>
             </div>
         </div>
-    </div>
 
-    <div class="row">
-        <div class="col-lg-6 fluid p-4">
-            <div class="card bg-dark-subtle p-3">
-                <h4>Supporting the Project</h4>
+        <div class="col-lg-6">
+            <div class="card bg-dark-subtle p-4 h-100">
+                <h4 class="mb-3">How Forecasts Are Built</h4>
+                <ol class="mb-0">
+                    <li>Recent forecasts and actual prices are loaded from the local database.</li>
+                    <li>Training rows are selected from the PM auction window, aligned around the 16:15 update.</li>
+                    <li>The model predicts day-ahead prices for future half-hour slots.</li>
+                    <li>Predictions are blended with known actual prices where appropriate.</li>
+                    <li>Regional Agile prices are derived from the day-ahead forecast using the configured region scale and shift factors.</li>
+                    <li>Low and high forecast bands are generated for the most recent forecast.</li>
+                </ol>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card bg-dark-subtle p-4 h-100">
+                <h4 class="mb-3">Comparison Forecasts</h4>
                 <p>
-                    This is an Open Source project. Contributions are welcome through
-                    <a href="https://github.com/fboundy/agile_predict">GitHub</a>
+                    The History page compares AgilePredict against stored external forecasts from AgileForecast and X2R.
+                    X2R does not publish a direct National Average region, so the Region X comparison is inferred from
+                    Region G using the same configured scale and shift logic used elsewhere in AgilePredict.
                 </p>
-                <h4>Don't Buy Me a Coffee...</h4>
-                <p>
-                    If you'd like to support the site financially you can use the Ko-fi link on this page. Feel free to
-                    donate more than £1! All proceeds will go to help support
-                    <a href="https://penrithmrt.org.uk">Penrith Mountain Rescue Team</a>
-                </p>
-                <h4>Octopus Referral Link</h4>
-                <p>
-                    If you would like to join Octopus please use my link, there's £50 credit for both of us if you do:
-                    <a href="https://share.octopus.energy/silk-dream-111"
-                        >https://share.octopus.energy/silk-dream-111</a
-                    >
+                <p class="mb-0">
+                    External forecasts are for comparison only. They do not feed into the published AgilePredict model.
                 </p>
             </div>
         </div>
-        <div class="col-lg-6 p-4">
+
+        <div class="col-lg-6">
+            <div class="card bg-dark-subtle p-4 h-100">
+                <h4 class="mb-3">Updates and Accuracy</h4>
+                <p>
+                    Forecasts are updated automatically during the day, with the main update aligned to the day-ahead
+                    auction cycle. Accuracy is usually better for broad price shape and daily level than for exact
+                    half-hour prices, especially further into the forecast horizon.
+                </p>
+                <p class="mb-0">
+                    AgilePredict is an open-source forecasting project. Please use the forecasts with care and check
+                    official pricing when the decision matters.
+                </p>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card bg-dark-subtle p-4 h-100">
+                <h4 class="mb-3">Supporting the Project</h4>
+                <p>
+                    Contributions are welcome on
+                    <a href="https://github.com/fboundy/agile_predict">GitHub</a>.
+                </p>
+                <p>
+                    If you would like to support the site financially, the Ko-fi link on this page supports
+                    <a href="https://penrithmrt.org.uk">Penrith Mountain Rescue Team</a>.
+                </p>
+                <p class="mb-0">
+                    If you would like to join Octopus, this referral link gives both of us account credit:
+                    <a href="https://share.octopus.energy/silk-dream-111">https://share.octopus.energy/silk-dream-111</a>.
+                </p>
+            </div>
+        </div>
+
+        <div class="col-12">
             <div class="card bg-secondary p-3">
                 <iframe
                     id="kofiframe"
