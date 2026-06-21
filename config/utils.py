@@ -1,4 +1,6 @@
 import pandas as pd
+import numpy as np
+import re
 import requests
 import time
 import logging
@@ -488,6 +490,70 @@ def get_latest_forecast():
         df.drop(["date_time"], axis=1, inplace=True)
 
         return df.sort_index().dropna(), missing_cols
+
+
+def get_weather_ensemble(n_members=10, forecast_days=3):
+    """
+    Fetch ICON seamless ensemble weather from Open-Meteo.
+    Returns a list of DataFrames (30-min, GB timezone, columns: temp_2m, wind_10m, rad).
+    Returns empty list on any failure so callers can degrade gracefully.
+    """
+    url = "https://ensemble-api.open-meteo.com/v1/ensemble"
+    params = {
+        "latitude": 54.0,
+        "longitude": 2.3,
+        "hourly": ["temperature_2m", "wind_speed_10m", "direct_radiation"],
+        "models": "icon_seamless",
+        "forecast_days": forecast_days,
+    }
+    try:
+        response = requests.get(url=url, params=params, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        logger.warning("Ensemble weather fetch failed: %s", e)
+        return []
+
+    hourly = data.get("hourly", {})
+    raw_times = hourly.get("time", [])
+    if not raw_times:
+        logger.warning("Ensemble weather: empty response from %s", url)
+        return []
+
+    times = pd.to_datetime(raw_times).tz_localize("UTC")
+
+    member_nums = sorted({
+        int(m.group(1))
+        for key in hourly
+        for m in [re.match(r".+_member(\d+)$", key)]
+        if m
+    })
+    if not member_nums:
+        logger.warning("Ensemble weather: no member columns found")
+        return []
+
+    use_members = member_nums[:n_members]
+    logger.info("Ensemble weather: %d members available, using %d", len(member_nums), len(use_members))
+
+    members = []
+    for num in use_members:
+        suffix = f"_member{num:02d}"
+        try:
+            df = pd.DataFrame(
+                {
+                    "temp_2m": hourly.get(f"temperature_2m{suffix}", [np.nan] * len(times)),
+                    "wind_10m": hourly.get(f"wind_speed_10m{suffix}", [np.nan] * len(times)),
+                    "rad": hourly.get(f"direct_radiation{suffix}", [np.nan] * len(times)),
+                },
+                index=times,
+            )
+            df = df.resample("30min").interpolate(method="time")
+            df.index = df.index.tz_convert("GB")
+            members.append(df)
+        except Exception as e:
+            logger.warning("Ensemble weather: failed to process member %02d: %s", num, e)
+
+    return members
 
 
 class DataSet:

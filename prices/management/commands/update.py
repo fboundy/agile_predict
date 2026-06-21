@@ -3,7 +3,6 @@ from lightgbm import LGBMRegressor
 from pathlib import Path
 from sklearn.metrics import mean_squared_error as MSE
 from sklearn.model_selection import KFold, train_test_split
-from sklearn.neighbors import KernelDensity
 
 import matplotlib
 
@@ -183,54 +182,25 @@ def cross_val_ensemble_rmse(train_X, train_y, sample_weights, n_splits=5):
     return np.array(scores)
 
 
-def kde_quantiles(kde, dt, pred, quantiles={"low": 0.1, "mid": 0.5, "high": 0.9}, lim=(0, 150), log_every=25):
-    if not isinstance(dt, list):
-        dt = [dt]
-    if not isinstance(pred, list):
-        pred = [pred]
-
-    results = {q: [] for q in quantiles}
-    total = len(dt)
-    started = time.monotonic()
-    price_points = len(range(int(lim[0]), int(lim[1])))
-    logger.info(
-        "Starting KDE quantiles rows=%s price_points_per_row=%s quantiles=%s lim=%s",
-        total,
-        price_points,
-        list(quantiles.keys()),
-        lim,
-    )
-    for row_number, (dt1, pred1) in enumerate(zip(dt, pred), start=1):
-        if row_number == 1 or row_number % log_every == 0 or row_number == total:
-            logger.info(
-                "KDE quantiles progress row=%s/%s elapsed_seconds=%.2f",
-                row_number,
-                total,
-                time.monotonic() - started,
-            )
-
-        row_started = time.monotonic()
-        x = np.array([[dt1, pred1, p] for p in range(int(lim[0]), int(lim[1]))])
-        c = pd.Series(index=x[:, 2], data=np.exp(kde.score_samples(x)).cumsum())
-        c /= c.iloc[-1]
-        if time.monotonic() - row_started > 5:
-            logger.info(
-                "Slow KDE quantile row row=%s/%s dt=%.4f pred=%.4f duration_seconds=%.2f",
-                row_number,
-                total,
-                dt1,
-                pred1,
-                time.monotonic() - row_started,
-            )
-
-        for q in quantiles:
-            if len(c[c < quantiles[q]]) > 0:
-                idx = c[c < quantiles[q]].index[-1]
-                results[q] += [(quantiles[q] - c[idx]) / (c[idx + 1] - c[idx]) + idx]
-            else:
-                results[q] += [np.nan]
-    logger.info("Finished KDE quantiles rows=%s elapsed_seconds=%.2f", total, time.monotonic() - started)
-    return results
+def compute_horizon_quantiles(results, bins=(6, 12, 24, 36, 48)):
+    """
+    Compute empirical p10/p90 of (actual - predicted) residuals, binned by forecast horizon.
+    Returns dict mapping upper-edge hours -> (p10_offset, p90_offset).
+    """
+    residuals = results["day_ahead"] - results["pred"]
+    hours = results["dt"] * 24
+    global_p10 = float(np.percentile(residuals, 10))
+    global_p90 = float(np.percentile(residuals, 90))
+    horizon_q = {}
+    prev = 0
+    for upper in list(bins) + [np.inf]:
+        mask = (hours > prev) & (hours <= upper)
+        if mask.sum() >= 5:
+            horizon_q[upper] = (float(np.percentile(residuals[mask], 10)), float(np.percentile(residuals[mask], 90)))
+        else:
+            horizon_q[upper] = (global_p10, global_p90)
+        prev = upper
+    return horizon_q
 
 
 class Command(BaseCommand):
@@ -702,56 +672,63 @@ class Command(BaseCommand):
                         fc["plunge_probability"] = np.nan
 
                         if (len(test_X) > 10) and (not no_ranges):
-                            kde_fit_data = results[["dt", "pred", "day_ahead"]].to_numpy()
-                            logger.info(
-                                "Fitting KDE for forecast range estimates rows=%s cols=%s",
-                                kde_fit_data.shape[0],
-                                kde_fit_data.shape[1],
-                            )
-                            kde_started = time.monotonic()
-                            kde = KernelDensity()
-                            kde.fit(kde_fit_data)
-                            logger.info("Finished KDE fit elapsed_seconds=%.2f", time.monotonic() - kde_started)
+                            interval_started = time.monotonic()
 
-                            xlim = (
-                                np.floor(results[["pred", "day_ahead"]].min(axis=1).min() / 11) * 10,
-                                np.ceil(results[["pred", "day_ahead"]].max(axis=1).max() / 9) * 10,
-                            )
+                            # Empirical horizon quantiles from holdout residuals
+                            horizon_q = compute_horizon_quantiles(results)
                             logger.info(
-                                "Calculating KDE forecast range quantiles forecast_rows=%s xlim=%s",
-                                len(fc),
-                                xlim,
+                                "Horizon quantiles (p10/p90 by hours-ahead): %s",
+                                {
+                                    ("inf" if k == np.inf else int(k)): (f"{v[0]:.2f}", f"{v[1]:.2f}")
+                                    for k, v in horizon_q.items()
+                                },
                             )
-                            quantile_started = time.monotonic()
+                            sorted_keys = sorted(horizon_q)
+                            fc_hours = fc["dt"] * 24
+                            fc["day_ahead_low"] = fc["day_ahead"] + fc_hours.apply(
+                                lambda h: next((horizon_q[k] for k in sorted_keys if h <= k), horizon_q[sorted_keys[-1]])[0]
+                            )
+                            fc["day_ahead_high"] = fc["day_ahead"] + fc_hours.apply(
+                                lambda h: next((horizon_q[k] for k in sorted_keys if h <= k), horizon_q[sorted_keys[-1]])[1]
+                            )
 
-                            fc = pd.concat(
-                                [
-                                    fc,
-                                    pd.DataFrame(
-                                        index=fc.index,
-                                        data=kde_quantiles(
-                                            kde,
-                                            fc["dt"].to_list(),
-                                            fc["day_ahead"].to_list(),
-                                            lim=xlim,
-                                            quantiles={"day_ahead_low": 0.1, "day_ahead_high": 0.9},
-                                        ),
-                                    ),
-                                ],
-                                axis=1,
-                            )
-                            logger.info(
-                                "Finished KDE forecast range estimates elapsed_seconds=%.2f",
-                                time.monotonic() - quantile_started,
-                            )
+                            # Ensemble weather for day-adaptive intervals
+                            weather_members = get_weather_ensemble()
+                            if weather_members:
+                                logger.info("Running model on %d weather ensemble members", len(weather_members))
+                                member_preds = []
+                                for member in weather_members:
+                                    member_fc = fc.copy()
+                                    for col in ["temp_2m", "wind_10m", "rad"]:
+                                        if col in member.columns and col in member_fc.columns:
+                                            member_fc[col] = (
+                                                member[col].reindex(member_fc.index).ffill().bfill()
+                                            )
+                                    member_preds.append(
+                                        predict_day_ahead_ensemble(
+                                            ensemble_models,
+                                            latest_prediction_features(member_fc, train_X.columns),
+                                        )
+                                    )
+                                member_arr = np.column_stack(member_preds)
+                                ens_low = np.percentile(member_arr, 10, axis=1)
+                                ens_high = np.percentile(member_arr, 90, axis=1)
+                                fc["day_ahead_low"] = np.minimum(fc["day_ahead_low"].values, ens_low)
+                                fc["day_ahead_high"] = np.maximum(fc["day_ahead_high"].values, ens_high)
+                                logger.info("Applied ensemble weather intervals members=%d", len(weather_members))
+                            else:
+                                logger.info("Ensemble weather unavailable, using empirical quantiles only")
 
                             for case in ["low", "high"]:
                                 fc[f"day_ahead_{case}"] = (
                                     fc[f"day_ahead_{case}"].rolling(3, center=True).mean().bfill().ffill()
                                 )
-
                             fc["day_ahead_low"] = fc[["day_ahead", "day_ahead_low"]].min(axis=1)
                             fc["day_ahead_high"] = fc[["day_ahead", "day_ahead_high"]].max(axis=1)
+                            logger.info(
+                                "Finished forecast intervals elapsed_seconds=%.2f",
+                                time.monotonic() - interval_started,
+                            )
 
                         else:
                             logger.info("Using fallback +/-10% forecast ranges")
