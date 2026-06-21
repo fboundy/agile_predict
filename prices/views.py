@@ -1742,10 +1742,10 @@ class GraphV2View(V2NavMixin, TemplateView):
             except Exception:
                 pass
 
-        latest_price = PriceHistory.objects.order_by("-valid_from").first()
+        latest_price = PriceHistory.objects.order_by("-date_time").first()
         if latest_price is not None:
             try:
-                api_status["prices_to"] = pd.Timestamp(latest_price.valid_from).tz_convert("GB").strftime("%d %b %H:%M")
+                api_status["prices_to"] = pd.Timestamp(latest_price.date_time).tz_convert("GB").strftime("%d %b %H:%M")
             except Exception:
                 pass
 
