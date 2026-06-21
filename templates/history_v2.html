@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-lg py-3">
+
+  {# ======== Page header ======== #}
+  <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+    <div>
+      <h5 class="mb-0">Forecast accuracy
+        {% if region_name %}<span class="text-body-secondary fw-normal fs-6">— {{ region_name }}</span>{% endif %}
+      </h5>
+      <div class="text-body-secondary" style="font-size:.8rem">{{ window_key|title }} · lead time {{ offset_label }} ahead</div>
+    </div>
+    <a href="/v2/{{ region }}/" class="btn btn-sm btn-outline-secondary">Back to forecast</a>
+  </div>
+
+  {# ======== Error metric cards ======== #}
+  {% if error_metrics %}
+  <div class="row g-2 mb-3">
+    <div class="col-6 col-lg-3">
+      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+        <div class="card-body py-2 px-3">
+          <div class="text-body-secondary mb-1" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">MAE</div>
+          <div class="fs-4 fw-bold">{{ error_metrics.mae|floatformat:2 }}</div>
+          <div class="text-body-secondary" style="font-size:.75rem">{{ price_unit }} mean abs error</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+        <div class="card-body py-2 px-3">
+          <div class="text-body-secondary mb-1" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">RMSE</div>
+          <div class="fs-4 fw-bold">{{ error_metrics.rmse|floatformat:2 }}</div>
+          <div class="text-body-secondary" style="font-size:.75rem">{{ price_unit }} root mean sq error</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+        <div class="card-body py-2 px-3">
+          <div class="text-body-secondary mb-1" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Bias</div>
+          <div class="fs-4 fw-bold {% if error_metrics.bias > 0 %}text-warning{% elif error_metrics.bias < 0 %}text-info{% endif %}">
+            {{ error_metrics.bias|floatformat:"+2" }}
+          </div>
+          <div class="text-body-secondary" style="font-size:.75rem">{{ price_unit }} systematic over/under</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+        <div class="card-body py-2 px-3">
+          <div class="text-body-secondary mb-1" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Samples</div>
+          <div class="fs-4 fw-bold">{{ error_metrics.n }}</div>
+          <div class="text-body-secondary" style="font-size:.75rem">half-hour slots compared</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {# ======== Controls ======== #}
+  <div class="rounded p-2 mb-2 d-flex flex-wrap align-items-center gap-2" style="background:#2a2d31">
+
+    {# Window buttons #}
+    <div class="btn-group btn-group-sm">
+      {% for opt in window_options %}
+      <a href="?window={{ opt.key }}&offset_days={{ offset_days }}{% if compare_agileforecast %}&compare_agileforecast=1{% endif %}{% if compare_x2r %}&compare_x2r=1{% endif %}"
+         class="btn {% if window_key == opt.key %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+        {{ opt.label }}
+      </a>
+      {% endfor %}
+    </div>
+
+    <div class="vr d-none d-sm-block" style="opacity:.3"></div>
+
+    {# Lead-time selector #}
+    <div class="d-flex align-items-center gap-1">
+      <span class="text-body-secondary" style="font-size:.8rem">Lead:</span>
+      <select class="form-select form-select-sm" style="width:auto;background:#343a40;border-color:#495057;color:#dee2e6"
+        onchange="var p=new URLSearchParams(window.location.search);p.set('offset_days',this.value);window.location='?'+p.toString()">
+        {% for opt in offset_options %}
+        <option value="{{ opt.value }}" {% if offset_days == opt.value %}selected{% endif %}>{{ opt.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    {% if can_compare_external %}
+    <div class="vr d-none d-sm-block" style="opacity:.3"></div>
+    <a href="?window={{ window_key }}&offset_days={{ offset_days }}&compare_agileforecast={% if compare_agileforecast %}0{% else %}1{% endif %}{% if compare_x2r %}&compare_x2r=1{% endif %}&metric={{ selected_metric }}"
+       class="btn btn-sm"
+       style="border-color:{{ source_colors.AgileForecast }};{% if compare_agileforecast %}background:{{ source_colors.AgileForecast }};color:#fff{% else %}color:{{ source_colors.AgileForecast }}{% endif %}">
+      AgileForecast
+    </a>
+    <a href="?window={{ window_key }}&offset_days={{ offset_days }}{% if compare_agileforecast %}&compare_agileforecast=1{% endif %}&compare_x2r={% if compare_x2r %}0{% else %}1{% endif %}&metric={{ selected_metric }}"
+       class="btn btn-sm"
+       style="border-color:{{ source_colors.X2R }};{% if compare_x2r %}background:{{ source_colors.X2R }};color:#fff{% else %}color:{{ source_colors.X2R }}{% endif %}">
+      X2R
+    </a>
+    {% endif %}
+
+    <div class="vr d-none d-sm-block" style="opacity:.3"></div>
+    <div class="btn-group btn-group-sm" role="group" aria-label="Error metric">
+      <button type="button" class="btn {% if selected_metric == 'mae' %}btn-primary{% else %}btn-outline-secondary{% endif %}"
+              onclick="setQP('metric','mae')">MAE</button>
+      <button type="button" class="btn {% if selected_metric == 'rmse' %}btn-primary{% else %}btn-outline-secondary{% endif %}"
+              onclick="setQP('metric','rmse')">RMSE</button>
+    </div>
+
+    {% if not is_raw_day_ahead_region %}
+    <div class="vr d-none d-sm-block" style="opacity:.3"></div>
+    <div class="btn-group btn-group-sm" role="group" aria-label="Accuracy units">
+      <button type="button" class="btn {% if unit_mode == 'da' or not unit_mode %}btn-primary{% else %}btn-outline-secondary{% endif %}"
+              onclick="setQP('unit_mode','da')">Day Ahead £/MWh</button>
+      <button type="button" class="btn {% if unit_mode == 'agile' %}btn-primary{% else %}btn-outline-secondary{% endif %}"
+              onclick="setQP('unit_mode','agile')">Agile p/kWh</button>
+    </div>
+    {% endif %}
+
+  </div>
+  <script>
+  function setQP(k, v) {
+    var p = new URLSearchParams(window.location.search);
+    p.set(k, v);
+    window.location.search = p.toString();
+  }
+  </script>
+
+  {# ======== Price chart ======== #}
+  <div class="mb-3">{{ graph|safe }}</div>
+
+  {# ======== Metrics vs lead-time chart ======== #}
+  {% if metrics_chart %}
+  <div class="card border-0 shadow-sm mb-3" style="background:#2a2d31">
+    <div class="card-body py-2 px-3">
+      <h6 class="card-title mb-1 text-body-secondary" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">
+        Accuracy vs lead time
+      </h6>
+      {{ metrics_chart|safe }}
+    </div>
+  </div>
+  {% endif %}
+
+  {# ======== Accuracy table ======== #}
+  {% if metrics_table.rows %}
+  <div class="card border-0 shadow-sm" style="background:#2a2d31">
+    <div class="card-body py-2 px-3">
+      <h6 class="card-title mb-2 text-body-secondary" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">
+        Accuracy by lead time ({{ price_unit }})
+      </h6>
+      <div class="table-responsive">
+        <table class="table table-sm table-borderless mb-0" style="font-size:.8rem">
+          <thead>
+            <tr class="text-body-secondary" style="border-bottom:1px solid #495057">
+              <th class="fw-normal py-1">Model</th>
+              <th class="fw-normal py-1">Metric</th>
+              {% for col in metrics_table.columns %}
+              <th class="fw-normal py-1 text-end">{{ col.label }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in metrics_table.rows %}
+            <tr style="border-bottom:1px solid #2d3035">
+              <td class="py-1 text-body-secondary text-nowrap" style="font-size:.75rem">{{ row.model }}</td>
+              <td class="py-1 text-body-secondary">{{ row.parameter }}</td>
+              {% for v in row.values %}
+              <td class="py-1 text-end">{{ v }}</td>
+              {% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock content %}

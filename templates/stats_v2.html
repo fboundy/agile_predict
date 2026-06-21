@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block content %}
+<div class="container-lg py-3">
+
+  <div class="mb-3">
+    <h5 class="mb-0">Model stats</h5>
+    <div class="text-body-secondary" style="font-size:.8rem">Training accuracy and diagnostic plots</div>
+  </div>
+
+  {% if trend_plot_url %}
+  <div class="card border-0 shadow-sm mb-3" style="background:#2a2d31">
+    <div class="card-body py-2 px-3">
+      <h6 class="text-body-secondary mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">
+        Model error trend over time
+      </h6>
+      <p class="text-body-secondary mb-2" style="font-size:.82rem">
+        Each run trains on 80% of the data and tests on the remaining 20%, repeated five times.
+        The solid line is the mean RMSE; the band is ±1 standard deviation. A downward trend
+        indicates the model is improving as more data is collected.
+      </p>
+      <img src="{{ trend_plot_url }}" alt="Error trend" class="img-fluid rounded" />
+    </div>
+  </div>
+  {% endif %}
+
+  {% if stats %}
+  <div class="card border-0 shadow-sm mb-3" style="background:#2a2d31">
+    <div class="card-body py-2 px-3">
+      <h6 class="text-body-secondary mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">
+        Forecast error heatmap — last 7 days
+      </h6>
+      <p class="text-body-secondary mb-2" style="font-size:.82rem">
+        Actual Agile price shown in yellow; thin grey lines are historical forecasts.
+        The heatmap shows how errors evolve over forecast date — warm colours indicate
+        larger error; you should see cooler colours near the top-left (short lead times).
+      </p>
+      {{ stats|safe }}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if plot_files %}
+  <h6 class="text-body-secondary mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">
+    Diagnostic plots — most recent forecast
+  </h6>
+  <div class="row g-3">
+    {% for plot in plot_files %}
+    <div class="{% if forloop.first %}col-12{% else %}col-md-6{% endif %}">
+      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+        <div class="card-body py-2 px-3">
+          <h6 class="mb-1" style="font-size:.82rem;font-weight:600">{{ plot.title }}</h6>
+          {% if plot.description %}
+          <p class="text-body-secondary mb-2" style="font-size:.78rem">{{ plot.description }}</p>
+          {% endif %}
+          <img src="{{ plot.url }}" class="img-fluid rounded" alt="{{ plot.title }}" />
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="card border-0 shadow-sm" style="background:#2a2d31">
+    <div class="card-body py-3 text-center text-body-secondary" style="font-size:.85rem">
+      No diagnostic plots available yet. Run a forecast to generate them.
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock content %}

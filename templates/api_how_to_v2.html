@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% load static %}
+{% load tz %}
+
+{% block content %}
+<div class="container-lg py-3">
+
+  <div class="mb-3">
+    <h5 class="mb-0">API &amp; Home Assistant</h5>
+    <div class="text-body-secondary" style="font-size:.8rem">Integrating AgilePredict with your own tools</div>
+  </div>
+
+  <div class="row g-3">
+
+    {# ===== REST API ===== #}
+    <div class="col-12">
+      <div class="card border-0 shadow-sm" style="background:#2a2d31">
+        <div class="card-body py-3 px-4">
+          <h6 class="mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">REST API</h6>
+          <p style="font-size:.88rem" class="mb-2">
+            Forecast data is available as JSON at
+            <code>https://agilepredict.com/api/{REGION}</code>.
+            Optional query parameters:
+          </p>
+          <div class="rounded p-3 mb-3" style="background:#1a1d21;font-size:.82rem;font-family:monospace">
+            days           — days to download (default 14)<br>
+            forecast_count — number of recent forecasts (default 1)<br>
+            high_low       — include p10/p90 bands (default True)<br>
+            export         — Agile Outgoing export prices (default False)
+          </div>
+          <p style="font-size:.88rem" class="mb-1">Examples:</p>
+          <ul style="font-size:.85rem" class="mb-0">
+            <li class="mb-1">
+              Three most recent forecasts, 7 days, Region G, no bands:<br>
+              <code>https://agilepredict.com/api/G?days=7&amp;forecast_count=3&amp;high_low=False</code>
+            </li>
+            <li class="mb-1">
+              Export prices for Region G:<br>
+              <code>https://agilepredict.com/api/G?days=7&amp;export=true</code>
+            </li>
+            <li>
+              Accuracy summary (accepts <code>region</code> and <code>export</code>):<br>
+              <code>https://agilepredict.com/api/accuracy/?region=G&amp;export=true</code>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    {# ===== Home Assistant sensor ===== #}
+    <div class="col-lg-6">
+      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+        <div class="card-body py-3 px-4">
+          <h6 class="mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">Home Assistant sensor</h6>
+          <p style="font-size:.88rem" class="mb-2">
+            Add the following to <code>configuration.yaml</code> (or use the GitHub YAML files directly):
+          </p>
+          <div class="rounded p-3" style="background:#1a1d21;font-size:.8rem;font-family:monospace;white-space:pre-wrap">{% verbatim %}sensor:
+- platform: rest
+  resource: https://agilepredict.com/api/G
+  scan_interval: 3600
+  name: Agile Predict
+  value_template: "{{ value_json[0]['name'] }}"
+  json_attributes_path: "$[0]"
+  json_attributes:
+  - "created_at"
+  - "prices"{% endverbatim %}</div>
+        </div>
+      </div>
+    </div>
+
+    {# ===== Apex Charts YAML ===== #}
+    <div class="col-lg-6">
+      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+        <div class="card-body py-3 px-4">
+          <h6 class="mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">Lovelace Apex Charts card</h6>
+          <p style="font-size:.88rem" class="mb-2">
+            Requires the <a href="https://github.com/RomRider/apexcharts-card" class="link-info">Apex Charts Card</a> custom integration.
+          </p>
+          {% if not hide_ha_chart %}
+          <img src="{% static 'chart.png' %}" alt="Home Assistant chart example" class="img-fluid rounded mb-2" />
+          {% endif %}
+          <div class="rounded p-3" style="background:#1a1d21;font-size:.75rem;font-family:monospace;white-space:pre-wrap;max-height:320px;overflow-y:auto">type: custom:apexcharts-card
+header:
+  show: true
+  show_states: true
+  colorize_states: true
+graph_span: 7d
+yaxis:
+  - id: price
+    decimals: 0
+span:
+  start: day
+series:
+  - entity: sensor.agile_predict
+    yaxis_id: price
+    name: Predicted Agile
+    color: "#56B4E9"
+    stroke_width: 3
+    unit: p/kWh
+    data_generator: |
+      return entity.attributes.prices.map((e) => {
+        return [new Date(e.date_time), e.agile_pred];
+      });</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock content %}
