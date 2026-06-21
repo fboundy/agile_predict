@@ -22,7 +22,7 @@ import os
 import logging
 import time
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from ...forecast_features import (
     build_forecast_frame,
     build_holdout_data,
@@ -42,6 +42,7 @@ from config.settings import GLOBAL_SETTINGS
 DAYS_TO_INCLUDE = 7
 MODEL_ITERS = 50
 MIN_HIST = 7
+MIN_FORECAST_ROWS = 200  # ~4 days; fewer rows means upstream APIs have degraded
 MAX_HIST = 28
 MAX_TEST_X = 10000
 EXTRA_TREES_REGRESSOR_PARAMS = {
@@ -395,12 +396,17 @@ class Command(BaseCommand):
             refresh_db_connection("after fetching latest forecast")
 
             if len(missing_fc) > 0:
-                logger.error(f">>> ERROR: Unable to run forecast due to missing columns: {', '.join(missing_fc)}")
-            else:
-                if debug:
-                    logger.info(fc)
+                raise CommandError(
+                    f"Upstream APIs missing columns: {', '.join(missing_fc)}. Aborting to avoid degraded forecast."
+                )
 
-                if len(fc) > 0:
+            if len(fc) < MIN_FORECAST_ROWS:
+                raise CommandError(
+                    f"Upstream APIs returned only {len(fc)} forecast rows (minimum {MIN_FORECAST_ROWS}). "
+                    "Aborting to avoid degraded forecast."
+                )
+
+            if True:
                     refresh_db_connection("before loading training data")
                     fd = pd.DataFrame(list(ForecastData.objects.exclude(forecast_id__in=ignore_forecast).values()))
                     ff = pd.DataFrame(list(Forecasts.objects.exclude(id__in=ignore_forecast).values()))

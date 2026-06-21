@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-lg py-3">
+
+  {# ======== Page header ======== #}
+  <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+    <div>
+      <h5 class="mb-0">{{ region_name }}{% if not is_raw_day_ahead_region and region != "X" %} <span class="text-body-secondary fw-normal fs-6">(Region {{ region }})</span>{% endif %}</h5>
+      {% if summary.forecast_updated %}<div class="text-body-secondary" style="font-size:.8rem">Forecast updated {{ summary.forecast_updated }}</div>{% endif %}
+    </div>
+    <a href="/{{ region }}/" class="btn btn-sm btn-outline-secondary">Classic view</a>
+  </div>
+
+  {# ======== Summary cards ======== #}
+  <div class="row g-2 mb-3">
+
+    {# Card 1: Current price #}
+    {% if summary.current_price %}
+    <div class="col-6 col-lg-3">
+      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+        <div class="card-body py-2 px-3">
+          <div class="text-body-secondary mb-1" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Now · {{ summary.current_time }}</div>
+          <div class="d-flex align-items-baseline gap-2 flex-wrap">
+            <span class="display-6 fw-bold lh-1 badge bg-{{ summary.current_badge }}" style="font-size:1.7rem">{{ summary.current_price }}</span>
+            <span class="text-body-secondary">{{ summary.unit }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {# Card 2: Best single slot #}
+    {% if summary.best_slot_price %}
+    <div class="col-6 col-lg-3">
+      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+        <div class="card-body py-2 px-3">
+          <div class="text-body-secondary mb-1" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">{{ summary.best_slot_label }}</div>
+          <div class="d-flex align-items-baseline gap-2 flex-wrap">
+            <span class="fs-4 fw-bold badge bg-{{ summary.best_slot_badge }}">{{ summary.best_slot_price }}</span>
+            <span class="text-body-secondary">{{ summary.unit }}</span>
+          </div>
+          <div style="font-size:.8rem" class="text-body-secondary mt-1">at {{ summary.best_slot_time }}</div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {# Card 3: Best 2h window #}
+    {% if summary.window_start %}
+    <div class="col-6 col-lg-3">
+      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+        <div class="card-body py-2 px-3">
+          <div class="text-body-secondary mb-1" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">{{ summary.window_label }}</div>
+          <div class="d-flex align-items-baseline gap-2 flex-wrap">
+            <span class="fs-4 fw-bold badge bg-{{ summary.window_badge }}">{{ summary.window_avg }}</span>
+            <span class="text-body-secondary">{{ summary.unit }}</span>
+          </div>
+          <div style="font-size:.8rem" class="text-body-secondary mt-1">{{ summary.window_start }}–{{ summary.window_end }}</div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {# Card 4: Data source health #}
+    {% if api_status %}
+    <div class="col-6 col-lg-3">
+      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+        <div class="card-body py-2 px-3">
+          <div class="d-flex align-items-center justify-content-between mb-1">
+            <span class="text-body-secondary" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Data sources</span>
+            {% if api_status.health == "ok" %}
+              <span style="font-size:.65rem;background:#009e4020;color:#28a745;border:1px solid #28a74540;border-radius:3px;padding:1px 5px">OK</span>
+            {% elif api_status.health == "warn" %}
+              <span style="font-size:.65rem;background:#ffc10720;color:#ffc107;border:1px solid #ffc10740;border-radius:3px;padding:1px 5px">DEGRADED</span>
+            {% else %}
+              <span style="font-size:.65rem;background:#dc354520;color:#dc3545;border:1px solid #dc354540;border-radius:3px;padding:1px 5px">LIMITED</span>
+            {% endif %}
+          </div>
+          <div class="d-flex align-items-baseline gap-1">
+            <span class="fs-4 fw-bold {% if api_status.health == 'ok' %}text-success{% elif api_status.health == 'warn' %}text-warning{% else %}text-danger{% endif %}">{{ api_status.horizon_days }}</span>
+            <span class="text-body-secondary" style="font-size:.8rem">day forecast</span>
+          </div>
+          {% if api_status.prices_to %}
+          <div class="text-body-secondary mt-1" style="font-size:.75rem">Prices to {{ api_status.prices_to }}</div>
+          {% endif %}
+          {% if api_status.updated %}
+          <div class="text-body-secondary" style="font-size:.75rem">Updated {{ api_status.updated }}</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+
+  {# ======== Controls (above chart) ======== #}
+  <div class="rounded p-2 mb-2 d-flex flex-wrap align-items-center gap-2" style="background:#2a2d31">
+
+    {# Region dropdown — JS preserves current query string on navigate #}
+    <select class="form-select form-select-sm" style="width:auto;max-width:200px;background:#343a40;border-color:#495057;color:#dee2e6"
+      onchange="var p=new URLSearchParams(window.location.search);window.location='/v2/'+this.value+'/?' +p.toString()">
+      <option value="X" {% if region == "X" %}selected{% endif %}>National (X)</option>
+      {% for key, name in REGIONS.items %}{% if key != "X" and key != "Z" %}
+      <option value="{{ key }}" {% if region == key %}selected{% endif %}>{{ key }}: {{ name }}</option>
+      {% endif %}{% endfor %}
+      <option value="Z" {% if region == "Z" %}selected{% endif %}>Day Ahead (Z)</option>
+    </select>
+
+    <div class="vr d-none d-sm-block" style="opacity:.3"></div>
+
+    {# Day range #}
+    <div class="btn-group btn-group-sm" role="group" aria-label="Days to show">
+      {% for d in day_options %}
+      <a href="?days={{ d }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+         class="btn {% if days == d %}btn-primary{% else %}btn-outline-secondary{% endif %}">{{ d }}d</a>
+      {% endfor %}
+    </div>
+
+    <div class="vr d-none d-sm-block" style="opacity:.3"></div>
+
+    {# Toggles #}
+    {% if not is_raw_day_ahead_region %}
+    <a href="?days={{ days }}&band={% if show_band %}0{% else %}1{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+       class="btn btn-sm {% if show_band %}btn-outline-info active{% else %}btn-outline-secondary{% endif %}">
+      Uncertainty band
+    </a>
+    <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}&export={% if show_export %}0{% else %}1{% endif %}{% if show_gen %}&gen=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+       class="btn btn-sm {% if show_export %}btn-outline-warning active{% else %}btn-outline-secondary{% endif %}">
+      Export prices
+    </a>
+    {% endif %}
+    <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}&gen={% if show_gen %}0{% else %}1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+       class="btn btn-sm {% if show_gen %}btn-outline-success active{% else %}btn-outline-secondary{% endif %}">
+      Gen &amp; demand
+    </a>
+
+  </div>
+
+  {# Forecast selector (collapsible, above chart) #}
+  {% if forecast_list %}
+  <div class="mb-2">
+    <button class="btn btn-sm btn-outline-secondary py-1 px-2" type="button"
+            data-bs-toggle="collapse" data-bs-target="#fc-select" aria-expanded="false">
+      <small>Forecast runs &#9660;</small>
+    </button>
+    <div class="collapse mt-1" id="fc-select">
+      <form method="get" class="rounded p-2 d-flex flex-wrap align-items-center gap-2" style="background:#2a2d31">
+        <input type="hidden" name="days" value="{{ days }}">
+        {% if not show_band %}<input type="hidden" name="band" value="0">{% endif %}
+        {% if show_export %}<input type="hidden" name="export" value="1">{% endif %}
+        {% if show_gen %}<input type="hidden" name="gen" value="1">{% endif %}
+        {% for f in forecast_list %}
+        <div class="form-check form-check-inline mb-0">
+          <input class="form-check-input" type="checkbox" name="fc" value="{{ f.id }}"
+                 id="fc{{ f.id }}" {% if f.selected %}checked{% endif %}>
+          <label class="form-check-label text-nowrap" style="font-size:.8rem" for="fc{{ f.id }}">{{ f.label }}</label>
+        </div>
+        {% endfor %}
+        <button type="submit" class="btn btn-sm btn-primary py-0 px-2">Update</button>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
+  {# ======== Chart ======== #}
+  <div class="mb-1">{{ graph|safe }}</div>
+
+  {# Colour legend (below chart, compact single line) #}
+  {% if not is_raw_day_ahead_region %}
+  <div class="d-flex flex-wrap gap-1 align-items-center mb-3" style="font-size:.7rem">
+    {% if show_export %}
+    <span class="text-body-secondary me-1">Export price:</span>
+    <span class="badge bg-danger">&lt;0p (cost)</span>
+    <span class="badge" style="background:#fd7e14">0–5p</span>
+    <span class="badge bg-warning text-dark">5–15p</span>
+    <span class="badge" style="background:#20c997;color:#000">15–25p</span>
+    <span class="badge bg-success">25–35p</span>
+    <span class="badge" style="background:#6f42c1">&gt;35p (best)</span>
+    {% else %}
+    <span class="text-body-secondary me-1">Import price:</span>
+    <span class="badge" style="background:#6f42c1">&lt;0p Plunge</span>
+    <span class="badge bg-success">0–5p</span>
+    <span class="badge" style="background:#20c997;color:#000">5–15p</span>
+    <span class="badge bg-warning text-dark">15–25p</span>
+    <span class="badge" style="background:#fd7e14">25–35p</span>
+    <span class="badge bg-danger">&gt;35p</span>
+    {% endif %}
+    {% if show_band %}<span class="text-body-secondary ms-3">Whiskers = p10/p90 uncertainty band</span>{% endif %}
+  </div>
+  {% endif %}
+
+  {# ======== Price heat strip ======== #}
+  {% if heat_strip %}
+  <div class="card border-0 shadow-sm" style="background:#2a2d31">
+    <div class="card-body py-2 px-3">
+      <h6 class="card-title mb-2 text-body-secondary" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">
+        Price profile — {{ summary.unit }}{% if summary.is_export %} (export){% endif %}
+        <span class="fw-normal ms-2" style="font-size:.65rem">(hover for details)</span>
+      </h6>
+      {% for day in heat_strip %}
+      <div class="d-flex align-items-center mb-1" style="gap:2px">
+        <span class="text-body-secondary text-nowrap" style="font-size:.7rem;width:4rem;flex-shrink:0">{{ day.date }}</span>
+        <div class="d-flex flex-fill" style="gap:1px;min-width:0">
+          {% for slot in day.slots %}
+          <div title="{{ slot.time }}: {{ slot.price }}{{ summary.unit }}"
+               style="flex:1;height:16px;background:{{ slot.color }};border-radius:1px;min-width:0;cursor:default"></div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock content %}

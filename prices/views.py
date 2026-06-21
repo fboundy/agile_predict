@@ -76,6 +76,53 @@ def _price_display(region, show_export=False):
     }
 
 
+def _price_color(p):
+    """Map a p/kWh Agile import price to a hex colour. Pass None for a neutral grey."""
+    if p is None:
+        return "#4a9eff"
+    if p < 0:
+        return "#6f42c1"
+    if p < 5:
+        return "#198754"
+    if p < 15:
+        return "#20c997"
+    if p < 25:
+        return "#ffc107"
+    if p < 35:
+        return "#fd7e14"
+    return "#dc3545"
+
+
+def _export_price_color(p):
+    """Map a p/kWh Agile export price to a hex colour — high prices are desirable."""
+    if p is None:
+        return "#4a9eff"
+    if p < 0:
+        return "#dc3545"   # red  — paying to export
+    if p < 5:
+        return "#fd7e14"   # orange — poor
+    if p < 15:
+        return "#ffc107"   # amber — ok
+    if p < 25:
+        return "#20c997"   # teal — good
+    if p < 35:
+        return "#198754"   # green — very good
+    return "#6f42c1"       # purple — excellent
+
+
+def _price_badge(p):
+    """Map a p/kWh Agile import price to a Bootstrap badge variant string."""
+    if p is None:
+        return "secondary"
+    if p < 0:
+        return "info"
+    if p < 15:
+        return "success"
+    if p < 25:
+        return "warning text-dark"
+    return "danger"
+
+
 def _truthy(value):
     return str(value).lower() in {"1", "true", "yes", "on"}
 
@@ -585,6 +632,19 @@ class HistoryView(TemplateView):
 
         return window_key, start, end, custom_start_date, custom_end_date
 
+    _source_colors = {
+        "AgilePredict": "#ffc107",
+        "AgileForecast": "#0dcaf0",
+        "X2R": "#fd7e14",
+    }
+
+    def _source_color(self, label):
+        return self._source_colors.get(label, "#adb5bd")
+
+    def _chart_title(self, title_str):
+        """Return (title_dict_or_None, top_margin_px). Override in subclasses."""
+        return {"text": title_str, "x": 0.5}, 50
+
     def add_prediction_traces(self, figure, predicted, offset_label, hover_template_price):
         if len(predicted) < 2:
             return 0
@@ -602,7 +662,7 @@ class HistoryView(TemplateView):
                         go.Scatter(
                             x=pd.DatetimeIndex(segment_x).tz_convert("GB"),
                             y=segment_y,
-                            line={"color": "#ffc107", "width": 2},
+                            line={"color": self._source_color("AgilePredict"), "width": 2},
                             mode="lines",
                             name=f"Prediction {offset_label} ahead" if segment_count == 1 else None,
                             showlegend=segment_count == 1,
@@ -622,7 +682,7 @@ class HistoryView(TemplateView):
                 go.Scatter(
                     x=pd.DatetimeIndex(segment_x).tz_convert("GB"),
                     y=segment_y,
-                    line={"color": "#ffc107", "width": 2},
+                    line={"color": self._source_color("AgilePredict"), "width": 2},
                     mode="lines",
                     name=f"Prediction {offset_label} ahead" if segment_count == 1 else None,
                     showlegend=segment_count == 1,
@@ -851,6 +911,7 @@ class HistoryView(TemplateView):
             day_ahead = pd.Series(data=[row[1] for row in actual_rows], index=[row[0] for row in actual_rows])
             actual = day_ahead_to_agile(day_ahead, region=data_region).sort_index()
         else:
+            day_ahead = pd.Series(dtype=float)
             actual = pd.Series(dtype=float)
 
         forecast_value_attr = "day_ahead" if raw_day_ahead else "agile_pred"
@@ -877,10 +938,10 @@ class HistoryView(TemplateView):
         if can_compare_external:
             if compare_agileforecast:
                 external_sources.append(
-                    (ExternalForecast.SOURCE_AGILEFORECAST, "AgileForecast", "#0dcaf0")
+                    (ExternalForecast.SOURCE_AGILEFORECAST, "AgileForecast", self._source_color("AgileForecast"))
                 )
             if compare_x2r:
-                external_sources.append((ExternalForecast.SOURCE_X2R, "X2R", "#fd7e14"))
+                external_sources.append((ExternalForecast.SOURCE_X2R, "X2R", self._source_color("X2R")))
 
         external_rows_by_label = {}
         for source, label, _color in external_sources:
@@ -892,6 +953,14 @@ class HistoryView(TemplateView):
                     date_time__lte=end,
                 ).order_by("date_time", "-source_created_at")
             )
+
+        # Expose raw data as instance attrs so HistoryV2View can build alternate-unit metrics
+        self._day_ahead_raw = day_ahead
+        self._history_forecast_rows = forecast_rows
+        self._history_external_rows = external_rows_by_label
+        self._history_forecast_value_attr = forecast_value_attr
+        self._history_data_region = data_region
+        self._history_raw_day_ahead = raw_day_ahead
 
         metrics_table = self.build_metrics_table(
             actual,
@@ -951,17 +1020,20 @@ class HistoryView(TemplateView):
                 f"Bias {error_metrics['bias']:+.2f}{price_display['unit']}"
             )
 
-        figure.update_layout(
-            title={"text": title, "x": 0.5},
-            yaxis={"title": price_display["axis_title"]},
-            margin={"r": 5, "t": 50},
-            legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="right", x=1),
-            height=520,
-            template="plotly_dark",
-            hovermode="x",
-            plot_bgcolor="#212529",
-            paper_bgcolor="#343a40",
-        )
+        chart_title_dict, chart_top_margin = self._chart_title(title)
+        layout_kw = {
+            "yaxis": {"title": price_display["axis_title"]},
+            "margin": {"r": 5, "t": chart_top_margin},
+            "legend": dict(orientation="h", yanchor="top", y=-0.15, xanchor="right", x=1),
+            "height": 520,
+            "template": "plotly_dark",
+            "hovermode": "x",
+            "plot_bgcolor": "#212529",
+            "paper_bgcolor": "#343a40",
+        }
+        if chart_title_dict:
+            layout_kw["title"] = chart_title_dict
+        figure.update_layout(**layout_kw)
         figure.update_xaxes(
             tickformatstops=[
                 dict(dtickrange=[None, 86000000], value="%H:%M<br>%a %d %b"),
@@ -1442,3 +1514,824 @@ class GraphFormView(FormView):
         context = self.update_chart(context=context, **form.cleaned_data)
 
         return self.render_to_response(context=context)
+
+
+class V2NavMixin:
+    """Injects v2 navigation context so all base.html navbar links stay within /v2/."""
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            {
+                "region_link_prefix": "/v2/",
+                "history_link": "/v2/history/",
+                "stats_link": "/v2/stats/",
+                "api_link": "/v2/api_how_to/",
+                "about_link": "/v2/about/",
+                "home_link": "/v2/X/",
+                "is_v2": True,
+                "classic_url": "/",
+            }
+        )
+        return context
+
+
+class ProductionLoginRequiredMixin:
+    """Require authentication in production (DEBUG=False); transparent in dev."""
+
+    def dispatch(self, request, *args, **kwargs):
+        if not settings.DEBUG and not request.user.is_authenticated:
+            from django.contrib.auth.views import redirect_to_login
+
+            return redirect_to_login(request.get_full_path())
+        return super().dispatch(request, *args, **kwargs)
+
+
+class GraphV2View(V2NavMixin, TemplateView):
+    """Colour-coded bar chart UI — alternative to the accordion-sidebar GraphFormView."""
+
+    template_name = "graph_v2.html"
+
+    _DAY_OPTIONS = [2, 3, 5, 7, 14]
+    _BAR_WIDTH_MS = int(30 * 60 * 1000 * 0.92)
+    _OLDER_COLORS = ["#adb5bd", "#6c757d", "#495057"]
+    _CHARGE_SLOTS = 4  # 2-hour window
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+
+        region = self.kwargs.get("region", "X").upper()
+        if region not in regions:
+            region = "X"
+        raw = _is_raw_day_ahead_region(region)
+
+        days = min(max(int(self.request.GET.get("days", 5)), 1), 14)
+        show_band = self.request.GET.get("band", "1") != "0"
+        show_export = self.request.GET.get("export", "0") == "1" and not raw
+        show_gen = self.request.GET.get("gen", "1") == "1"
+        color_fn = _export_price_color if show_export else _price_color
+
+        fc_param = self.request.GET.getlist("fc")
+        try:
+            selected_ids = [int(x) for x in fc_param if str(x).strip()]
+        except ValueError:
+            selected_ids = []
+
+        now_gb = pd.Timestamp.now(tz="GB")
+        prior_gb = now_gb - pd.Timedelta(hours=12)
+        end_gb = now_gb + pd.Timedelta(days=days)
+
+        price_display = _price_display(region, show_export=show_export)
+        unit = price_display["unit"]
+
+        # --- Historical actuals ---
+        ph_rows = list(
+            PriceHistory.objects.filter(
+                date_time__gte=prior_gb.tz_convert("UTC")
+            ).order_by("date_time")
+        )
+        if ph_rows:
+            day_ahead_s = pd.Series(
+                index=pd.to_datetime([r.date_time for r in ph_rows]).tz_convert("GB"),
+                data=[r.day_ahead for r in ph_rows],
+            )
+            actual = day_ahead_to_agile(day_ahead_s, region=region, export=show_export).sort_index()
+        else:
+            actual = pd.Series(dtype=float)
+
+        actual_end = actual.index[-1] if not actual.empty else now_gb
+
+        # --- Forecasts ---
+        recent_forecasts = list(Forecasts.objects.order_by("-created_at")[:8])
+        latest = recent_forecasts[0] if recent_forecasts else None
+
+        if selected_ids:
+            forecasts_to_plot = list(Forecasts.objects.filter(id__in=selected_ids).order_by("-created_at")[:5])
+        else:
+            forecasts_to_plot = [latest] if latest else []
+
+        # Primary (most-recent) forecast — drives bars, band, and summary
+        primary_s = pd.Series(dtype=float)
+        low_s = pd.Series(dtype=float)
+        high_s = pd.Series(dtype=float)
+
+        if latest is not None:
+            if raw:
+                fd_rows = list(
+                    ForecastData.objects.filter(
+                        forecast=latest,
+                        date_time__gte=actual_end.tz_convert("UTC"),
+                        date_time__lte=end_gb.tz_convert("UTC"),
+                    ).order_by("date_time")
+                )
+                if fd_rows:
+                    primary_s = pd.Series(
+                        index=pd.to_datetime([r.date_time for r in fd_rows]).tz_convert("GB"),
+                        data=[r.day_ahead for r in fd_rows],
+                    )
+            else:
+                ad_rows = list(
+                    AgileData.objects.filter(
+                        forecast=latest,
+                        region=region,
+                        date_time__gte=actual_end.tz_convert("UTC"),
+                        date_time__lte=end_gb.tz_convert("UTC"),
+                    ).order_by("date_time")
+                )
+                if ad_rows:
+                    idx = pd.to_datetime([r.date_time for r in ad_rows]).tz_convert("GB")
+                    primary_s = pd.Series(index=idx, data=[r.agile_pred for r in ad_rows])
+                    low_s = pd.Series(index=idx, data=[r.agile_low for r in ad_rows])
+                    high_s = pd.Series(index=idx, data=[r.agile_high for r in ad_rows])
+                    if show_export:
+                        # Apply export conversion to all three series together
+                        primary_s = import_agile_to_export_agile(primary_s, region=region)
+                        low_s = import_agile_to_export_agile(low_s, region=region)
+                        high_s = import_agile_to_export_agile(high_s, region=region)
+
+        # --- Summary statistics ---
+        current_slot = now_gb.floor("30min")
+        combined = pd.concat([actual, primary_s]).sort_index()
+        upcoming = combined[combined.index >= current_slot]
+
+        def fmt(p):
+            return f"{p:.1f}"
+
+        summary = {"unit": unit, "is_export": show_export}
+
+        if not upcoming.empty:
+            p = float(upcoming.iloc[0])
+            summary["current_price"] = fmt(p)
+            summary["current_time"] = upcoming.index[0].strftime("%H:%M")
+            summary["current_badge"] = _price_badge(p if not raw else None)
+
+        # Upcoming forecast for next-slot and window calculations
+        upcoming_fc = primary_s[primary_s.index >= current_slot].iloc[:48]
+
+        if not upcoming_fc.empty:
+            if show_export:
+                # For export, expensive slots are desirable
+                best_single_idx = upcoming_fc.idxmax()
+                best_single_p = float(upcoming_fc[best_single_idx])
+                summary["best_slot_price"] = fmt(best_single_p)
+                summary["best_slot_time"] = best_single_idx.strftime("%H:%M")
+                summary["best_slot_badge"] = "danger" if best_single_p > 35 else "warning text-dark" if best_single_p > 25 else "secondary"
+                summary["best_slot_label"] = "Best export slot (24h)"
+            else:
+                cheapest_idx = upcoming_fc.idxmin()
+                cp = float(upcoming_fc[cheapest_idx])
+                summary["best_slot_price"] = fmt(cp)
+                summary["best_slot_time"] = cheapest_idx.strftime("%H:%M")
+                summary["best_slot_badge"] = _price_badge(cp)
+                summary["best_slot_label"] = "Cheapest slot (24h)"
+
+            # Best contiguous 2h window (4 slots)
+            if len(upcoming_fc) >= self._CHARGE_SLOTS:
+                rolling_avg = upcoming_fc.rolling(self._CHARGE_SLOTS).mean().dropna()
+                if show_export:
+                    best_end = rolling_avg.idxmax()
+                else:
+                    best_end = rolling_avg.idxmin()
+                end_loc = upcoming_fc.index.get_loc(best_end)
+                start_loc = max(0, end_loc - self._CHARGE_SLOTS + 1)
+                best_start = upcoming_fc.index[start_loc]
+                window_close = best_end + pd.Timedelta("30min")
+                summary["window_start"] = best_start.strftime("%H:%M")
+                summary["window_end"] = window_close.strftime("%H:%M")
+                summary["window_avg"] = fmt(float(rolling_avg[best_end]))
+                summary["window_badge"] = _price_badge(float(rolling_avg[best_end]) if not raw and not show_export else None)
+                summary["window_label"] = "Best 2h export window" if show_export else "Cheapest 2h window"
+
+        if not primary_s.empty:
+            upcoming_48h = primary_s[primary_s.index >= current_slot].iloc[:96]
+            if not upcoming_48h.empty:
+                summary["range_min"] = fmt(float(upcoming_48h.min()))
+                summary["range_max"] = fmt(float(upcoming_48h.max()))
+                cheap_count = int((upcoming_48h < 15).sum()) if not show_export else None
+                summary["range_cheap"] = cheap_count
+                summary["range_label"] = "Next 48h range"
+
+        if latest is not None:
+            try:
+                summary["forecast_updated"] = (
+                    pd.Timestamp(latest.created_at).tz_convert("GB").strftime("%d %b %H:%M")
+                )
+            except Exception:
+                pass
+
+        # --- API / data-source health status ---
+        api_status = {}
+        if latest is not None:
+            future_rows = ForecastData.objects.filter(
+                forecast=latest,
+                date_time__gt=now_gb.tz_convert("UTC"),
+            ).count()
+            horizon_hours = future_rows * 0.5
+            horizon_days = horizon_hours / 24
+            if horizon_days >= 8:
+                health = "ok"
+            elif horizon_days >= 2:
+                health = "warn"
+            else:
+                health = "fail"
+            api_status["horizon_days"] = f"{horizon_days:.1f}" if horizon_days >= 0.5 else "< 1"
+            api_status["health"] = health
+            api_status["forecast_rows"] = future_rows
+            try:
+                api_status["updated"] = pd.Timestamp(latest.created_at).tz_convert("GB").strftime("%d %b %H:%M")
+            except Exception:
+                pass
+
+        latest_price = PriceHistory.objects.order_by("-valid_from").first()
+        if latest_price is not None:
+            try:
+                api_status["prices_to"] = pd.Timestamp(latest_price.valid_from).tz_convert("GB").strftime("%d %b %H:%M")
+            except Exception:
+                pass
+
+        # --- Price heat strip (replaces daily table) ---
+        # Shows a row of coloured half-hour slots per day — immediately scannable
+        heat_strip = []
+        combined_all = pd.concat([actual, primary_s]).sort_index()
+        if not combined_all.empty:
+            for day_start, group in combined_all.resample("D"):
+                slots = [
+                    {
+                        "time": ts.strftime("%H:%M"),
+                        "price": round(float(v), 1),
+                        "color": color_fn(float(v) if not raw else None),
+                    }
+                    for ts, v in group.items()
+                    if pd.notna(v)
+                ]
+                if slots:
+                    heat_strip.append(
+                        {
+                            "date": pd.Timestamp(day_start).strftime("%a %d"),
+                            "slots": slots,
+                        }
+                    )
+
+        # --- Build chart ---
+        if show_gen:
+            figure = make_subplots(
+                rows=2,
+                cols=1,
+                subplot_titles=(price_display["axis_title"], "Generation & Demand"),
+                shared_xaxes=True,
+                vertical_spacing=0.08,
+                row_heights=[0.6, 0.4],
+            )
+
+            def add_price(trace):
+                figure.add_trace(trace, row=1, col=1)
+
+            def add_gen(trace):
+                figure.add_trace(trace, row=2, col=1)
+
+            chart_height = 620
+        else:
+            figure = go.Figure()
+            add_price = figure.add_trace
+            chart_height = 420
+
+        # Prepare error-bar arrays for uncertainty band (drawn on forecast bars)
+        # This is the correct idiom for showing uncertainty on bar charts — whiskers extend
+        # visibly above and below each bar regardless of bar colour.
+        upper_err = lower_err = None
+        if show_band and not low_s.empty and not high_s.empty and not primary_s.empty:
+            aligned_lo = low_s.reindex(primary_s.index)
+            aligned_hi = high_s.reindex(primary_s.index)
+            upper_err = [
+                max(0.0, float(h) - float(p)) if pd.notna(h) and pd.notna(p) else 0.0
+                for h, p in zip(aligned_hi.values, primary_s.values)
+            ]
+            lower_err = [
+                max(0.0, float(p) - float(l)) if pd.notna(l) and pd.notna(p) else 0.0
+                for l, p in zip(aligned_lo.values, primary_s.values)
+            ]
+
+        # Confirmed actuals — two-layer: light colour bars for level context + white step-line
+        # for unmistakable "this is real confirmed data" signal vs forecast bars.
+        if not actual.empty:
+            add_price(
+                go.Bar(
+                    x=actual.index,
+                    y=actual.values,
+                    marker_color=[color_fn(p if not raw else None) for p in actual.values],
+                    marker_opacity=0.35,
+                    marker_line_width=0,
+                    showlegend=False,
+                    hovertemplate=f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>Confirmed</extra>",
+                    width=self._BAR_WIDTH_MS,
+                )
+            )
+            add_price(
+                go.Scatter(
+                    x=actual.index,
+                    y=actual.values,
+                    mode="lines",
+                    line=dict(shape="hv", color="rgba(255,255,255,0.85)", width=2.0),
+                    name="Confirmed Octopus price",
+                    hovertemplate=f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>Confirmed</extra>",
+                )
+            )
+
+        # Primary forecast bars — full opacity; error bars carry the uncertainty band
+        if not primary_s.empty:
+            latest_label = (
+                f"Forecast ({pd.Timestamp(latest.created_at).tz_convert('GB').strftime('%d %b %H:%M')})"
+                if latest
+                else "Forecast"
+            )
+            bar_kw = dict(
+                x=primary_s.index,
+                y=primary_s.values,
+                marker_color=[color_fn(p if not raw else None) for p in primary_s.values],
+                marker_opacity=1.0,
+                name=latest_label,
+                hovertemplate=f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>Forecast</extra>",
+                width=self._BAR_WIDTH_MS,
+            )
+            if upper_err is not None:
+                bar_kw["error_y"] = dict(
+                    type="data",
+                    symmetric=False,
+                    array=upper_err,
+                    arrayminus=lower_err,
+                    color="rgba(255,255,255,0.55)",
+                    thickness=1.5,
+                    width=0,
+                )
+            add_price(go.Bar(**bar_kw))
+
+        # Older selected forecasts — dotted line traces
+        older = [f for f in forecasts_to_plot if latest is None or f.id != latest.id]
+        for i, fc_obj in enumerate(older[:3]):
+            if raw:
+                od_rows = list(
+                    ForecastData.objects.filter(
+                        forecast=fc_obj,
+                        date_time__gte=actual_end.tz_convert("UTC"),
+                        date_time__lte=end_gb.tz_convert("UTC"),
+                    ).order_by("date_time")
+                )
+                if not od_rows:
+                    continue
+                s = pd.Series(
+                    index=pd.to_datetime([r.date_time for r in od_rows]).tz_convert("GB"),
+                    data=[r.day_ahead for r in od_rows],
+                )
+            else:
+                od_rows = list(
+                    AgileData.objects.filter(
+                        forecast=fc_obj,
+                        region=region,
+                        date_time__gte=actual_end.tz_convert("UTC"),
+                        date_time__lte=end_gb.tz_convert("UTC"),
+                    ).order_by("date_time")
+                )
+                if not od_rows:
+                    continue
+                idx = pd.to_datetime([r.date_time for r in od_rows]).tz_convert("GB")
+                s = pd.Series(index=idx, data=[r.agile_pred for r in od_rows])
+                if show_export:
+                    s = import_agile_to_export_agile(s, region=region)
+            older_label = pd.Timestamp(fc_obj.created_at).tz_convert("GB").strftime("%d %b %H:%M")
+            add_price(
+                go.Scatter(
+                    x=s.index,
+                    y=s.values,
+                    mode="lines",
+                    line=dict(color=self._OLDER_COLORS[i % len(self._OLDER_COLORS)], width=1.5, dash="dot"),
+                    name=f"Forecast ({older_label})",
+                    hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} {unit}<extra>{older_label}</extra>",
+                )
+            )
+
+        # Now vline — appears across all subplots
+        figure.add_vline(
+            x=now_gb.timestamp() * 1000,
+            line_width=2,
+            line_dash="dot",
+            line_color="rgba(255,255,255,0.45)",
+            annotation_text="Now",
+            annotation_position="top left",
+            annotation_font_color="rgba(255,255,255,0.75)",
+            annotation_font_size=11,
+        )
+
+        # Generation & demand subplot
+        if show_gen and latest is not None:
+            fp = list(
+                ForecastData.objects.filter(
+                    forecast=latest,
+                    date_time__gte=prior_gb.tz_convert("UTC"),
+                    date_time__lte=end_gb.tz_convert("UTC"),
+                ).order_by("date_time")
+            )
+            h_rows = list(
+                History.objects.filter(
+                    date_time__gte=prior_gb.tz_convert("UTC"),
+                    date_time__lte=now_gb.tz_convert("UTC"),
+                )
+            )
+            if fp:
+                add_gen(go.Scatter(
+                    x=[r.date_time for r in fp],
+                    y=[(r.demand + r.solar + r.emb_wind) / 1000 for r in fp],
+                    line={"color": "cyan", "width": 2}, name="Forecast demand",
+                ))
+                add_gen(go.Scatter(
+                    x=[r.date_time for r in fp], y=[r.nuclear / 1000 for r in fp],
+                    fill="tozeroy", line={"color": "rgba(160,160,160,1)"},
+                    fillcolor="rgba(180,180,180,0.8)", name="Nuclear",
+                ))
+                add_gen(go.Scatter(
+                    x=[r.date_time for r in fp],
+                    y=[(r.nuclear + r.bm_wind) / 1000 for r in fp],
+                    fill="tonexty", line={"color": "rgba(63,127,63)"},
+                    fillcolor="rgba(127,255,127,0.8)", name="Metered wind",
+                ))
+                add_gen(go.Scatter(
+                    x=[r.date_time for r in fp],
+                    y=[(r.nuclear + r.bm_wind + r.emb_wind) / 1000 for r in fp],
+                    fill="tonexty", line={"color": "rgba(50,150,220)"},
+                    fillcolor="rgba(100,200,255,0.7)", name="Embedded wind",
+                ))
+                add_gen(go.Scatter(
+                    x=[r.date_time for r in fp],
+                    y=[(r.nuclear + r.bm_wind + r.emb_wind + r.solar) / 1000 for r in fp],
+                    fill="tonexty", line={"color": "lightgray", "width": 2},
+                    fillcolor="rgba(255,255,127,0.8)", name="Solar",
+                ))
+            if h_rows:
+                add_gen(go.Scatter(
+                    x=[r.date_time for r in h_rows],
+                    y=[(r.demand + r.solar + (r.total_wind - r.bm_wind)) / 1000 for r in h_rows],
+                    line={"color": "#aaaa77", "width": 2}, name="Historic demand",
+                ))
+            figure.update_yaxes(title_text="Power [GW]", row=2, col=1)
+
+        # Layout
+        common_layout = dict(
+            barmode="overlay",
+            margin=dict(r=10, t=15, l=60, b=10),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.01,
+                xanchor="right",
+                x=1,
+                font=dict(size=11),
+            ),
+            height=chart_height,
+            template="plotly_dark",
+            hovermode="x unified",
+            plot_bgcolor="#212529",
+            paper_bgcolor="#1a1d21",
+            bargap=0.02,
+        )
+        if show_gen:
+            figure.update_layout(**common_layout)
+            figure.update_yaxes(
+                title_text=price_display["axis_title"],
+                zeroline=True,
+                zerolinecolor="#888",
+                zerolinewidth=2,
+                row=1,
+                col=1,
+            )
+        else:
+            figure.update_layout(
+                **common_layout,
+                yaxis=dict(
+                    title=price_display["axis_title"],
+                    zeroline=True,
+                    zerolinecolor="#888",
+                    zerolinewidth=2,
+                ),
+            )
+
+        figure.update_xaxes(
+            tickformatstops=[
+                dict(dtickrange=[None, 86400000], value="%H:%M<br>%a %d %b"),
+                dict(dtickrange=[86400000, None], value="%d %b"),
+            ]
+        )
+
+        # Forecast list for template checkboxes
+        forecast_list = [
+            {
+                "id": f.id,
+                "label": pd.Timestamp(f.created_at).tz_convert("GB").strftime("%d %b %H:%M"),
+                "selected": f.id in selected_ids
+                or (not selected_ids and f.id == (latest.id if latest else None)),
+            }
+            for f in recent_forecasts
+        ]
+
+        context.update(
+            {
+                "region": region,
+                "region_name": regions.get(region, {}).get("name", region),
+                "is_raw_day_ahead_region": raw,
+                "days": days,
+                "show_band": show_band,
+                "show_export": show_export,
+                "show_gen": show_gen,
+                "summary": summary,
+                "api_status": api_status,
+                "heat_strip": heat_strip,
+                "day_options": self._DAY_OPTIONS,
+                "forecast_list": forecast_list,
+                "selected_ids": selected_ids,
+                "graph": figure.to_html(
+                    full_html=False,
+                    config={"displayModeBar": False, "responsive": True},
+                ),
+                "classic_url": f"/{region}/",
+            }
+        )
+        return context
+
+
+class HistoryV2View(V2NavMixin, HistoryView):
+    """v2-styled history / accuracy view — always uses region X (national average)."""
+
+    template_name = "history_v2.html"
+
+    def get_kwargs(self):
+        # Force region to X regardless of URL kwarg — no region selector in v2 history.
+        kwargs = super().get_kwargs() if hasattr(super(), "get_kwargs") else {}
+        kwargs["region"] = "X"
+        return kwargs
+
+    def setup(self, request, *args, **kwargs):
+        # Force region Z so the main price chart always uses raw day-ahead prices (£/MWh).
+        # Display context is overridden in get_context_data to show "National Average".
+        kwargs["region"] = "Z"
+        super().setup(request, *args, **kwargs)
+
+    # CVD-safe palette (distinguishable under protan/deuteranopia): sky-blue, vermilion, bluish-green.
+    # Overrides HistoryView._source_colors so the price chart and error chart use matching colours.
+    _source_colors = {
+        "AgilePredict": "#56B4E9",
+        "AgileForecast": "#D55E00",
+        "X2R": "#009E73",
+    }
+
+    def _build_metrics_chart(self, metrics_table, price_unit, selected_metric="mae"):
+        columns = metrics_table.get("columns", [])
+        rows = metrics_table.get("rows", [])
+        if not columns or not rows:
+            return None
+
+        x_offsets = [c["offset"] for c in columns]
+        x_labels = [c["label"] for c in columns]
+        metric_key = selected_metric.upper()
+        _METRIC_LABELS = {"MAE": "Mean Absolute Error", "RMSE": "Root Mean Squared Error"}
+        metric_label = _METRIC_LABELS.get(metric_key, metric_key)
+
+        # Parse all series: (model, param) → [(x_offset, float_value), ...]
+        series = {}
+        for row in rows:
+            model = row["model"]
+            param = row["parameter"]
+            pts = []
+            for i, v in enumerate(row["values"]):
+                if i >= len(x_offsets):
+                    break
+                try:
+                    pts.append((x_offsets[i], float(str(v).replace("+", ""))))
+                except (ValueError, TypeError):
+                    pass
+            if pts:
+                series[(model, param)] = pts
+
+        # Compute a shared Y scale so both subplots use the same magnitude.
+        # Error subplot: [0, shared_max]; Bias subplot: [-shared_max, shared_max].
+        # This makes bias directly comparable to error at a glance.
+        error_vals = [v for (_, p), pts in series.items() if p == metric_key for _, v in pts]
+        bias_vals = [v for (_, p), pts in series.items() if p == "Bias" for _, v in pts]
+        if not error_vals:
+            return None
+        shared_max = max(max(error_vals) * 1.12, 0.1)
+        if bias_vals:
+            shared_max = max(shared_max, max(abs(v) for v in bias_vals) * 1.12)
+        shared_max = round(shared_max + 0.05, 1)  # small padding, round for clean ticks
+
+        fig = make_subplots(
+            rows=2,
+            cols=1,
+            shared_xaxes=True,
+            subplot_titles=(metric_label, "Bias"),
+            vertical_spacing=0.12,
+            row_heights=[0.5, 0.5],
+        )
+
+        seen_models = set()
+        for (model, param), pts in series.items():
+            if param not in (metric_key, "Bias"):
+                continue
+            color = self._source_color(model)
+            xs, ys = zip(*pts)
+            show_legend = model not in seen_models
+            seen_models.add(model)
+            target_row = 1 if param == metric_key else 2
+            fig.add_trace(
+                go.Scatter(
+                    x=list(xs),
+                    y=list(ys),
+                    mode="lines+markers",
+                    marker=dict(size=6),
+                    line=dict(color=color, width=2),
+                    name=model,
+                    legendgroup=model,
+                    showlegend=show_legend,
+                    hovertemplate=f"%{{y:.2f}} {price_unit}<extra>{model} {param}</extra>",
+                ),
+                row=target_row,
+                col=1,
+            )
+
+        x_range = [-0.4, max(x_offsets) + 0.4] if x_offsets else None
+
+        fig.update_layout(
+            height=400,
+            margin=dict(r=10, t=32, l=70, b=10),
+            template="plotly_dark",
+            plot_bgcolor="#212529",
+            paper_bgcolor="#1a1d21",
+            hovermode="x unified",
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.04,
+                xanchor="right",
+                x=1,
+                font=dict(size=11),
+            ),
+        )
+        fig.update_xaxes(
+            tickvals=x_offsets,
+            ticktext=x_labels,
+            range=x_range,
+        )
+        fig.update_xaxes(title_text="Lead time", row=2, col=1)
+        fig.update_yaxes(
+            title_text=price_unit,
+            range=[0, shared_max],
+            row=1,
+            col=1,
+        )
+        fig.update_yaxes(
+            title_text=price_unit,
+            range=[-shared_max, shared_max],
+            zeroline=True,
+            zerolinecolor="#888",
+            zerolinewidth=2,
+            row=2,
+            col=1,
+        )
+
+        return fig.to_html(
+            full_html=False,
+            config={"displayModeBar": False, "responsive": True},
+        )
+
+    def _chart_title(self, title_str):
+        return None, 15  # no title on price chart in v2; reduce top margin
+
+    def _build_agile_metrics_table(self):
+        """Build metrics in Agile p/kWh by forward-converting DA predictions for region X."""
+        actual_da = getattr(self, "_day_ahead_raw", pd.Series(dtype=float))
+        if actual_da.empty:
+            return {}
+        actual_agile = day_ahead_to_agile(actual_da, region="X").sort_index()
+        forecast_rows = getattr(self, "_history_forecast_rows", [])
+        external_rows = getattr(self, "_history_external_rows", {})
+
+        columns_by_offset = {}
+        metric_sets = {"AgilePredict": {}, **{label: {} for label in external_rows}}
+
+        for offset_days in range(self.max_offset_days + 1):
+            # Predictions are from ForecastData.day_ahead (£/MWh); convert to Agile X
+            predicted_da = self.build_predicted_series(
+                forecast_rows, offset_days * 24, (offset_days + 1) * 24, value_attr="day_ahead"
+            )
+            if len(predicted_da) >= 2:
+                predicted = day_ahead_to_agile(predicted_da, region="X")
+            else:
+                predicted = pd.Series(dtype=float)
+
+            metrics = self.calculate_error_metrics(actual_agile, predicted)
+            if metrics is not None:
+                columns_by_offset[offset_days] = {"label": self.format_offset_label(offset_days), "n": metrics["n"]}
+                metric_sets["AgilePredict"][offset_days] = metrics
+
+            for label, ext_rows in external_rows.items():
+                # External rows were fetched for region "G"; raw_day_ahead=True gives them in DA
+                ext_da = self.build_external_predicted_series(
+                    ext_rows, offset_days * 24, (offset_days + 1) * 24, raw_day_ahead=True
+                )
+                if len(ext_da) >= 2:
+                    ext_pred = day_ahead_to_agile(ext_da, region="X")
+                else:
+                    ext_pred = pd.Series(dtype=float)
+                ext_metrics = self.calculate_error_metrics(actual_agile, ext_pred)
+                if ext_metrics is None:
+                    continue
+                if offset_days not in columns_by_offset:
+                    columns_by_offset[offset_days] = {"label": self.format_offset_label(offset_days), "n": ""}
+                metric_sets[label][offset_days] = ext_metrics
+
+        columns = [{"offset": o, **c} for o, c in sorted(columns_by_offset.items())]
+        rows = []
+        mobile_rows = []
+        for source_label, metrics_by_offset in metric_sets.items():
+            if not metrics_by_offset:
+                continue
+            for metric_key, metric_label in [("mae", "MAE"), ("rmse", "RMSE"), ("bias", "Bias")]:
+                rows.append({
+                    "model": source_label,
+                    "parameter": metric_label,
+                    "values": [
+                        self.format_metric_values(metrics_by_offset.get(col["offset"]))[metric_key]
+                        for col in columns
+                    ],
+                })
+            for col in columns:
+                vals = self.format_metric_values(metrics_by_offset.get(col["offset"]))
+                if not vals["n"]:
+                    continue
+                mobile_rows.append({
+                    "source": source_label, "label": col["label"],
+                    "n": vals["n"], "mae": vals["mae"], "rmse": vals["rmse"], "bias": vals["bias"],
+                })
+        return {"columns": columns, "rows": rows, "mobile_rows": mobile_rows}
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+
+        # Override region display — data uses Z (DA £/MWh) but UI shows National Average
+        context["region"] = "X"
+        from config.utils import regions as _regions
+        context["region_name"] = _regions.get("X", {}).get("name", "National Average")
+        context["is_raw_day_ahead_region"] = False  # show unit toggle, hide raw-DA-specific UI
+
+        selected_metric = self.request.GET.get("metric", "mae").lower()
+        if selected_metric not in ("mae", "rmse"):
+            selected_metric = "mae"
+
+        # Default unit_mode is "da": main chart and accuracy chart both in £/MWh.
+        # "agile" forward-converts to Agile p/kWh for the accuracy chart only.
+        unit_mode = self.request.GET.get("unit_mode", "da").lower()
+        if unit_mode not in ("agile", "da"):
+            unit_mode = "da"
+
+        if unit_mode == "agile":
+            chart_metrics_table = self._build_agile_metrics_table()
+            chart_price_unit = "p/kWh"
+        else:
+            chart_metrics_table = context.get("metrics_table", {})
+            chart_price_unit = "£/MWh"
+
+        context["history_region_prefix"] = "/v2/history/"
+        context["selected_metric"] = selected_metric
+        context["unit_mode"] = unit_mode
+        context["source_colors"] = self._source_colors
+        context["classic_url"] = "/history/X/"
+        context["metrics_chart"] = self._build_metrics_chart(
+            chart_metrics_table,
+            chart_price_unit,
+            selected_metric=selected_metric,
+        )
+        return context
+
+
+class StatsV2View(V2NavMixin, StatsView):
+    template_name = "stats_v2.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["classic_url"] = "/stats"
+        return context
+
+
+class AboutV2View(V2NavMixin, AboutView):
+    template_name = "about_v2.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["classic_url"] = "/about"
+        return context
+
+
+class ApiHowToV2View(V2NavMixin, ApiHowToView):
+    template_name = "api_how_to_v2.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["classic_url"] = "/api_how_to"
+        return context
