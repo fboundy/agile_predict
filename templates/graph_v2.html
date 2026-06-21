@@ -78,9 +78,25 @@
             <span class="text-body-secondary" style="font-size:.7rem">{{ src.detail }}</span>
           </div>
           {% endfor %}
-          {% if api_status.updated %}
-          <div class="text-body-secondary mt-1" style="font-size:.7rem;border-top:1px solid #3a3d41;padding-top:4px">Updated {{ api_status.updated }}</div>
-          {% endif %}
+          <div style="border-top:1px solid #3a3d41;margin-top:4px;padding-top:4px">
+            {% if api_status.last_run and api_status.last_run.status == "failed" %}
+            <div class="d-flex align-items-baseline gap-1 mb-1">
+              <span style="width:8px;height:8px;border-radius:50%;flex-shrink:0;background:#dc3545;margin-top:2px"></span>
+              <span class="text-danger" style="font-size:.72rem;font-weight:500">{{ api_status.last_run.time }} run aborted</span>
+            </div>
+            {% if api_status.last_run.reason_short %}
+            <div class="text-body-secondary" style="font-size:.68rem;padding-left:16px">{{ api_status.last_run.reason_short }}</div>
+            {% endif %}
+            {% elif api_status.last_run and api_status.last_run.status == "completed" %}
+            <div class="d-flex align-items-baseline gap-1">
+              <span style="width:8px;height:8px;border-radius:50%;flex-shrink:0;background:#28a745;margin-top:2px"></span>
+              <span class="text-body-secondary" style="font-size:.7rem">{{ api_status.last_run.time }} run OK</span>
+            </div>
+            {% endif %}
+            {% if api_status.updated %}
+            <div class="text-body-secondary mt-1" style="font-size:.7rem">Forecast {{ api_status.updated }}</div>
+            {% endif %}
+          </div>
         </div>
       </div>
     </div>

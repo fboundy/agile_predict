@@ -1792,11 +1792,36 @@ class GraphV2View(V2NavMixin, TemplateView):
                 forecast=latest, date_time__gt=now_gb.tz_convert("UTC"),
             ).count()
 
+        # Last update-job run — surface failures in the card
+        last_run = None
+        if recent_update_job:
+            last_run = {
+                "time": pd.Timestamp(recent_update_job.requested_at).tz_convert("GB").strftime("%d %b %H:%M"),
+                "status": recent_update_job.status,
+                "reason": None,
+                "reason_short": None,
+            }
+            if recent_update_job.status == UpdateJob.STATUS_FAILED and recent_update_job.error:
+                # error field: first line is the clean message, rest is the traceback
+                first_line = recent_update_job.error.splitlines()[0].strip()
+                last_run["reason"] = first_line
+                # Make a compact summary for the card
+                import re as _re
+                m = _re.search(r"only (\d+) forecast rows \(minimum (\d+)\)", first_line)
+                if m:
+                    last_run["reason_short"] = f"only {m.group(1)}/{m.group(2)} rows"
+                elif "missing columns" in first_line.lower():
+                    cols = first_line.lower().split("missing columns:")[-1].split(".")[0].strip()
+                    last_run["reason_short"] = f"missing: {cols}"
+                else:
+                    last_run["reason_short"] = first_line[:80]
+
         api_status = {
             "sources": api_sources,
             "overall_health": overall_health,
             "horizon_days": f"{future_rows / 48:.1f}" if future_rows >= 24 else ("< 1" if future_rows > 0 else "—"),
             "updated": pd.Timestamp(latest.created_at).tz_convert("GB").strftime("%d %b %H:%M") if latest else None,
+            "last_run": last_run,
         }
 
         # --- Price heat strip (replaces daily table) ---
