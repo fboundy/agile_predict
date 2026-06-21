@@ -21,8 +21,7 @@ from prices.forecast_features import (
 from prices.external_forecasts import fetch_x2r
 from prices.forms import ForecastForm
 from prices.management.commands.update import Command as UpdateCommand
-from prices.management.commands.update import EXTRA_TREES_REGRESSOR_PARAMS, fit_extra_trees_day_ahead_model
-from prices.management.commands.update import XGBOOST_PARAMETER_SETS
+from prices.management.commands.update import EXTRA_TREES_REGRESSOR_PARAMS, fit_day_ahead_ensemble, predict_day_ahead_ensemble
 from prices.models import AgileData, ExternalForecast, ForecastData, Forecasts, PriceHistory, RequestClientSeen, RequestMetric
 from prices.views import GraphFormView, _update_options
 
@@ -522,50 +521,32 @@ class ForecastFeatureTests(TestCase):
 
 
 class UpdateOptionTests(TestCase):
-    def test_update_options_include_xgboost_params(self):
-        request = RequestFactory().get("/update", {"xgboost_params": "regularized_dart"})
-
-        options = _update_options(request)
-
-        self.assertEqual(options["xgboost_params"], "regularized_dart")
-
-    def test_xgboost_parameter_sets_include_current_default_and_alternatives(self):
-        self.assertEqual(
-            set(XGBOOST_PARAMETER_SETS),
-            {"current_dart", "conservative_gbtree", "shallow_regularized", "regularized_dart"},
-        )
-        self.assertEqual(XGBOOST_PARAMETER_SETS["current_dart"]["booster"], "dart")
-
-    def test_update_command_defaults_to_regularized_dart(self):
-        parser = UpdateCommand().create_parser("manage.py", "update")
-
-        options = parser.parse_args([])
-
-        self.assertEqual(options.xgboost_params, "regularized_dart")
-
-    def test_extra_trees_experimental_model_is_configured_for_parallel_prediction(self):
+    def test_extra_trees_ensemble_member_is_configured_for_parallel_prediction(self):
         self.assertEqual(EXTRA_TREES_REGRESSOR_PARAMS["min_samples_leaf"], 4)
         self.assertEqual(EXTRA_TREES_REGRESSOR_PARAMS["random_state"], 42)
         self.assertEqual(EXTRA_TREES_REGRESSOR_PARAMS["n_jobs"], 1)
 
-    def test_extra_trees_model_can_fit_day_ahead_training_matrix(self):
+    def test_ensemble_can_fit_day_ahead_training_matrix(self):
         train_X = pd.DataFrame(
             {
                 "bm_wind": [1, 2, 3, 4, 5, 6],
                 "solar": [0, 1, 0, 1, 0, 1],
-                "emb_wind": [2, 2, 3, 3, 4, 4],
                 "demand": [30, 31, 32, 33, 34, 35],
                 "peak": [0, 0, 1, 1, 0, 1],
                 "days_ago": [1, 1, 2, 2, 3, 3],
                 "weekend": [0, 0, 0, 0, 1, 1],
+                "wind_10m": [5, 6, 7, 8, 9, 10],
+                "temp_2m": [10, 11, 12, 13, 14, 15],
+                "rad": [100, 200, 300, 400, 500, 600],
             }
         )
         train_y = pd.Series([60, 62, 80, 82, 70, 90])
         sample_weights = pd.Series([1, 1, 2, 2, 1, 2])
 
-        model = fit_extra_trees_day_ahead_model(train_X, train_y, sample_weights)
-        predictions = model.predict(train_X)
+        models = fit_day_ahead_ensemble(train_X, train_y, sample_weights)
+        predictions = predict_day_ahead_ensemble(models, train_X)
 
+        self.assertEqual(len(models), 3)
         self.assertEqual(len(predictions), len(train_X))
 
 

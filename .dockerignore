@@ -18,3 +18,5 @@ logs/
 static/
 plots/
 environment.yml
+catboost_info/
+*_results.csv

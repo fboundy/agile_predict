@@ -12,6 +12,8 @@ plotly==5.21.0
 psycopg2-binary==2.9.9
 python-dotenv==1.0.1
 requests==2.31.0
+catboost==1.2.7
+lightgbm==4.6.0
 scikit-learn==1.4.2
 scipy==1.13.0
 seaborn==0.13.2

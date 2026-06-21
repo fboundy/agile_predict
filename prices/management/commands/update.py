@@ -1,9 +1,9 @@
-import xgboost as xg
+from catboost import CatBoostRegressor
+from lightgbm import LGBMRegressor
 from pathlib import Path
 from sklearn.metrics import mean_squared_error as MSE
-from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import KFold, train_test_split
 from sklearn.neighbors import KernelDensity
-from sklearn.model_selection import train_test_split
 
 import matplotlib
 
@@ -45,17 +45,6 @@ MODEL_ITERS = 50
 MIN_HIST = 7
 MAX_HIST = 28
 MAX_TEST_X = 10000
-PLUNGE_DAY_AHEAD_THRESHOLD = 34.1893
-CLASSIFIED_MODEL_FEATURES = [
-    "bm_wind",
-    "emb_wind",
-    "solar",
-    "demand",
-    "wind_10m",
-    "days_ago",
-    "weekend",
-    "peak",
-]
 EXTRA_TREES_REGRESSOR_PARAMS = {
     "n_estimators": 700,
     "min_samples_leaf": 4,
@@ -63,79 +52,28 @@ EXTRA_TREES_REGRESSOR_PARAMS = {
     "random_state": 42,
     "n_jobs": 1,
 }
-
-XGBOOST_PARAMETER_SETS = {
-    "current_dart": {
-        "objective": "reg:squarederror",
-        "booster": "dart",
-        "gamma": 0.2,
-        "subsample": 1.0,
-        "n_estimators": 200,
-        "max_depth": 10,
-        "colsample_bytree": 1,
-        "n_jobs": 1,
-    },
-    "conservative_gbtree": {
-        "objective": "reg:squarederror",
-        "booster": "gbtree",
-        "learning_rate": 0.05,
-        "n_estimators": 500,
-        "max_depth": 5,
-        "min_child_weight": 3,
-        "subsample": 0.85,
-        "colsample_bytree": 0.85,
-        "gamma": 0.1,
-        "reg_lambda": 3,
-        "n_jobs": 1,
-        "random_state": 42,
-    },
-    "shallow_regularized": {
-        "objective": "reg:squarederror",
-        "booster": "gbtree",
-        "learning_rate": 0.05,
-        "n_estimators": 800,
-        "max_depth": 3,
-        "min_child_weight": 5,
-        "subsample": 0.8,
-        "colsample_bytree": 0.8,
-        "gamma": 0,
-        "reg_lambda": 10,
-        "reg_alpha": 0.1,
-        "n_jobs": 1,
-        "random_state": 42,
-    },
-    "regularized_dart": {
-        "objective": "reg:squarederror",
-        "booster": "dart",
-        "learning_rate": 0.05,
-        "n_estimators": 500,
-        "max_depth": 5,
-        "min_child_weight": 3,
-        "subsample": 0.85,
-        "colsample_bytree": 0.85,
-        "gamma": 0.1,
-        "reg_lambda": 3,
-        "rate_drop": 0.1,
-        "skip_drop": 0.5,
-        "n_jobs": 1,
-        "random_state": 42,
-    },
+CATBOOST_PARAMS = {
+    "iterations": 500,
+    "learning_rate": 0.05,
+    "depth": 6,
+    "l2_leaf_reg": 3,
+    "random_seed": 42,
+    "verbose": 0,
 }
-CLASSIFIED_XGBOOST_CLASSIFIER_PARAMS = {
-    "objective": "binary:logistic",
-    "eval_metric": "aucpr",
-    "booster": "gbtree",
-    "learning_rate": 0.03,
-    "n_estimators": 800,
-    "max_depth": 2,
-    "min_child_weight": 1,
-    "subsample": 0.9,
-    "colsample_bytree": 0.9,
-    "gamma": 0,
-    "reg_lambda": 1,
+LGBM_PARAMS = {
+    "n_estimators": 500,
+    "learning_rate": 0.05,
+    "max_depth": 5,
+    "num_leaves": 31,
+    "min_child_samples": 5,
+    "subsample": 0.85,
+    "colsample_bytree": 0.85,
+    "reg_lambda": 3,
     "random_state": 42,
     "n_jobs": 1,
+    "verbose": -1,
 }
+
 
 log_dir = os.path.join(os.getcwd(), "logs")
 os.makedirs(log_dir, exist_ok=True)
@@ -212,53 +150,37 @@ def lighten_cmap(cmap_name="viridis", amount=0.5):
     )
 
 
-def fit_classified_day_ahead_models(train_X, train_y, sample_weights):
-    plunge_class = (train_y <= PLUNGE_DAY_AHEAD_THRESHOLD).astype(int)
-    plunge_count = int(plunge_class.sum())
-    normal_count = int(len(plunge_class) - plunge_count)
-    if plunge_count == 0 or normal_count == 0:
-        logger.warning(
-            "Skipping classified day-ahead model because training classes are incomplete "
-            "plunge_rows=%s normal_rows=%s",
-            plunge_count,
-            normal_count,
+def fit_day_ahead_ensemble(train_X, train_y, sample_weights):
+    cat = CatBoostRegressor(**CATBOOST_PARAMS)
+    cat.fit(train_X, train_y, sample_weight=sample_weights)
+
+    lgbm = LGBMRegressor(**LGBM_PARAMS)
+    lgbm.fit(train_X, train_y, sample_weight=sample_weights)
+
+    et = ExtraTreesRegressor(**EXTRA_TREES_REGRESSOR_PARAMS)
+    et.fit(train_X, train_y, sample_weight=sample_weights)
+
+    logger.info("Fitted ensemble (CatBoost + LightGBM + ExtraTrees)")
+    return [cat, lgbm, et]
+
+
+def predict_day_ahead_ensemble(models, features):
+    preds = np.column_stack([m.predict(features) for m in models])
+    return preds.mean(axis=1)
+
+
+def cross_val_ensemble_rmse(train_X, train_y, sample_weights, n_splits=5):
+    kf = KFold(n_splits=n_splits, shuffle=False)
+    scores = []
+    for tr_idx, val_idx in kf.split(train_X):
+        fold_models = fit_day_ahead_ensemble(
+            train_X.iloc[tr_idx], train_y.iloc[tr_idx], sample_weights.iloc[tr_idx]
         )
-        return None
-
-    scale_pos_weight = normal_count / plunge_count * 2
-    classifier = xg.XGBClassifier(**CLASSIFIED_XGBOOST_CLASSIFIER_PARAMS, scale_pos_weight=scale_pos_weight)
-    classifier.fit(train_X, plunge_class)
-
-    plunge_mask = plunge_class == 1
-    normal_mask = ~plunge_mask.astype(bool)
-
-    plunge_model = xg.XGBRegressor(**XGBOOST_PARAMETER_SETS["conservative_gbtree"])
-    normal_model = xg.XGBRegressor(**XGBOOST_PARAMETER_SETS["conservative_gbtree"])
-    plunge_model.fit(train_X.loc[plunge_mask], train_y.loc[plunge_mask], sample_weight=sample_weights.loc[plunge_mask])
-    normal_model.fit(train_X.loc[normal_mask], train_y.loc[normal_mask], sample_weight=sample_weights.loc[normal_mask])
-
-    logger.info(
-        "Fitted classified day-ahead models plunge_rows=%s normal_rows=%s threshold=%.4f",
-        plunge_count,
-        normal_count,
-        PLUNGE_DAY_AHEAD_THRESHOLD,
-    )
-    return classifier, plunge_model, normal_model
-
-
-def predict_classified_day_ahead(models, features):
-    classifier, plunge_model, normal_model = models
-    plunge_probability = classifier.predict_proba(features)[:, 1]
-    plunge_prediction = plunge_model.predict(features)
-    normal_prediction = normal_model.predict(features)
-    day_ahead_classified = plunge_probability * plunge_prediction + (1 - plunge_probability) * normal_prediction
-    return day_ahead_classified, plunge_probability
-
-
-def fit_extra_trees_day_ahead_model(train_X, train_y, sample_weights):
-    model = ExtraTreesRegressor(**EXTRA_TREES_REGRESSOR_PARAMS)
-    model.fit(train_X, train_y, sample_weight=sample_weights)
-    return model
+        preds = predict_day_ahead_ensemble(fold_models, train_X.iloc[val_idx])
+        rmse = np.sqrt(np.mean((train_y.iloc[val_idx].values - preds) ** 2))
+        scores.append(rmse)
+        logger.info("Ensemble CV fold RMSE=%.3f", rmse)
+    return np.array(scores)
 
 
 def kde_quantiles(kde, dt, pred, quantiles={"low": 0.1, "mid": 0.5, "high": 0.9}, lim=(0, 150), log_every=25):
@@ -342,7 +264,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--feature_set",
             choices=sorted(FEATURE_SETS),
-            default="generation",
+            default="weather",
             help="Named feature set to use for model training.",
         )
 
@@ -356,13 +278,6 @@ class Command(BaseCommand):
             action="append",
             default=[],
             help="Feature column to remove from the selected feature set. May be supplied multiple times.",
-        )
-
-        parser.add_argument(
-            "--xgboost_params",
-            choices=sorted(XGBOOST_PARAMETER_SETS),
-            default="regularized_dart",
-            help="Named XGBoost parameter set to use for model training.",
         )
 
         parser.add_argument(
@@ -408,9 +323,6 @@ class Command(BaseCommand):
             no_day_of_week=options.get("no_day_of_week", False),
         )
         logger.info("Using model features: %s", ", ".join(features))
-        xgboost_params_name = options.get("xgboost_params", "regularized_dart")
-        xgboost_params = XGBOOST_PARAMETER_SETS[xgboost_params_name]
-        logger.info("Using XGBoost parameter set: %s", xgboost_params_name)
         download_daily_external_forecasts()
 
         drop_last = int(options.get("drop_last", 0) or 0)
@@ -537,51 +449,21 @@ class Command(BaseCommand):
                             logger.info(f"train_X:\n{train_X}")
                         sample_weights = ((np.log10((train_y - train_y.mean()).abs() + 10) * 5) - 4).round(0)
 
-                        xg_model = xg.XGBRegressor(**xgboost_params)
-
-                        scores = cross_val_score(
-                            xg_model, train_X, train_y, cv=5, scoring="neg_root_mean_squared_error"
+                        logger.info(
+                            "Computing ensemble cross-validation score "
+                            f"({len(train_X)} rows, {len(train_X.columns)} features)"
                         )
-
-                        logger.info(f"Cross-val score: {scores}")
+                        scores = cross_val_ensemble_rmse(train_X, train_y, sample_weights)
+                        logger.info(f"Ensemble cross-val RMSE: {scores}")
                         refresh_db_connection("after cross-validation")
 
                         logger.info(
-                            "Fitting final XGBoost model "
+                            "Fitting final ensemble model "
                             f"({len(train_X)} rows, {len(train_X.columns)} features)"
                         )
-                        xg_model.fit(train_X, train_y, sample_weight=sample_weights, verbose=True)
-                        logger.info("Finished fitting final XGBoost model")
-                        refresh_db_connection("after fitting final XGBoost model")
-
-                        logger.info(
-                            "Fitting experimental ExtraTrees day-ahead model "
-                            f"({len(train_X)} rows, {len(train_X.columns)} features)"
-                        )
-                        extra_trees_model = fit_extra_trees_day_ahead_model(train_X, train_y, sample_weights)
-                        logger.info("Finished fitting experimental ExtraTrees day-ahead model")
-                        refresh_db_connection("after fitting experimental ExtraTrees day-ahead model")
-
-                        classified_models = None
-                        try:
-                            classified_train_X, classified_train_y = build_training_data(
-                                df, ff_train, prices, CLASSIFIED_MODEL_FEATURES, max_days
-                            )
-                            classified_sample_weights = (
-                                (np.log10((classified_train_y - classified_train_y.mean()).abs() + 10) * 5) - 4
-                            ).round(0)
-                            logger.info(
-                                "Fitting classified day-ahead models "
-                                f"({len(classified_train_X)} rows, {len(classified_train_X.columns)} features)"
-                            )
-                            classified_models = fit_classified_day_ahead_models(
-                                classified_train_X,
-                                classified_train_y,
-                                classified_sample_weights,
-                            )
-                            refresh_db_connection("after fitting classified day-ahead models")
-                        except ValueError:
-                            logger.exception("Unable to fit classified day-ahead models")
+                        ensemble_models = fit_day_ahead_ensemble(train_X, train_y, sample_weights)
+                        logger.info("Finished fitting ensemble model")
+                        refresh_db_connection("after fitting ensemble model")
 
                         # Drop the training data set
                         logger.info("Preparing holdout/test dataset")
@@ -614,7 +496,7 @@ class Command(BaseCommand):
 
                         logger.info(f"Predicting holdout/test dataset ({len(test_X)} rows)")
                         results = test_X[["dt", "day_ahead"]].copy()
-                        results["pred"] = xg_model.predict(test_X[features])
+                        results["pred"] = predict_day_ahead_ensemble(ensemble_models, test_X[features])
                         logger.info("Finished holdout/test predictions")
 
                         # Add required columns before plotting
@@ -646,7 +528,7 @@ class Command(BaseCommand):
                                     index=[ff.index[-1] + 1],
                                     data={
                                         "created_at": [pd.Timestamp(new_name, tz="GB")],
-                                        "mean": [-np.mean(scores)],
+                                        "mean": [np.mean(scores)],
                                         "stdev": [np.std(scores)],
                                     },
                                 ),
@@ -785,10 +667,15 @@ class Command(BaseCommand):
                             save_plot(fig, "4_kde_error_by_horizon")
                             logger.info("Saved stats plot 4/5: forecast error by horizon")
 
-                        # 5. Feature Importance (XGBoost built-in)
+                        # 5. Feature Importance (ensemble average of normalised importances)
                         fig, ax = plt.subplots(figsize=(8, 6))
-                        xg.plot_importance(xg_model, ax=ax, importance_type="gain", show_values=False)
-                        ax.set_title("XGBoost Feature Importance (Gain)")
+                        cat_imp = ensemble_models[0].get_feature_importance().astype(float)
+                        lgbm_imp = ensemble_models[1].feature_importances_.astype(float)
+                        et_imp = ensemble_models[2].feature_importances_.astype(float)
+                        avg_imp = (cat_imp / cat_imp.sum() + lgbm_imp / lgbm_imp.sum() + et_imp / et_imp.sum()) / 3
+                        pd.Series(avg_imp, index=features).sort_values().plot.barh(ax=ax)
+                        ax.set_title("Ensemble Feature Importance (Average)")
+                        ax.set_xlabel("Relative Importance")
                         save_plot(fig, "5_feature_importance")
                         logger.info("Saved stats plot 5/5: feature importance")
 
@@ -807,23 +694,12 @@ class Command(BaseCommand):
                     if len(ff) > 0:
                         logger.info(f"Predicting latest forecast ({len(fc)} rows)")
                         prediction_features = latest_prediction_features(fc, train_X.columns)
-                        fc["day_ahead"] = xg_model.predict(prediction_features)
+                        fc["day_ahead"] = predict_day_ahead_ensemble(ensemble_models, prediction_features)
                         logger.info("Finished latest forecast prediction")
 
-                        logger.info("Predicting latest forecast with experimental ExtraTrees model")
-                        fc["day_ahead_extra_trees"] = extra_trees_model.predict(prediction_features)
-                        logger.info("Finished experimental ExtraTrees prediction")
-
-                        if classified_models is not None:
-                            logger.info("Predicting latest forecast with classified day-ahead model")
-                            classified_features = latest_prediction_features(fc, CLASSIFIED_MODEL_FEATURES)
-                            fc["day_ahead_classified"], fc["plunge_probability"] = predict_classified_day_ahead(
-                                classified_models, classified_features
-                            )
-                            logger.info("Finished classified day-ahead prediction")
-                        else:
-                            fc["day_ahead_classified"] = None
-                            fc["plunge_probability"] = None
+                        fc["day_ahead_classified"] = np.nan
+                        fc["day_ahead_extra_trees"] = np.nan
+                        fc["plunge_probability"] = np.nan
 
                         if (len(test_X) > 10) and (not no_ranges):
                             kde_fit_data = results[["dt", "pred", "day_ahead"]].to_numpy()
@@ -938,12 +814,6 @@ class Command(BaseCommand):
                     fc["day_ahead"] = fc["day_ahead"] * scale_factors["mult"] + scale_factors["day_ahead"] * (
                         1 - scale_factors["mult"]
                     )
-                    fc["day_ahead_classified"] = fc["day_ahead_classified"] * scale_factors["mult"] + scale_factors[
-                        "day_ahead"
-                    ] * (1 - scale_factors["mult"])
-                    fc["day_ahead_extra_trees"] = fc["day_ahead_extra_trees"] * scale_factors["mult"] + scale_factors[
-                        "day_ahead"
-                    ] * (1 - scale_factors["mult"])
                     fc["day_ahead_low"] = (
                         fc["day_ahead_low"] * scale_factors["mult"]
                         + scale_factors["day_ahead"] * (1 - scale_factors["mult"])
@@ -960,14 +830,7 @@ class Command(BaseCommand):
                             pd.concat(
                                 [
                                     scale_factors,
-                                    fc[
-                                        [
-                                            "day_ahead",
-                                            "day_ahead_extra_trees",
-                                            "day_ahead_low",
-                                            "day_ahead_high",
-                                        ]
-                                    ],
+                                    fc[["day_ahead", "day_ahead_low", "day_ahead_high"]],
                                 ],
                                 axis=1,
                             )
@@ -1022,7 +885,7 @@ class Command(BaseCommand):
                         logger.info(f"Forecast\n{fc}")
 
                     refresh_db_connection("before saving forecast rows")
-                    this_forecast = Forecasts(name=new_name, mean=-np.mean(scores), stdev=np.std(scores))
+                    this_forecast = Forecasts(name=new_name, mean=np.mean(scores), stdev=np.std(scores))
                     logger.info(f"Saving forecast record: {new_name}")
                     this_forecast.save()
                     fc["forecast"] = this_forecast

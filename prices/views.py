@@ -108,7 +108,6 @@ def _update_options(request):
         "drop_last",
         "feature_set",
         "features",
-        "xgboost_params",
     ]:
         value = request.POST.get(key, request.GET.get(key))
         if value not in {None, ""}:
