@@ -61,14 +61,16 @@
     </div>
     {% endif %}
 
-    {# Card 4: Data source traffic lights #}
+    {# Card 4: Last forecast run status #}
     {% if api_status %}
     <div class="col-6 col-lg-3">
       <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
         <div class="card-body py-2 px-3">
           <div class="d-flex align-items-center justify-content-between mb-2">
-            <span class="text-body-secondary" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Data sources</span>
-            <span class="fw-bold {% if api_status.overall_health == 'ok' %}text-success{% else %}text-danger{% endif %}" style="font-size:.75rem">{{ api_status.horizon_days }}d horizon</span>
+            <span class="text-body-secondary" style="font-size:.7rem;text-transform:uppercase;letter-spacing:.05em">Last forecast</span>
+            {% if api_status.last_run_time %}
+            <span class="fw-bold {% if api_status.last_run_status == 'completed' %}text-success{% elif api_status.last_run_status == 'failed' %}text-danger{% else %}text-body-secondary{% endif %}" style="font-size:.75rem">{{ api_status.last_run_time }}</span>
+            {% endif %}
           </div>
           {% for src in api_status.sources %}
           <div class="d-flex align-items-center gap-2 mb-1">
@@ -77,25 +79,11 @@
             <span class="text-body-secondary" style="font-size:.7rem">{{ src.detail }}</span>
           </div>
           {% endfor %}
-          <div style="border-top:1px solid #3a3d41;margin-top:4px;padding-top:4px">
-            {% if api_status.last_run and api_status.last_run.status == "failed" %}
-            <div class="d-flex align-items-baseline gap-1 mb-1">
-              <span style="width:8px;height:8px;border-radius:50%;flex-shrink:0;background:#dc3545;margin-top:2px"></span>
-              <span class="text-danger" style="font-size:.72rem;font-weight:500">{{ api_status.last_run.time }} run aborted</span>
-            </div>
-            {% if api_status.last_run.reason_short %}
-            <div class="text-body-secondary" style="font-size:.68rem;padding-left:16px">{{ api_status.last_run.reason_short }}</div>
-            {% endif %}
-            {% elif api_status.last_run and api_status.last_run.status == "completed" %}
-            <div class="d-flex align-items-baseline gap-1">
-              <span style="width:8px;height:8px;border-radius:50%;flex-shrink:0;background:#28a745;margin-top:2px"></span>
-              <span class="text-body-secondary" style="font-size:.7rem">{{ api_status.last_run.time }} run OK</span>
-            </div>
-            {% endif %}
-            {% if api_status.updated %}
-            <div class="text-body-secondary mt-1" style="font-size:.7rem">Forecast {{ api_status.updated }}</div>
-            {% endif %}
+          {% if api_status.last_success_time %}
+          <div style="border-top:1px solid #3a3d41;margin-top:4px;padding-top:4px;font-size:.7rem" class="text-body-secondary">
+            Last successful: {{ api_status.last_success_time }}
           </div>
+          {% endif %}
         </div>
       </div>
     </div>
