@@ -384,6 +384,7 @@ def get_latest_forecast():
     forecast_data = [
         {
             "api_group": "neso_wind",
+            "label": "WINDFOR",
             "url": "https://api.neso.energy/api/3/action/datastore_search?resource_id=93c3048e-1dab-4057-a2a9-417540583929&limit=1000",
             "record_path": ["result", "records"],
             "tz": "UTC",
@@ -393,6 +394,7 @@ def get_latest_forecast():
         },
         {
             "api_group": "neso_da_wind",
+            "label": "WINDFOR-DA",
             "url": "https://api.neso.energy/api/3/action/datastore_search?resource_id=b2f03146-f05d-4824-a663-3a4f36090c71&limit=1000",
             "record_path": ["result", "records"],
             "tz": "UTC",
@@ -402,6 +404,7 @@ def get_latest_forecast():
         },
         {
             "api_group": "neso_solar",
+            "label": "EMBSOLARFOR",
             "url": "https://api.neso.energy/api/3/action/datastore_search?resource_id=db6c038f-98af-4570-ab60-24d71ebd0ae5&limit=1000",
             "record_path": ["result", "records"],
             "tz": "UTC",
@@ -412,6 +415,7 @@ def get_latest_forecast():
         },
         {
             "api_group": "neso_demand",
+            "label": "NATDEMAND",
             "url": "https://api.neso.energy/api/3/action/datastore_search?resource_id=7c0411cd-2714-4bb5-a408-adb065edf34d&limit=5000",
             "record_path": ["result", "records"],
             "date_col": "GDATETIME",
@@ -420,6 +424,7 @@ def get_latest_forecast():
         },
         {
             "api_group": "openmeteo",
+            "label": "Open-Meteo",
             "url": "https://api.open-meteo.com/v1/forecast",
             "params": {
                 "latitude": 54.0,
@@ -437,6 +442,7 @@ def get_latest_forecast():
         },
         {
             "api_group": "bmrs",
+            "label": "NDF",
             # "url": f"https://data.elexon.co.uk/bmrs/api/v1/datasets/NDF?publishDateTimeFrom={ndf_from}&publishDateTimeTo={ndf_to}",
             "url": f"https://data.elexon.co.uk/bmrs/api/v1/datasets/NDF",
             "params": {"publishDateTimeFrom": ndf_from, "publishDateTimeTo": ndf_to},
@@ -449,17 +455,32 @@ def get_latest_forecast():
 
     downloaded_data = []
     download_errors = []
-    source_rows = {"neso": 0, "bmrs": 0, "openmeteo": 0}
+    source_rows = {}
+    source_details = {}  # api_group → {label, rows, error}
+
+    def _err_str(e):
+        if isinstance(e, int):
+            return f"HTTP {e}"
+        if e is not None:
+            return str(e)[:80]
+        return "no data returned"
 
     for x in forecast_data:
         group = x.get("api_group", "other")
-        ds_kwargs = {k: v for k, v in x.items() if k != "api_group"}
+        label = x.get("label", group)
+        ds_kwargs = {k: v for k, v in x.items() if k not in ("api_group", "label")}
         data, e = DataSet(**ds_kwargs).download()
-        if len(data) > 0:
+        n = len(data)
+        prev = source_details.get(group, {"label": label, "rows": 0, "error": None})
+        prev["rows"] += n
+        if n > 0:
             downloaded_data += [data]
-            source_rows[group] = source_rows.get(group, 0) + len(data)
+            source_rows[group] = source_rows.get(group, 0) + n
         else:
             download_errors += [e]
+            if prev["error"] is None:
+                prev["error"] = _err_str(e)
+        source_details[group] = prev
 
     df = pd.concat(downloaded_data, axis=1)
 
@@ -488,7 +509,7 @@ def get_latest_forecast():
     missing_cols += [c for c in all_cols if c not in df.columns]
     if len(missing_cols) > 0:
         logger.error("No forecast data for columns=%s", missing_cols)
-        return pd.DataFrame(), missing_cols, source_rows
+        return pd.DataFrame(), missing_cols, source_rows, source_details
     else:
         df["date_time"] = pd.to_datetime(df.index)
         df["time"] = df["date_time"].dt.hour + df["date_time"].dt.minute / 60
@@ -498,7 +519,7 @@ def get_latest_forecast():
         df.index = pd.to_datetime(df.index).tz_convert("GB")
         df.drop(["date_time"], axis=1, inplace=True)
 
-        return df.sort_index().dropna(), missing_cols, source_rows
+        return df.sort_index().dropna(), missing_cols, source_rows, source_details
 
 
 def get_weather_ensemble(n_members=10, forecast_days=3):

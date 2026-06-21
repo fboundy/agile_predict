@@ -392,13 +392,14 @@ class Command(BaseCommand):
             if debug:
                 logger.info("Getting latest Forecast")
 
-            fc, missing_fc, source_rows = get_latest_forecast()
+            fc, missing_fc, source_rows, source_details = get_latest_forecast()
             refresh_db_connection("after fetching latest forecast")
 
-            # Persist source row counts into the running UpdateJob so the UI can
-            # read traffic-light health across processes (LocMemCache is per-process).
+            # Persist source row counts and per-source details into the running UpdateJob
+            # so the UI can read traffic-light health across processes.
             api_status_data = {
                 "source_rows": source_rows,
+                "source_details": source_details,
                 "forecast_rows": len(fc),
                 "checked_at": pd.Timestamp.now(tz="UTC").isoformat(),
             }

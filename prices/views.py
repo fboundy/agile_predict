@@ -1732,6 +1732,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         ).order_by("-requested_at").first()
         job_api_status = (recent_update_job.options or {}).get("api_status", {}) if recent_update_job else {}
         source_rows = job_api_status.get("source_rows", {})
+        source_details = job_api_status.get("source_details", {})
 
         # NESO: use per-sub-source minimum if new keys present, else fall back to old aggregate
         _has_neso_sub = "neso_wind" in source_rows and "neso_solar" in source_rows and "neso_demand" in source_rows
@@ -1782,25 +1783,35 @@ class GraphV2View(V2NavMixin, TemplateView):
             _neso_health = "fail"
 
         # Build detail text: "OK" when healthy; specific failure reason when not
+        def _src_fail_detail(group):
+            d = source_details.get(group, {})
+            label = d.get("label", group)
+            rows = d.get("rows", -1)
+            error = d.get("error")
+            if error and rows == 0:
+                return f"{label}: {error}"
+            if rows >= 0:
+                return f"{label}: {rows} rows"
+            return "no data"
+
         def _neso_detail():
             if _neso_health == "ok":
                 return "OK"
-            if _neso_subs:
-                worst = min(_neso_subs, key=_neso_subs.get)
-                return f"{worst}: {_neso_subs[worst]} rows"
+            # Find worst primary NESO sub-source (exclude supplementary da_wind)
+            primary = {k: v for k, v in source_details.items()
+                       if k in ("neso_wind", "neso_solar", "neso_demand")}
+            if primary:
+                worst_key = min(primary, key=lambda k: primary[k].get("rows", 0))
+                return _src_fail_detail(worst_key)
+            # Old-format heuristic: fall back to stored forecast_rows
             if _stored_forecast_rows >= 0:
                 return f"forecast: {_stored_forecast_rows} rows"
             return "insufficient data"
 
-        def _simple_detail(health, rows, label="rows"):
-            if health == "ok":
-                return "OK"
-            return f"{rows} {label}" if rows >= 0 else "no data"
-
         api_sources = [
             {"name": "NESO", "health": _neso_health, "detail": _neso_detail()},
-            {"name": "BMRS", "health": _bmrs_health, "detail": _simple_detail(_bmrs_health, _bmrs_rows)},
-            {"name": "Open-Meteo", "health": _om_health, "detail": _simple_detail(_om_health, _om_rows)},
+            {"name": "BMRS", "health": _bmrs_health, "detail": "OK" if _bmrs_health == "ok" else _src_fail_detail("bmrs")},
+            {"name": "Open-Meteo", "health": _om_health, "detail": "OK" if _om_health == "ok" else _src_fail_detail("openmeteo")},
             {
                 "name": "Octopus",
                 "health": _octopus_health,
