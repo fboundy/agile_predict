@@ -34,7 +34,7 @@ from ...forecast_features import (
     select_daily_training_forecasts,
 )
 from ...external_forecasts import download_daily_external_forecasts
-from ...models import AgileData, ForecastData, Forecasts, History, PlotImage, PriceHistory
+from ...models import AgileData, ForecastData, Forecasts, History, PlotImage, PriceHistory, UpdateJob
 
 from config.utils import *
 from config.settings import GLOBAL_SETTINGS
@@ -395,14 +395,22 @@ class Command(BaseCommand):
             fc, missing_fc, source_rows = get_latest_forecast()
             refresh_db_connection("after fetching latest forecast")
 
-            # Persist source row counts so the UI can show traffic-light health.
-            # Octopus (price history) is checked separately in the view from PriceHistory.
-            api_status_cache = {
+            # Persist source row counts into the running UpdateJob so the UI can
+            # read traffic-light health across processes (LocMemCache is per-process).
+            api_status_data = {
                 "source_rows": source_rows,
                 "forecast_rows": len(fc),
                 "checked_at": pd.Timestamp.now(tz="UTC").isoformat(),
             }
-            cache.set("api_source_status", api_status_cache, timeout=7200)
+            try:
+                running_job = UpdateJob.objects.filter(
+                    job_type=UpdateJob.JOB_UPDATE, status=UpdateJob.STATUS_RUNNING,
+                ).order_by("-requested_at").first()
+                if running_job:
+                    running_job.options["api_status"] = api_status_data
+                    running_job.save(update_fields=["options"])
+            except Exception:
+                pass
             logger.info("Upstream source rows: %s  total forecast rows: %d", source_rows, len(fc))
 
             if len(missing_fc) > 0:

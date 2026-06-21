@@ -1732,9 +1732,13 @@ class GraphV2View(V2NavMixin, TemplateView):
                 return "warn"
             return "fail"
 
-        # Read cached source-row counts written by the last update run
-        cached = cache.get("api_source_status") or {}
-        source_rows = cached.get("source_rows", {})
+        # Read source-row counts from the most recent UpdateJob (written there to survive
+        # across processes, since LocMemCache is per-process).
+        recent_update_job = UpdateJob.objects.filter(
+            job_type=UpdateJob.JOB_UPDATE
+        ).order_by("-requested_at").first()
+        job_api_status = (recent_update_job.options or {}).get("api_status", {}) if recent_update_job else {}
+        source_rows = job_api_status.get("source_rows", {})
 
         api_sources = [
             {
