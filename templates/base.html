@@ -20,7 +20,7 @@
             <div class="container-lg">
                 <nav class="navbar navbar-expand-lg bg-primary-subtle">
                     <div class="container-fluid">
-                        <a class="navbar-brand d-flex align-items-center gap-2" href="/X">
+                        <a class="navbar-brand d-flex align-items-center gap-2" href="{{ home_link|default:'/X/' }}">
                             <img
                                 src="{% static 'prices/agilepredict-icon.svg' %}"
                                 alt=""
@@ -43,7 +43,7 @@
                         <div class="collapse navbar-collapse" id="navbarSupportedContent">
                             <ul class="navbar-nav me-auto mb-2 mb-lg-0">
                                 <li class="nav-item">
-                                    <a class="nav-link active" aria-current="page" href="/X">Home</a>
+                                    <a class="nav-link active" aria-current="page" href="{{ home_link|default:'/X/' }}">Home</a>
                                 </li>
                                 <li class="nav-item dropdown">
                                     <a
@@ -57,28 +57,28 @@
                                         Region
                                     </a>
                                     <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
-                                        <li><a class="dropdown-item" href="/X">X: National Average</a></li>
+                                        <li><a class="dropdown-item" href="{{ region_link_prefix|default:'/' }}X/">X: National Average</a></li>
                                         <li><hr class="dropdown-divider" /></li>
                                         {% for key, value in REGIONS.items %}
                                         {% if key != "X" and key != "Z" %}
-                                        <li><a class="dropdown-item" href="/{{key}}">{{ key }}: {{ value }}</a></li>
+                                        <li><a class="dropdown-item" href="{{ region_link_prefix|default:'/' }}{{ key }}/">{{ key }}: {{ value }}</a></li>
                                         {% endif %}
                                         {% endfor %}
                                         <li><hr class="dropdown-divider" /></li>
-                                        <li><a class="dropdown-item" href="/Z">Z: Day Ahead Price</a></li>
+                                        <li><a class="dropdown-item" href="{{ region_link_prefix|default:'/' }}Z/">Z: Day Ahead Price</a></li>
                                     </ul>
                                 </li>
                                 <li class="nav-item">
-                                    <a class="nav-link" href="/api_how_to">API and Home Assistant</a>
+                                    <a class="nav-link" href="{{ api_link|default:'/api_how_to/' }}">API and Home Assistant</a>
                                 </li>
                                 <li class="nav-item">
-                                    <a class="nav-link" href="/stats">Stats</a>
+                                    <a class="nav-link" href="{{ stats_link|default:'/stats/' }}">Stats</a>
                                 </li>
                                 <li class="nav-item">
-                                    <a class="nav-link" href="/history">History</a>
+                                    <a class="nav-link" href="{{ history_link|default:'/history/' }}">History</a>
                                 </li>
                                 <li class="nav-item">
-                                    <a class="nav-link" href="/about">About</a>
+                                    <a class="nav-link" href="{{ about_link|default:'/about/' }}">About</a>
                                 </li>
                                 {% if request.user.is_staff %}
                                 <li class="nav-item">

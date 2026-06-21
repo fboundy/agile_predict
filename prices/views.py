@@ -1719,18 +1719,11 @@ class GraphV2View(V2NavMixin, TemplateView):
             except Exception:
                 pass
 
-        # --- API / data-source health status ---
-        # Expected future forecast rows for a healthy 14-day horizon:
-        _FULL_HORIZON_ROWS = 672   # 14 days × 48 half-hours
-        _OK_THRESHOLD = 400        # ≥ 400 rows (~8 days) = green
-        _WARN_THRESHOLD = 100      # ≥ 100 rows (~2 days) = amber
-
-        def _row_health(rows, full=_FULL_HORIZON_ROWS, ok=_OK_THRESHOLD, warn=_WARN_THRESHOLD):
-            if rows >= ok:
-                return "ok"
-            elif rows >= warn:
-                return "warn"
-            return "fail"
+        # --- API / data-source health status (binary: ok / fail, no amber) ---
+        # NESO: minimum across the three 14-day sub-sources; da_wind excluded (supplementary)
+        # BMRS NDF: day-ahead only, threshold is much lower
+        _NESO_THRESHOLD = 200   # rows below this → red for any primary NESO sub-source
+        _BMRS_THRESHOLD = 40    # NDF is day-ahead only; 40 rows ≈ one full day
 
         # Read source-row counts from the most recent UpdateJob (written there to survive
         # across processes, since LocMemCache is per-process).
@@ -1740,28 +1733,43 @@ class GraphV2View(V2NavMixin, TemplateView):
         job_api_status = (recent_update_job.options or {}).get("api_status", {}) if recent_update_job else {}
         source_rows = job_api_status.get("source_rows", {})
 
+        # NESO: use per-sub-source minimum if new keys present, else fall back to old aggregate
+        _has_neso_sub = "neso_wind" in source_rows and "neso_solar" in source_rows and "neso_demand" in source_rows
+        if _has_neso_sub:
+            neso_effective = min(
+                source_rows.get("neso_wind", 0),
+                source_rows.get("neso_solar", 0),
+                source_rows.get("neso_demand", 0),
+            )
+            neso_detail_rows = min(source_rows.get("neso_solar", 0), source_rows.get("neso_wind", 0))
+        else:
+            neso_effective = source_rows.get("neso", -1)
+            neso_detail_rows = neso_effective
+
+        def _bin_health(rows, threshold):
+            if rows < 0:
+                return "unknown"
+            return "ok" if rows >= threshold else "fail"
+
         api_sources = [
             {
                 "name": "NESO",
-                "rows": source_rows.get("neso", None),
-                "health": _row_health(source_rows["neso"]) if "neso" in source_rows else "unknown",
+                "health": _bin_health(neso_effective, _NESO_THRESHOLD),
                 "detail": "wind, solar & demand forecasts",
             },
             {
                 "name": "BMRS",
-                "rows": source_rows.get("bmrs", None),
-                "health": _row_health(source_rows["bmrs"]) if "bmrs" in source_rows else "unknown",
+                "health": _bin_health(source_rows.get("bmrs", -1), _BMRS_THRESHOLD),
                 "detail": "national demand forecast",
             },
             {
                 "name": "Open-Meteo",
-                "rows": source_rows.get("openmeteo", None),
-                "health": _row_health(source_rows["openmeteo"]) if "openmeteo" in source_rows else "unknown",
+                "health": _bin_health(source_rows.get("openmeteo", -1), _NESO_THRESHOLD),
                 "detail": "weather forecast",
             },
         ]
 
-        # Octopus: check freshness of PriceHistory
+        # Octopus: check freshness of PriceHistory (binary: ok if ≤ 26 h old)
         latest_price = PriceHistory.objects.order_by("-date_time").first()
         octopus_health = "unknown"
         octopus_detail = "no data"
@@ -1769,21 +1777,18 @@ class GraphV2View(V2NavMixin, TemplateView):
             try:
                 price_ts = pd.Timestamp(latest_price.date_time).tz_convert("UTC")
                 hours_old = (pd.Timestamp.now(tz="UTC") - price_ts).total_seconds() / 3600
-                # Agile prices publish by ~16:00 for next day; > 26h old = likely stale
-                octopus_health = "ok" if hours_old <= 26 else "warn" if hours_old <= 36 else "fail"
+                octopus_health = "ok" if hours_old <= 26 else "fail"
                 octopus_detail = pd.Timestamp(latest_price.date_time).tz_convert("GB").strftime("to %d %b %H:%M")
             except Exception:
                 pass
         api_sources.append({
             "name": "Octopus",
-            "rows": None,
             "health": octopus_health,
             "detail": octopus_detail,
         })
 
-        # Overall health badge driven by worst individual source
-        _rank = {"ok": 0, "warn": 1, "fail": 2, "unknown": 1}
-        overall_health = max((s["health"] for s in api_sources), key=lambda h: _rank.get(h, 1))
+        # Overall health: ok only when every source is ok
+        overall_health = "ok" if all(s["health"] == "ok" for s in api_sources) else "fail"
 
         # Forecast horizon from latest ForecastData
         future_rows = 0

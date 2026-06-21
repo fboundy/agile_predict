@@ -383,7 +383,7 @@ def get_latest_forecast():
 
     forecast_data = [
         {
-            "api_group": "neso",
+            "api_group": "neso_wind",
             "url": "https://api.neso.energy/api/3/action/datastore_search?resource_id=93c3048e-1dab-4057-a2a9-417540583929&limit=1000",
             "record_path": ["result", "records"],
             "tz": "UTC",
@@ -392,7 +392,7 @@ def get_latest_forecast():
             "rename": ["bm_wind"],
         },
         {
-            "api_group": "neso",
+            "api_group": "neso_da_wind",
             "url": "https://api.neso.energy/api/3/action/datastore_search?resource_id=b2f03146-f05d-4824-a663-3a4f36090c71&limit=1000",
             "record_path": ["result", "records"],
             "tz": "UTC",
@@ -401,7 +401,7 @@ def get_latest_forecast():
             "rename": ["da_wind"],
         },
         {
-            "api_group": "neso",
+            "api_group": "neso_solar",
             "url": "https://api.neso.energy/api/3/action/datastore_search?resource_id=db6c038f-98af-4570-ab60-24d71ebd0ae5&limit=1000",
             "record_path": ["result", "records"],
             "tz": "UTC",
@@ -411,7 +411,7 @@ def get_latest_forecast():
             "time_col": "TIME_GMT",
         },
         {
-            "api_group": "neso",
+            "api_group": "neso_demand",
             "url": "https://api.neso.energy/api/3/action/datastore_search?resource_id=7c0411cd-2714-4bb5-a408-adb065edf34d&limit=5000",
             "record_path": ["result", "records"],
             "date_col": "GDATETIME",
