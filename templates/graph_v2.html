@@ -187,23 +187,17 @@
   </div>
   {% endif %}
 
-  {# ======== Price heat strip ======== #}
-  {% if heat_strip %}
+  {# ======== Cheap / best windows ======== #}
+  {% if cheap_windows %}
   <div class="card border-0 shadow-sm" style="background:#2a2d31">
     <div class="card-body py-2 px-3">
       <h6 class="card-title mb-2 text-body-secondary" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">
-        Price profile — {{ summary.unit }}{% if summary.is_export %} (export){% endif %}
-        <span class="fw-normal ms-2" style="font-size:.65rem">(hover for details)</span>
+        {% if summary.is_export %}Best 2h export windows{% else %}Cheapest 2h windows{% endif %}
       </h6>
-      {% for day in heat_strip %}
-      <div class="d-flex align-items-center mb-1" style="gap:2px">
-        <span class="text-body-secondary text-nowrap" style="font-size:.7rem;width:4rem;flex-shrink:0">{{ day.date }}</span>
-        <div class="d-flex flex-fill" style="gap:1px;min-width:0">
-          {% for slot in day.slots %}
-          <div title="{{ slot.time }}: {{ slot.price }}{{ summary.unit }}"
-               style="flex:1;height:16px;background:{{ slot.color }};border-radius:1px;min-width:0;cursor:default"></div>
-          {% endfor %}
-        </div>
+      {% for win in cheap_windows %}
+      <div class="d-flex align-items-center justify-content-between mb-1">
+        <span style="font-size:.82rem">{{ win.label }}</span>
+        <span class="badge bg-{{ win.badge }}" style="min-width:3.2rem;text-align:right">{{ win.avg }}{{ summary.unit }}</span>
       </div>
       {% endfor %}
     </div>

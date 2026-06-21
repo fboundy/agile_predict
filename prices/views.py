@@ -1845,28 +1845,61 @@ class GraphV2View(V2NavMixin, TemplateView):
             "last_success_time": pd.Timestamp(latest.created_at).tz_convert("GB").strftime("%d %b %H:%M") if latest else None,
         }
 
-        # --- Price heat strip (replaces daily table) ---
-        # Shows a row of coloured half-hour slots per day — immediately scannable
-        heat_strip = []
-        combined_all = pd.concat([actual, primary_s]).sort_index()
-        if not combined_all.empty:
-            for day_start, group in combined_all.resample("D"):
-                slots = [
-                    {
-                        "time": ts.strftime("%H:%M"),
-                        "price": round(float(v), 1),
-                        "color": color_fn(float(v) if not raw else None),
-                    }
-                    for ts, v in group.items()
-                    if pd.notna(v)
+        # --- Cheap / best windows (upcoming non-overlapping 2h periods) ---
+        cheap_windows = []
+        if not raw:
+            today_gb = now_gb.normalize()
+            tomorrow_gb = today_gb + pd.Timedelta("1D")
+            # Best available prices: actual (Octopus-confirmed) where available, else forecast
+            future_prices = primary_s[primary_s.index > now_gb].copy()
+            if not actual.empty:
+                future_actual = actual[actual.index > now_gb]
+                future_prices.update(future_actual)
+            horizon = future_prices.iloc[:144]  # up to 3 days of 30-min slots
+            n = len(horizon)
+            n_slots = self._CHARGE_SLOTS  # 4 slots = 2h
+            best_fn = max if show_export else min
+            if n >= n_slots:
+                prices_arr = horizon.values.tolist()
+                times_arr = horizon.index
+                avgs = [
+                    sum(prices_arr[i:i + n_slots]) / n_slots
+                    for i in range(n - n_slots + 1)
                 ]
-                if slots:
-                    heat_strip.append(
-                        {
-                            "date": pd.Timestamp(day_start).strftime("%a %d"),
-                            "slots": slots,
-                        }
-                    )
+                used_positions: set = set()
+                found = []
+                for _ in range(5):
+                    best_avg = None
+                    best_i = None
+                    for i, avg in enumerate(avgs):
+                        if any(s in used_positions for s in range(i, i + n_slots)):
+                            continue
+                        if best_avg is None or (show_export and avg > best_avg) or (not show_export and avg < best_avg):
+                            best_avg = avg
+                            best_i = i
+                    if best_i is None:
+                        break
+                    start_ts = times_arr[best_i]
+                    end_ts = times_arr[best_i + n_slots - 1] + pd.Timedelta("30min")
+                    day_offset = (start_ts.normalize() - today_gb).days
+                    if day_offset == 0:
+                        day_label = "Today"
+                    elif day_offset == 1:
+                        day_label = "Tomorrow"
+                    else:
+                        day_label = start_ts.strftime("%a %d %b")
+                    found.append({
+                        "start": start_ts,
+                        "label": f"{day_label} {start_ts.strftime('%H:%M')}–{end_ts.strftime('%H:%M')}",
+                        "avg": round(float(best_avg), 1),
+                        "badge": _price_badge(float(best_avg) if not show_export else None),
+                    })
+                    # Block out surrounding positions to prevent overlap
+                    for s in range(max(0, best_i - n_slots + 1), min(n - n_slots + 1, best_i + n_slots)):
+                        used_positions.add(s)
+                    for s in range(best_i, best_i + n_slots):
+                        used_positions.add(s)
+                cheap_windows = sorted(found, key=lambda w: w["start"])
 
         # --- Build chart ---
         if show_gen:
@@ -1915,7 +1948,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                     x=actual.index,
                     y=actual.values,
                     marker_color=[color_fn(p if not raw else None) for p in actual.values],
-                    marker_opacity=0.35,
+                    marker_opacity=1.0,
                     marker_line_width=0,
                     showlegend=False,
                     hovertemplate=f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>Confirmed</extra>",
@@ -2138,7 +2171,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 "show_gen": show_gen,
                 "summary": summary,
                 "api_status": api_status,
-                "heat_strip": heat_strip,
+                "cheap_windows": cheap_windows,
                 "day_options": self._DAY_OPTIONS,
                 "forecast_list": forecast_list,
                 "selected_ids": selected_ids,
