@@ -18,7 +18,7 @@
     <body class="bg-body">
         <header>
             <div class="container-lg">
-                <nav class="navbar navbar-expand-lg bg-primary-subtle">
+                <nav class="navbar navbar-expand-lg navbar-dark" style="background:#1e2124">
                     <div class="container-fluid">
                         <a class="navbar-brand d-flex align-items-center gap-2" href="{{ home_link|default:'/v2/X/' }}">
                             <img
@@ -102,6 +102,15 @@
                                 {% endcomment %}
                             </ul>
                             <ul class="navbar-nav ms-auto mb-2 mb-lg-0">
+                                {% if is_v2 %}
+                                <li class="nav-item">
+                                    <a class="nav-link" style="font-size:.8rem;opacity:.7" href="{{ classic_url|default:'/' }}">Classic UI</a>
+                                </li>
+                                {% else %}
+                                <li class="nav-item">
+                                    <a class="nav-link" style="font-size:.8rem;opacity:.7" href="/v2/X/">Updated UI</a>
+                                </li>
+                                {% endif %}
                                 {% if request.user.is_authenticated %}
                                 <li class="nav-item">
                                     <span class="navbar-text me-2">{{ request.user.username }}</span>

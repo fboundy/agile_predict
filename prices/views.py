@@ -1736,76 +1736,81 @@ class GraphV2View(V2NavMixin, TemplateView):
         # NESO: use per-sub-source minimum if new keys present, else fall back to old aggregate
         _has_neso_sub = "neso_wind" in source_rows and "neso_solar" in source_rows and "neso_demand" in source_rows
         if _has_neso_sub:
-            neso_effective = min(
-                source_rows.get("neso_wind", 0),
-                source_rows.get("neso_solar", 0),
-                source_rows.get("neso_demand", 0),
-            )
-            neso_detail_rows = min(source_rows.get("neso_solar", 0), source_rows.get("neso_wind", 0))
+            _neso_subs = {
+                "wind": source_rows.get("neso_wind", 0),
+                "solar": source_rows.get("neso_solar", 0),
+                "demand": source_rows.get("neso_demand", 0),
+            }
+            neso_effective = min(_neso_subs.values())
         else:
+            _neso_subs = {}
             neso_effective = source_rows.get("neso", -1)
-            neso_detail_rows = neso_effective
+
+        _stored_forecast_rows = job_api_status.get("forecast_rows", -1)
+        _bmrs_rows = source_rows.get("bmrs", -1)
+        _om_rows = source_rows.get("openmeteo", -1)
 
         def _bin_health(rows, threshold):
             if rows < 0:
                 return "unknown"
             return "ok" if rows >= threshold else "fail"
 
-        api_sources = [
-            {
-                "name": "NESO",
-                "health": _bin_health(neso_effective, _NESO_THRESHOLD),
-                "detail": "wind, solar & demand forecasts",
-            },
-            {
-                "name": "BMRS",
-                "health": _bin_health(source_rows.get("bmrs", -1), _BMRS_THRESHOLD),
-                "detail": "national demand forecast",
-            },
-            {
-                "name": "Open-Meteo",
-                "health": _bin_health(source_rows.get("openmeteo", -1), _NESO_THRESHOLD),
-                "detail": "weather forecast",
-            },
-        ]
+        _neso_health = _bin_health(neso_effective, _NESO_THRESHOLD)
+        _bmrs_health = _bin_health(_bmrs_rows, _BMRS_THRESHOLD)
+        _om_health = _bin_health(_om_rows, _NESO_THRESHOLD)
 
         # Octopus: check freshness of PriceHistory (binary: ok if ≤ 26 h old)
         latest_price = PriceHistory.objects.order_by("-date_time").first()
-        octopus_health = "unknown"
-        octopus_detail = "no data"
+        _octopus_health = "unknown"
+        _octopus_hours_old = None
         if latest_price is not None:
             try:
                 price_ts = pd.Timestamp(latest_price.date_time).tz_convert("UTC")
-                hours_old = (pd.Timestamp.now(tz="UTC") - price_ts).total_seconds() / 3600
-                octopus_health = "ok" if hours_old <= 26 else "fail"
-                octopus_detail = pd.Timestamp(latest_price.date_time).tz_convert("GB").strftime("to %d %b %H:%M")
+                _octopus_hours_old = (pd.Timestamp.now(tz="UTC") - price_ts).total_seconds() / 3600
+                _octopus_health = "ok" if _octopus_hours_old <= 26 else "fail"
             except Exception:
                 pass
-        api_sources.append({
-            "name": "Octopus",
-            "health": octopus_health,
-            "detail": octopus_detail,
-        })
 
-        # Overall health: ok only when every source is ok
-        overall_health = "ok" if all(s["health"] == "ok" for s in api_sources) else "fail"
-
-        # Heuristic for old-format source_rows (pre sub-source tracking): if the run failed
-        # with a very low combined forecast_rows, NESO is almost certainly the bottleneck
-        # (Open-Meteo 672 rows is full; BMRS NDF 103 rows is expected for a day-ahead product).
-        # Once the next run completes with new-format keys, this is no longer needed.
-        _stored_forecast_rows = job_api_status.get("forecast_rows", -1)
+        # Heuristic for old-format source_rows: if the run failed with low forecast_rows and
+        # sub-source keys are absent, NESO is the bottleneck (Open-Meteo is full; BMRS is day-ahead).
         if (
             recent_update_job
             and recent_update_job.status == UpdateJob.STATUS_FAILED
             and not _has_neso_sub
             and 0 <= _stored_forecast_rows < _NESO_THRESHOLD
         ):
-            for _src in api_sources:
-                if _src["name"] == "NESO":
-                    _src["health"] = "fail"
-                    overall_health = "fail"
-                    break
+            _neso_health = "fail"
+
+        # Build detail text: "OK" when healthy; specific failure reason when not
+        def _neso_detail():
+            if _neso_health == "ok":
+                return "OK"
+            if _neso_subs:
+                worst = min(_neso_subs, key=_neso_subs.get)
+                return f"{worst}: {_neso_subs[worst]} rows"
+            if _stored_forecast_rows >= 0:
+                return f"forecast: {_stored_forecast_rows} rows"
+            return "insufficient data"
+
+        def _simple_detail(health, rows, label="rows"):
+            if health == "ok":
+                return "OK"
+            return f"{rows} {label}" if rows >= 0 else "no data"
+
+        api_sources = [
+            {"name": "NESO", "health": _neso_health, "detail": _neso_detail()},
+            {"name": "BMRS", "health": _bmrs_health, "detail": _simple_detail(_bmrs_health, _bmrs_rows)},
+            {"name": "Open-Meteo", "health": _om_health, "detail": _simple_detail(_om_health, _om_rows)},
+            {
+                "name": "Octopus",
+                "health": _octopus_health,
+                "detail": "OK" if _octopus_health == "ok" else (
+                    f"stale: {int(_octopus_hours_old)}h old" if _octopus_hours_old is not None else "no data"
+                ),
+            },
+        ]
+
+        overall_health = "ok" if all(s["health"] == "ok" for s in api_sources) else "fail"
 
         # Forecast horizon from latest ForecastData
         future_rows = 0
@@ -1857,7 +1862,7 @@ class GraphV2View(V2NavMixin, TemplateView):
             figure = make_subplots(
                 rows=2,
                 cols=1,
-                subplot_titles=(price_display["axis_title"], "Generation & Demand"),
+                subplot_titles=("", "Generation & Demand"),
                 shared_xaxes=True,
                 vertical_spacing=0.08,
                 row_heights=[0.6, 0.4],
@@ -2075,7 +2080,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         if show_gen:
             figure.update_layout(**common_layout)
             figure.update_yaxes(
-                title_text=price_display["axis_title"],
+                title_text="",
                 zeroline=True,
                 zerolinecolor="#888",
                 zerolinewidth=2,
@@ -2086,7 +2091,7 @@ class GraphV2View(V2NavMixin, TemplateView):
             figure.update_layout(
                 **common_layout,
                 yaxis=dict(
-                    title=price_display["axis_title"],
+                    title="",
                     zeroline=True,
                     zerolinecolor="#888",
                     zerolinewidth=2,
