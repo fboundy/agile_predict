@@ -1436,7 +1436,7 @@ class GraphFormView(FormView):
             figure.append_trace(d, row=1, col=1)
 
         layout = dict(
-            yaxis={"title": ""},
+            yaxis={"title": price_display["axis_title"]},
             margin={
                 "r": 5,
                 "t": 10,
@@ -1453,7 +1453,7 @@ class GraphFormView(FormView):
             paper_bgcolor="#343a40",
         )
         figure.update_yaxes(
-            title_text="",
+            title_text=price_display["axis_title"],
             row=1,
             col=1,
             fixedrange=True,
@@ -2091,7 +2091,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         if show_gen:
             figure.update_layout(**common_layout)
             figure.update_yaxes(
-                title_text="",
+                title_text=price_display["axis_title"],
                 zeroline=True,
                 zerolinecolor="#888",
                 zerolinewidth=2,
@@ -2102,7 +2102,7 @@ class GraphV2View(V2NavMixin, TemplateView):
             figure.update_layout(
                 **common_layout,
                 yaxis=dict(
-                    title="",
+                    title=price_display["axis_title"],
                     zeroline=True,
                     zerolinecolor="#888",
                     zerolinewidth=2,
