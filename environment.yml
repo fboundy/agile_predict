@@ -19,7 +19,8 @@ dependencies:
   - scipy
   - scikit-learn
   - tables
-  - xgboost
+  - catboost
+  - lightgbm
   - requests
   - pip
   - pip:

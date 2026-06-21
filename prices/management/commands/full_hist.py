@@ -1,4 +1,3 @@
-import xgboost as xg
 from sklearn.metrics import mean_squared_error as MSE
 import numpy as np
 
