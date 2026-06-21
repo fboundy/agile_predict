@@ -15,7 +15,7 @@ import seaborn as sns
 
 from sklearn.ensemble import ExtraTreesRegressor
 from django.core.cache import cache  # Or store in the database if needed
-from django.db import close_old_connections
+from django.db import close_old_connections, transaction
 
 import numpy as np
 import os
@@ -392,8 +392,18 @@ class Command(BaseCommand):
             if debug:
                 logger.info("Getting latest Forecast")
 
-            fc, missing_fc = get_latest_forecast()
+            fc, missing_fc, source_rows = get_latest_forecast()
             refresh_db_connection("after fetching latest forecast")
+
+            # Persist source row counts so the UI can show traffic-light health.
+            # Octopus (price history) is checked separately in the view from PriceHistory.
+            api_status_cache = {
+                "source_rows": source_rows,
+                "forecast_rows": len(fc),
+                "checked_at": pd.Timestamp.now(tz="UTC").isoformat(),
+            }
+            cache.set("api_source_status", api_status_cache, timeout=7200)
+            logger.info("Upstream source rows: %s  total forecast rows: %d", source_rows, len(fc))
 
             if len(missing_fc) > 0:
                 raise CommandError(
@@ -868,15 +878,16 @@ class Command(BaseCommand):
                         logger.info(f"Forecast\n{fc}")
 
                     refresh_db_connection("before saving forecast rows")
-                    this_forecast = Forecasts(name=new_name, mean=np.mean(scores), stdev=np.std(scores))
-                    logger.info(f"Saving forecast record: {new_name}")
-                    this_forecast.save()
-                    fc["forecast"] = this_forecast
-                    ag["forecast"] = this_forecast
-                    logger.info(f"Writing ForecastData rows: {len(fc)}")
-                    df_to_Model(fc, ForecastData)
-                    logger.info(f"Writing AgileData rows: {len(ag)}")
-                    df_to_Model(ag, AgileData)
+                    with transaction.atomic():
+                        this_forecast = Forecasts(name=new_name, mean=np.mean(scores), stdev=np.std(scores))
+                        logger.info(f"Saving forecast record: {new_name}")
+                        this_forecast.save()
+                        fc["forecast"] = this_forecast
+                        ag["forecast"] = this_forecast
+                        logger.info(f"Writing ForecastData rows: {len(fc)}")
+                        df_to_Model(fc, ForecastData)
+                        logger.info(f"Writing AgileData rows: {len(ag)}")
+                        df_to_Model(ag, AgileData)
                     logger.info(f"Finished writing forecast {this_forecast.id}: {this_forecast.name}")
 
         if debug:

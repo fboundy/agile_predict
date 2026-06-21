@@ -1720,34 +1720,80 @@ class GraphV2View(V2NavMixin, TemplateView):
                 pass
 
         # --- API / data-source health status ---
-        api_status = {}
-        if latest is not None:
-            future_rows = ForecastData.objects.filter(
-                forecast=latest,
-                date_time__gt=now_gb.tz_convert("UTC"),
-            ).count()
-            horizon_hours = future_rows * 0.5
-            horizon_days = horizon_hours / 24
-            if horizon_days >= 8:
-                health = "ok"
-            elif horizon_days >= 2:
-                health = "warn"
-            else:
-                health = "fail"
-            api_status["horizon_days"] = f"{horizon_days:.1f}" if horizon_days >= 0.5 else "< 1"
-            api_status["health"] = health
-            api_status["forecast_rows"] = future_rows
-            try:
-                api_status["updated"] = pd.Timestamp(latest.created_at).tz_convert("GB").strftime("%d %b %H:%M")
-            except Exception:
-                pass
+        # Expected future forecast rows for a healthy 14-day horizon:
+        _FULL_HORIZON_ROWS = 672   # 14 days × 48 half-hours
+        _OK_THRESHOLD = 400        # ≥ 400 rows (~8 days) = green
+        _WARN_THRESHOLD = 100      # ≥ 100 rows (~2 days) = amber
 
+        def _row_health(rows, full=_FULL_HORIZON_ROWS, ok=_OK_THRESHOLD, warn=_WARN_THRESHOLD):
+            if rows >= ok:
+                return "ok"
+            elif rows >= warn:
+                return "warn"
+            return "fail"
+
+        # Read cached source-row counts written by the last update run
+        cached = cache.get("api_source_status") or {}
+        source_rows = cached.get("source_rows", {})
+
+        api_sources = [
+            {
+                "name": "NESO",
+                "rows": source_rows.get("neso", None),
+                "health": _row_health(source_rows["neso"]) if "neso" in source_rows else "unknown",
+                "detail": "wind, solar & demand forecasts",
+            },
+            {
+                "name": "BMRS",
+                "rows": source_rows.get("bmrs", None),
+                "health": _row_health(source_rows["bmrs"]) if "bmrs" in source_rows else "unknown",
+                "detail": "national demand forecast",
+            },
+            {
+                "name": "Open-Meteo",
+                "rows": source_rows.get("openmeteo", None),
+                "health": _row_health(source_rows["openmeteo"]) if "openmeteo" in source_rows else "unknown",
+                "detail": "weather forecast",
+            },
+        ]
+
+        # Octopus: check freshness of PriceHistory
         latest_price = PriceHistory.objects.order_by("-date_time").first()
+        octopus_health = "unknown"
+        octopus_detail = "no data"
         if latest_price is not None:
             try:
-                api_status["prices_to"] = pd.Timestamp(latest_price.date_time).tz_convert("GB").strftime("%d %b %H:%M")
+                price_ts = pd.Timestamp(latest_price.date_time).tz_convert("UTC")
+                hours_old = (pd.Timestamp.now(tz="UTC") - price_ts).total_seconds() / 3600
+                # Agile prices publish by ~16:00 for next day; > 26h old = likely stale
+                octopus_health = "ok" if hours_old <= 26 else "warn" if hours_old <= 36 else "fail"
+                octopus_detail = pd.Timestamp(latest_price.date_time).tz_convert("GB").strftime("to %d %b %H:%M")
             except Exception:
                 pass
+        api_sources.append({
+            "name": "Octopus",
+            "rows": None,
+            "health": octopus_health,
+            "detail": octopus_detail,
+        })
+
+        # Overall health badge driven by worst individual source
+        _rank = {"ok": 0, "warn": 1, "fail": 2, "unknown": 1}
+        overall_health = max((s["health"] for s in api_sources), key=lambda h: _rank.get(h, 1))
+
+        # Forecast horizon from latest ForecastData
+        future_rows = 0
+        if latest is not None:
+            future_rows = ForecastData.objects.filter(
+                forecast=latest, date_time__gt=now_gb.tz_convert("UTC"),
+            ).count()
+
+        api_status = {
+            "sources": api_sources,
+            "overall_health": overall_health,
+            "horizon_days": f"{future_rows / 48:.1f}" if future_rows >= 24 else ("< 1" if future_rows > 0 else "—"),
+            "updated": pd.Timestamp(latest.created_at).tz_convert("GB").strftime("%d %b %H:%M") if latest else None,
+        }
 
         # --- Price heat strip (replaces daily table) ---
         # Shows a row of coloured half-hour slots per day — immediately scannable
