@@ -3,6 +3,22 @@
 {% block content %}
 <div class="container-lg py-3">
 
+  {# ======== Data source status cards ======== #}
+  {% if api_status %}
+  <div class="row g-2 mb-3">
+    {% for src in api_status.sources %}
+    <div class="col-6 col-sm-3">
+      <div class="card border-0 shadow-sm h-100" style="background:{% if src.health == 'ok' %}#1a4a2c{% elif src.health == 'warn' %}#4a3a00{% elif src.health == 'fail' %}#4a1a22{% else %}#2a2d31{% endif %}">
+        <div class="card-body py-2 px-3">
+          <div class="fw-semibold" style="font-size:.82rem">{{ src.name }}</div>
+          <div class="text-body-secondary" style="font-size:.72rem;margin-top:2px">{{ src.detail }}</div>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   {# ======== Page header ======== #}
   <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
     <div>
@@ -16,7 +32,7 @@
 
     {# Card 1: Current price #}
     {% if summary.current_price %}
-    <div class="col-6 col-lg-3">
+    <div class="col-6 col-lg-4">
       <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
         <div class="card-body py-2 px-3">
           <div class="text-body-secondary mb-1" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Now · {{ summary.current_time }}</div>
@@ -31,7 +47,7 @@
 
     {# Card 2: Best single slot #}
     {% if summary.best_slot_price %}
-    <div class="col-6 col-lg-3">
+    <div class="col-6 col-lg-4">
       <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
         <div class="card-body py-2 px-3">
           <div class="text-body-secondary mb-1" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">{{ summary.best_slot_label }}</div>
@@ -47,7 +63,7 @@
 
     {# Card 3: Best 2h window #}
     {% if summary.window_start %}
-    <div class="col-6 col-lg-3">
+    <div class="col-6 col-lg-4">
       <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
         <div class="card-body py-2 px-3">
           <div class="text-body-secondary mb-1" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">{{ summary.window_label }}</div>
@@ -56,34 +72,6 @@
             <span class="text-body-secondary">{{ summary.unit }}</span>
           </div>
           <div style="font-size:.8rem" class="text-body-secondary mt-1">{{ summary.window_start }}–{{ summary.window_end }}</div>
-        </div>
-      </div>
-    </div>
-    {% endif %}
-
-    {# Card 4: Last forecast run status #}
-    {% if api_status %}
-    <div class="col-6 col-lg-3">
-      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
-        <div class="card-body py-2 px-3">
-          <div class="d-flex align-items-center justify-content-between mb-2">
-            <span class="text-body-secondary" style="font-size:.7rem;text-transform:uppercase;letter-spacing:.05em">Last forecast</span>
-            {% if api_status.last_run_time %}
-            <span class="fw-bold {% if api_status.last_run_status == 'completed' %}text-success{% elif api_status.last_run_status == 'failed' %}text-danger{% else %}text-body-secondary{% endif %}" style="font-size:.75rem">{{ api_status.last_run_time }}</span>
-            {% endif %}
-          </div>
-          {% for src in api_status.sources %}
-          <div class="d-flex align-items-center gap-2 mb-1">
-            <span style="width:8px;height:8px;border-radius:50%;flex-shrink:0;background:{% if src.health == 'ok' %}#28a745{% elif src.health == 'warn' %}#ffc107{% elif src.health == 'fail' %}#dc3545{% else %}#6c757d{% endif %}"></span>
-            <span style="font-size:.78rem;flex:1">{{ src.name }}</span>
-            <span class="text-body-secondary" style="font-size:.7rem">{{ src.detail }}</span>
-          </div>
-          {% endfor %}
-          {% if api_status.last_success_time %}
-          <div style="border-top:1px solid #3a3d41;margin-top:4px;padding-top:4px;font-size:.7rem" class="text-body-secondary">
-            Last successful: {{ api_status.last_success_time }}
-          </div>
-          {% endif %}
         </div>
       </div>
     </div>
