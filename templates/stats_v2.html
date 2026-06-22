@@ -9,18 +9,20 @@
     <div class="text-body-secondary" style="font-size:.8rem">Training accuracy and diagnostic plots</div>
   </div>
 
-  {% if trend_plot_url %}
+  {# Load Plotly once for all inline charts on this page #}
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+
+  {% if trend_chart %}
   <div class="card border-0 shadow-sm mb-3" style="background:#2a2d31">
     <div class="card-body py-2 px-3">
       <h6 class="text-body-secondary mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">
         Model error trend over time
       </h6>
       <p class="text-body-secondary mb-2" style="font-size:.82rem">
-        Each run trains on 80% of the data and tests on the remaining 20%, repeated five times.
-        The solid line is the mean RMSE; the band is ±1 standard deviation. A downward trend
-        indicates the model is improving as more data is collected.
+        Cross-validation RMSE for each forecast run (5-fold). The line is the mean across folds; the band is ±1 standard deviation.
+        A downward trend indicates the model is improving as more data is collected.
       </p>
-      <img src="{{ trend_plot_url }}" alt="Error trend" class="img-fluid rounded" />
+      {{ trend_chart|safe }}
     </div>
   </div>
   {% endif %}
@@ -33,20 +35,19 @@
       </h6>
       <p class="text-body-secondary mb-2" style="font-size:.82rem">
         Actual Agile price shown in yellow; thin grey lines are historical forecasts.
-        The heatmap shows how errors evolve over forecast date — warm colours indicate
-        larger error; you should see cooler colours near the top-left (short lead times).
+        The heatmap shows how errors evolve over forecast date — warm colours indicate larger error.
       </p>
       {{ stats|safe }}
     </div>
   </div>
   {% endif %}
 
-  {% if plot_files %}
+  {% if diagnostic_charts %}
   <h6 class="text-body-secondary mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">
-    Diagnostic plots — most recent forecast
+    Diagnostic plots — last 30 days
   </h6>
   <div class="row g-3">
-    {% for plot in plot_files %}
+    {% for plot in diagnostic_charts %}
     <div class="{% if forloop.first %}col-12{% else %}col-md-6{% endif %}">
       <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
         <div class="card-body py-2 px-3">
@@ -54,7 +55,7 @@
           {% if plot.description %}
           <p class="text-body-secondary mb-2" style="font-size:.78rem">{{ plot.description }}</p>
           {% endif %}
-          <img src="{{ plot.url }}" class="img-fluid rounded" alt="{{ plot.title }}" />
+          {{ plot.chart|safe }}
         </div>
       </div>
     </div>
@@ -63,7 +64,7 @@
   {% else %}
   <div class="card border-0 shadow-sm" style="background:#2a2d31">
     <div class="card-body py-3 text-center text-body-secondary" style="font-size:.85rem">
-      No diagnostic plots available yet. Run a forecast to generate them.
+      No diagnostic data available yet. Run a forecast to generate plots.
     </div>
   </div>
   {% endif %}

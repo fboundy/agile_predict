@@ -2526,10 +2526,302 @@ class HistoryV2View(V2NavMixin, HistoryView):
 class StatsV2View(V2NavMixin, StatsView):
     template_name = "stats_v2.html"
 
+    @staticmethod
+    def _extra_cache_key():
+        f = (
+            Forecasts.objects.filter(mean__isnull=False)
+            .order_by("-created_at")
+            .values_list("created_at", flat=True)
+            .first()
+        )
+        ts = int(f.timestamp()) if f else 0
+        return f"stats_v2_extra_{ts}"
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["classic_url"] = "/stats"
+
+        cache_key = self._extra_cache_key()
+        v2_extra = cache.get(cache_key)
+        if v2_extra is not None:
+            context.update(v2_extra)
+            return context
+
+        if not PriceHistory.objects.exists():
+            v2_extra = {"trend_chart": "", "diagnostic_charts": []}
+            cache.set(cache_key, v2_extra, timeout=60 * 60 * 24)
+            context.update(v2_extra)
+            return context
+
+        started = time.monotonic()
+        v2_extra = {
+            "trend_chart": self._build_trend_chart(),
+            "diagnostic_charts": self._build_diagnostic_charts(),
+        }
+        cache.set(cache_key, v2_extra, timeout=60 * 60 * 24)
+        context.update(v2_extra)
+        logger.info("Built stats v2 extra context duration_seconds=%.2f", time.monotonic() - started)
         return context
+
+    @staticmethod
+    def _build_trend_chart():
+        import numpy as np
+
+        qs = list(Forecasts.objects.filter(mean__isnull=False).order_by("created_at").values("created_at", "mean", "stdev"))
+        if not qs:
+            return ""
+
+        factor = GLOBAL_SETTINGS["REGIONS"]["X"]["factors"][0]
+        created = [pd.Timestamp(r["created_at"]) for r in qs]
+        means = np.array([r["mean"] * factor for r in qs])
+        stdevs = np.array([(r["stdev"] or 0) * factor for r in qs])
+        upper = (means + stdevs).tolist()
+        lower = np.maximum(0, means - stdevs).tolist()
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=created + created[::-1],
+            y=upper + lower[::-1],
+            fill="toself",
+            fillcolor="rgba(255,220,0,0.12)",
+            line={"color": "rgba(0,0,0,0)"},
+            showlegend=True,
+            name="±1 Stdev",
+            hoverinfo="skip",
+        ))
+        fig.add_trace(go.Scatter(
+            x=created,
+            y=means.tolist(),
+            mode="lines+markers",
+            line={"color": "#e0e0e0", "width": 2},
+            marker={"size": 6},
+            name="Mean RMSE",
+            hovertemplate="%{x|%d %b %H:%M}<br>RMSE: %{y:.2f} p/kWh<extra></extra>",
+        ))
+        fig.update_layout(
+            template="plotly_dark",
+            plot_bgcolor="#212529",
+            paper_bgcolor="#343a40",
+            height=280,
+            margin={"r": 10, "t": 20, "l": 60, "b": 50},
+            yaxis={"title": "RMSE [p/kWh]", "rangemode": "tozero"},
+            legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1},
+        )
+        return fig.to_html(full_html=False, include_plotlyjs=False)
+
+    @staticmethod
+    def _build_diagnostic_charts():
+        import numpy as np
+        from scipy.stats import gaussian_kde
+
+        latest = PriceHistory.objects.order_by("-date_time").values_list("date_time", flat=True).first()
+        if not latest:
+            return []
+        end_ts = pd.Timestamp(latest)
+        start_ts = end_ts - pd.Timedelta("30D")
+
+        actuals_rows = list(PriceHistory.objects.filter(date_time__gte=start_ts).values("date_time", "agile"))
+        if not actuals_rows:
+            return []
+        actuals_df = pd.DataFrame(actuals_rows)
+        actuals_df["date_time"] = pd.to_datetime(actuals_df["date_time"], utc=True)
+
+        preds_rows = list(
+            AgileData.objects
+            .filter(region="X", date_time__gte=start_ts, date_time__lte=end_ts)
+            .select_related("forecast")
+            .values("date_time", "agile_pred", "forecast__created_at")
+        )
+        if not preds_rows:
+            return []
+
+        pred_df = pd.DataFrame(preds_rows)
+        pred_df.columns = ["date_time", "agile_pred", "forecast_created"]
+        pred_df["date_time"] = pd.to_datetime(pred_df["date_time"], utc=True)
+        pred_df["forecast_created"] = pd.to_datetime(pred_df["forecast_created"], utc=True)
+
+        df = pred_df.merge(actuals_df, on="date_time", how="inner")
+        if df.empty:
+            return []
+
+        df["error"] = df["agile"] - df["agile_pred"]
+        df["dt"] = (df["date_time"] - df["forecast_created"]).dt.total_seconds() / 86400
+        df = df[(df["dt"] >= 0) & (df["dt"] <= 14)].copy()
+        if df.empty:
+            return []
+
+        _LAYOUT = dict(
+            template="plotly_dark",
+            plot_bgcolor="#212529",
+            paper_bgcolor="#343a40",
+            margin={"r": 10, "t": 30, "l": 65, "b": 50},
+            height=380,
+        )
+
+        charts = []
+
+        # Chart 1: Actual vs Predicted Over Time
+        grp = df.groupby("date_time")
+        median_pred = grp["agile_pred"].median().sort_index()
+        p10 = grp["agile_pred"].quantile(0.1).reindex(median_pred.index)
+        p90 = grp["agile_pred"].quantile(0.9).reindex(median_pred.index)
+        actual_ts = actuals_df.sort_values("date_time")
+
+        fig1 = go.Figure()
+        x_rev = list(median_pred.index[::-1])
+        fig1.add_trace(go.Scatter(
+            x=list(median_pred.index) + x_rev,
+            y=list(p90.values) + list(p10.values[::-1]),
+            fill="toself",
+            fillcolor="rgba(255,100,100,0.12)",
+            line={"color": "rgba(0,0,0,0)"},
+            showlegend=True,
+            name="P10–P90 range",
+            hoverinfo="skip",
+        ))
+        fig1.add_trace(go.Scatter(
+            x=median_pred.index,
+            y=median_pred.values,
+            mode="lines",
+            line={"color": "#e05050", "width": 1.5},
+            name="Median prediction",
+            hovertemplate="%{x|%d %b %H:%M}<br>%{y:.1f} p/kWh<extra>Median pred</extra>",
+        ))
+        fig1.add_trace(go.Scatter(
+            x=actual_ts["date_time"],
+            y=actual_ts["agile"].values,
+            mode="lines",
+            line={"color": "#ffc107", "width": 2.5},
+            name="Actual",
+            hovertemplate="%{x|%d %b %H:%M}<br>%{y:.1f} p/kWh<extra>Actual</extra>",
+        ))
+        fig1.update_layout(**_LAYOUT, yaxis={"title": "Agile Price [p/kWh]"})
+        charts.append({
+            "title": "Actual vs Predicted Over Time",
+            "description": (
+                "Actual Agile prices (amber) versus the spread of all forecasts made in the last 30 days. "
+                "Red line is the median forecast; the band shows the P10–P90 range across all forecast runs. "
+                "Narrower bands near recent dates reflect shorter lead times."
+            ),
+            "chart": fig1.to_html(full_html=False, include_plotlyjs=False),
+        })
+
+        # Chart 2: Prediction vs Actual Scatter
+        sample = df.sample(min(len(df), 5000), random_state=42) if len(df) > 5000 else df
+        p_min = float(min(sample["agile"].min(), sample["agile_pred"].min()))
+        p_max = float(max(sample["agile"].max(), sample["agile_pred"].max()))
+
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(
+            x=[p_min, p_max], y=[p_min, p_max],
+            mode="lines",
+            line={"color": "grey", "dash": "dash", "width": 1},
+            showlegend=False,
+            hoverinfo="skip",
+        ))
+        fig2.add_trace(go.Scatter(
+            x=sample["agile"],
+            y=sample["agile_pred"],
+            mode="markers",
+            marker={
+                "size": 3,
+                "opacity": 0.35,
+                "color": sample["dt"],
+                "colorscale": "Viridis",
+                "colorbar": {"title": "Days<br>ahead", "thickness": 12, "len": 0.75},
+            },
+            hovertemplate="Actual: %{x:.1f} p/kWh<br>Predicted: %{y:.1f} p/kWh<br>Lead: %{marker.color:.1f}d<extra></extra>",
+            showlegend=False,
+        ))
+        fig2.update_layout(
+            **_LAYOUT,
+            xaxis={"title": "Actual Agile Price [p/kWh]"},
+            yaxis={"title": "Predicted Agile Price [p/kWh]"},
+        )
+        charts.append({
+            "title": "Prediction vs Actual Scatter",
+            "description": (
+                "Each dot is one half-hour slot. Points on the diagonal indicate a perfect prediction. "
+                "Colour shows forecast lead time — dots from short-lead forecasts should cluster closer to the diagonal."
+            ),
+            "chart": fig2.to_html(full_html=False, include_plotlyjs=False),
+        })
+
+        # Chart 3: Residuals Distribution
+        errors = df["error"].dropna().values
+        fig3 = go.Figure()
+        fig3.add_trace(go.Histogram(
+            x=errors,
+            nbinsx=60,
+            marker_color="#4a90d9",
+            opacity=0.75,
+            name="Count",
+            histnorm="probability density",
+        ))
+        try:
+            kde_fn = gaussian_kde(errors)
+            x_range = np.linspace(float(errors.min()), float(errors.max()), 300)
+            fig3.add_trace(go.Scatter(
+                x=x_range,
+                y=kde_fn(x_range),
+                mode="lines",
+                line={"color": "#ff7f0e", "width": 2},
+                name="KDE",
+            ))
+        except Exception:
+            pass
+        fig3.add_shape(
+            type="line", x0=0, x1=0, y0=0, y1=1, yref="paper",
+            line={"color": "rgba(255,255,255,0.5)", "dash": "dot", "width": 1},
+        )
+        fig3.update_layout(
+            **_LAYOUT,
+            xaxis={"title": "Error: Actual − Predicted [p/kWh]"},
+            yaxis={"title": "Density"},
+            legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1},
+        )
+        charts.append({
+            "title": "Residuals Distribution",
+            "description": (
+                "Distribution of forecast errors. A peak near zero with low spread indicates accurate, unbiased predictions. "
+                "Positive values mean the actual price exceeded the forecast."
+            ),
+            "chart": fig3.to_html(full_html=False, include_plotlyjs=False),
+        })
+
+        # Chart 4: Error by Forecast Horizon
+        df["dt_day"] = df["dt"].apply(int)
+        dt_days = sorted(df["dt_day"].unique())
+        fig4 = go.Figure()
+        for d in dt_days:
+            fig4.add_trace(go.Box(
+                y=df[df["dt_day"] == d]["error"].values,
+                name=f"{d}d",
+                boxmean="sd",
+                marker_color="#4a90d9",
+                line_color="#4a90d9",
+                showlegend=False,
+                hovertemplate=f"Lead: {d}d<br>Error: %{{y:.1f}} p/kWh<extra></extra>",
+            ))
+        fig4.add_shape(
+            type="line", x0=-0.5, x1=len(dt_days) - 0.5, y0=0, y1=0,
+            line={"color": "rgba(255,255,255,0.4)", "dash": "dot", "width": 1},
+        )
+        fig4.update_layout(
+            **_LAYOUT,
+            xaxis={"title": "Forecast lead time"},
+            yaxis={"title": "Error: Actual − Predicted [p/kWh]"},
+        )
+        charts.append({
+            "title": "Forecast Error by Horizon",
+            "description": (
+                "Forecast error distribution grouped by lead time. Boxes show the interquartile range; "
+                "the diamond marks ±1 standard deviation. Wider boxes at longer lead times indicate less certainty further ahead."
+            ),
+            "chart": fig4.to_html(full_html=False, include_plotlyjs=False),
+        })
+
+        return charts
 
 
 class AboutV2View(V2NavMixin, AboutView):
