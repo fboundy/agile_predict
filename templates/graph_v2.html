@@ -1,6 +1,24 @@
 {% extends "base.html" %}
 
 {% block content %}
+<script>
+(function () {
+  var KEY = 'ap_prefs_{{ region }}';
+  var PREF_KEYS = ['days','band','export','gen','af','x2r'];
+  var params = new URLSearchParams(window.location.search);
+  var hasPrefs = PREF_KEYS.some(function(k){ return params.has(k); });
+  if (!hasPrefs) {
+    var saved = localStorage.getItem(KEY);
+    if (saved) {
+      window.location.replace(window.location.pathname + '?' + saved);
+    }
+  } else {
+    var toSave = new URLSearchParams();
+    PREF_KEYS.forEach(function(k){ if (params.has(k)) toSave.set(k, params.get(k)); });
+    if (toSave.toString()) localStorage.setItem(KEY, toSave.toString());
+  }
+})();
+</script>
 <div class="container-lg py-3">
 
   {# ======== Data source status cards ======== #}
@@ -231,9 +249,8 @@
     function badge(p) {
       if (IS_EXPORT) {
         if (p < 0)  return 'danger';
-        if (p < 5)  return 'danger';
-        if (p < 15) return 'warning text-dark';
-        if (p < 25) return 'success';
+        if (p < 15) return 'secondary';
+        if (p < 25) return 'warning text-dark';
         return 'success';
       }
       if (p < 0)  return 'info';

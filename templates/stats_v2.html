@@ -39,9 +39,12 @@
   {% endif %}
 
   {% if diagnostic_charts %}
-  <h6 class="text-body-secondary mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">
-    Diagnostic plots — last 30 days
-  </h6>
+  <div class="d-flex align-items-baseline justify-content-between flex-wrap gap-2 mb-2">
+    <h6 class="text-body-secondary mb-0" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Diagnostic plots — last 30 days</h6>
+    {% if diagnostic_unique_slots %}
+    <span class="text-body-secondary" style="font-size:.75rem">{{ diagnostic_unique_slots }} half-hour slots · {{ diagnostic_date_from }} – {{ diagnostic_date_to }}</span>
+    {% endif %}
+  </div>
   <div class="row g-3">
     {% for plot in diagnostic_charts %}
     <div class="{% if forloop.first %}col-12{% else %}col-md-6{% endif %}">

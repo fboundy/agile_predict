@@ -124,6 +124,19 @@ def _price_badge(p):
     return "danger"
 
 
+def _export_price_badge(p):
+    """Map a p/kWh Agile export price to a Bootstrap badge variant — high prices are good."""
+    if p is None:
+        return "secondary"
+    if p < 0:
+        return "danger"
+    if p < 15:
+        return "secondary"
+    if p < 25:
+        return "warning text-dark"
+    return "success"
+
+
 def _truthy(value):
     return str(value).lower() in {"1", "true", "yes", "on"}
 
@@ -1682,7 +1695,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 best_single_p = float(upcoming_fc[best_single_idx])
                 summary["best_slot_price"] = fmt(best_single_p)
                 summary["best_slot_time"] = best_single_idx.strftime("%H:%M")
-                summary["best_slot_badge"] = "danger" if best_single_p > 35 else "warning text-dark" if best_single_p > 25 else "secondary"
+                summary["best_slot_badge"] = _export_price_badge(best_single_p)
                 summary["best_slot_label"] = "Best export slot (24h)"
             else:
                 cheapest_idx = upcoming_fc.idxmin()
@@ -1706,7 +1719,10 @@ class GraphV2View(V2NavMixin, TemplateView):
                 summary["window_start"] = best_start.strftime("%H:%M")
                 summary["window_end"] = window_close.strftime("%H:%M")
                 summary["window_avg"] = fmt(float(rolling_avg[best_end]))
-                summary["window_badge"] = _price_badge(float(rolling_avg[best_end]) if not raw and not show_export else None)
+                summary["window_badge"] = (
+                    _export_price_badge(float(rolling_avg[best_end])) if show_export
+                    else _price_badge(float(rolling_avg[best_end]) if not raw else None)
+                )
                 summary["window_label"] = "Best 2h export window" if show_export else "Cheapest 2h window"
 
         if not primary_s.empty:
@@ -2554,15 +2570,27 @@ class StatsV2View(V2NavMixin, StatsView):
             return context
 
         if not PriceHistory.objects.exists():
-            v2_extra = {"trend_chart": "", "diagnostic_charts": []}
+            v2_extra = {
+                "trend_chart": "",
+                "diagnostic_charts": [],
+                "diagnostic_sample_count": 0,
+                "diagnostic_unique_slots": 0,
+                "diagnostic_date_from": None,
+                "diagnostic_date_to": None,
+            }
             cache.set(cache_key, v2_extra, timeout=60 * 60 * 24)
             context.update(v2_extra)
             return context
 
         started = time.monotonic()
+        diag = self._build_diagnostic_charts()
         v2_extra = {
             "trend_chart": self._build_trend_chart(),
-            "diagnostic_charts": self._build_diagnostic_charts(),
+            "diagnostic_charts": diag["charts"],
+            "diagnostic_sample_count": diag["sample_count"],
+            "diagnostic_unique_slots": diag["unique_slots"],
+            "diagnostic_date_from": diag["date_from"],
+            "diagnostic_date_to": diag["date_to"],
         }
         cache.set(cache_key, v2_extra, timeout=60 * 60 * 24)
         context.update(v2_extra)
@@ -2620,15 +2648,17 @@ class StatsV2View(V2NavMixin, StatsView):
         import numpy as np
         from scipy.stats import gaussian_kde
 
+        _EMPTY = {"charts": [], "sample_count": 0, "unique_slots": 0, "date_from": None, "date_to": None}
+
         latest = PriceHistory.objects.order_by("-date_time").values_list("date_time", flat=True).first()
         if not latest:
-            return []
+            return _EMPTY
         end_ts = pd.Timestamp(latest)
         start_ts = end_ts - pd.Timedelta("30D")
 
         actuals_rows = list(PriceHistory.objects.filter(date_time__gte=start_ts).values("date_time", "agile"))
         if not actuals_rows:
-            return []
+            return _EMPTY
         actuals_df = pd.DataFrame(actuals_rows)
         actuals_df["date_time"] = pd.to_datetime(actuals_df["date_time"], utc=True)
 
@@ -2639,7 +2669,7 @@ class StatsV2View(V2NavMixin, StatsView):
             .values("date_time", "agile_pred", "forecast__created_at")
         )
         if not preds_rows:
-            return []
+            return _EMPTY
 
         pred_df = pd.DataFrame(preds_rows)
         pred_df.columns = ["date_time", "agile_pred", "forecast_created"]
@@ -2648,13 +2678,18 @@ class StatsV2View(V2NavMixin, StatsView):
 
         df = pred_df.merge(actuals_df, on="date_time", how="inner")
         if df.empty:
-            return []
+            return {"charts": [], "sample_count": 0, "date_from": None, "date_to": None}
 
         df["error"] = df["agile"] - df["agile_pred"]
         df["dt"] = (df["date_time"] - df["forecast_created"]).dt.total_seconds() / 86400
         df = df[(df["dt"] >= 0) & (df["dt"] <= 14)].copy()
         if df.empty:
-            return []
+            return {"charts": [], "sample_count": 0, "date_from": None, "date_to": None}
+
+        sample_count = len(df)
+        unique_slots = df["date_time"].nunique()
+        date_from = df["date_time"].min().strftime("%d %b %Y")
+        date_to = df["date_time"].max().strftime("%d %b %Y")
 
         _LAYOUT = dict(
             template="plotly_dark",
@@ -2827,7 +2862,13 @@ class StatsV2View(V2NavMixin, StatsView):
             "chart": fig4.to_html(full_html=False, include_plotlyjs=False),
         })
 
-        return charts
+        return {
+            "charts": charts,
+            "sample_count": sample_count,
+            "unique_slots": unique_slots,
+            "date_from": date_from,
+            "date_to": date_to,
+        }
 
 
 class AboutV2View(V2NavMixin, AboutView):
