@@ -450,6 +450,7 @@ def get_latest_forecast():
             "date_col": "Datetime_GMT",
             "cols": ["Incentive_forecast"],
             "rename": ["da_wind"],
+            "csv_fallback": "b2f03146-f05d-4824-a663-3a4f36090c71",
         },
         {
             "api_group": "neso_solar",
@@ -461,6 +462,7 @@ def get_latest_forecast():
             "rename": ["solar", "emb_wind"],
             "date_col": "DATE_GMT",
             "time_col": "TIME_GMT",
+            "csv_fallback": "db6c038f-98af-4570-ab60-24d71ebd0ae5",
         },
         {
             "api_group": "neso_demand",
@@ -470,6 +472,7 @@ def get_latest_forecast():
             "date_col": "GDATETIME",
             "tz": "UTC",
             "cols": ["NATIONALDEMAND"],
+            "csv_fallback": "7c0411cd-2714-4bb5-a408-adb065edf34d",
         },
         {
             "api_group": "openmeteo",
@@ -523,6 +526,7 @@ def get_latest_forecast():
         n = len(data)
 
         # If the datastore API returned nothing, try CSV fallback
+        used_csv_fallback = False
         if n == 0 and csv_fallback_id:
             logger.info("API returned no data for %s — trying CSV fallback", label)
             data, e = _neso_csv_fallback(
@@ -533,12 +537,16 @@ def get_latest_forecast():
                 ds_kwargs.get("tz", "UTC"),
             )
             n = len(data)
+            if n > 0:
+                used_csv_fallback = True
 
-        prev = source_details.get(group, {"label": label, "rows": 0, "error": None})
+        prev = source_details.get(group, {"label": label, "rows": 0, "error": None, "fallback": False})
         prev["rows"] += n
         if n > 0:
             downloaded_data += [data]
             source_rows[group] = source_rows.get(group, 0) + n
+            if used_csv_fallback:
+                prev["fallback"] = True
         else:
             download_errors += [e]
             if prev["error"] is None:

@@ -1756,7 +1756,24 @@ class GraphV2View(V2NavMixin, TemplateView):
                 return "unknown"
             return "ok" if rows >= threshold else "fail"
 
-        _neso_health = _bin_health(neso_effective, _NESO_THRESHOLD)
+        def _neso_sub_health(key):
+            """ok / warn (CSV backup used) / fail for a single NESO sub-source."""
+            d = source_details.get(key, {})
+            rows = d.get("rows", -1)
+            if rows < 0:
+                return "unknown"
+            if rows == 0:
+                return "fail"
+            return "warn" if d.get("fallback") else "ok"
+
+        # NESO overall: worst of its three primary sub-sources
+        if _has_neso_sub:
+            _sub_healths = [_neso_sub_health(k) for k in ("neso_wind", "neso_solar", "neso_demand")]
+            _rank = {"fail": 0, "unknown": 1, "warn": 2, "ok": 3}
+            _neso_health = min(_sub_healths, key=lambda h: _rank.get(h, 1))
+        else:
+            _neso_health = _bin_health(neso_effective, _NESO_THRESHOLD)
+
         _bmrs_health = _bin_health(_bmrs_rows, _BMRS_THRESHOLD)
         _om_health = _bin_health(_om_rows, _NESO_THRESHOLD)
 
@@ -1782,12 +1799,14 @@ class GraphV2View(V2NavMixin, TemplateView):
         ):
             _neso_health = "fail"
 
-        # Build detail text: "OK" when healthy; specific failure reason when not
-        def _src_fail_detail(group):
+        # Build detail text
+        def _src_detail(group):
             d = source_details.get(group, {})
             label = d.get("label", group)
             rows = d.get("rows", -1)
             error = d.get("error")
+            if d.get("fallback"):
+                return f"{label}: CSV backup"
             if error and rows == 0:
                 return f"{label}: {error}"
             if rows >= 0:
@@ -1797,21 +1816,21 @@ class GraphV2View(V2NavMixin, TemplateView):
         def _neso_detail():
             if _neso_health == "ok":
                 return "OK"
-            # Find worst primary NESO sub-source (exclude supplementary da_wind)
             primary = {k: v for k, v in source_details.items()
                        if k in ("neso_wind", "neso_solar", "neso_demand")}
             if primary:
-                worst_key = min(primary, key=lambda k: primary[k].get("rows", 0))
-                return _src_fail_detail(worst_key)
-            # Old-format heuristic: fall back to stored forecast_rows
+                # Show the worst sub-source (prefer fallback over fail for clarity)
+                _rank = {"fail": 0, "unknown": 1, "warn": 2, "ok": 3}
+                worst_key = min(primary, key=lambda k: _rank.get(_neso_sub_health(k), 1))
+                return _src_detail(worst_key)
             if _stored_forecast_rows >= 0:
                 return f"forecast: {_stored_forecast_rows} rows"
             return "insufficient data"
 
         api_sources = [
             {"name": "NESO", "health": _neso_health, "detail": _neso_detail()},
-            {"name": "BMRS", "health": _bmrs_health, "detail": "OK" if _bmrs_health == "ok" else _src_fail_detail("bmrs")},
-            {"name": "Open-Meteo", "health": _om_health, "detail": "OK" if _om_health == "ok" else _src_fail_detail("openmeteo")},
+            {"name": "BMRS", "health": _bmrs_health, "detail": "OK" if _bmrs_health == "ok" else _src_detail("bmrs")},
+            {"name": "Open-Meteo", "health": _om_health, "detail": "OK" if _om_health == "ok" else _src_detail("openmeteo")},
             {
                 "name": "Octopus",
                 "health": _octopus_health,

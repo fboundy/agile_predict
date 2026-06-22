@@ -74,7 +74,7 @@
           </div>
           {% for src in api_status.sources %}
           <div class="d-flex align-items-center gap-2 mb-1">
-            <span style="width:8px;height:8px;border-radius:50%;flex-shrink:0;background:{% if src.health == 'ok' %}#28a745{% elif src.health == 'fail' %}#dc3545{% else %}#6c757d{% endif %}"></span>
+            <span style="width:8px;height:8px;border-radius:50%;flex-shrink:0;background:{% if src.health == 'ok' %}#28a745{% elif src.health == 'warn' %}#ffc107{% elif src.health == 'fail' %}#dc3545{% else %}#6c757d{% endif %}"></span>
             <span style="font-size:.78rem;flex:1">{{ src.name }}</span>
             <span class="text-body-secondary" style="font-size:.7rem">{{ src.detail }}</span>
           </div>
