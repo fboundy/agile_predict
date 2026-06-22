@@ -1570,6 +1570,8 @@ class GraphV2View(V2NavMixin, TemplateView):
         show_band = self.request.GET.get("band", "1") != "0"
         show_export = self.request.GET.get("export", "0") == "1" and not raw
         show_gen = self.request.GET.get("gen", "1") == "1"
+        show_af = _truthy(self.request.GET.get("af", "")) and not raw
+        show_x2r = _truthy(self.request.GET.get("x2r", "")) and not raw
         color_fn = _export_price_color if show_export else _price_color
 
         fc_param = self.request.GET.getlist("fc")
@@ -2055,6 +2057,45 @@ class GraphV2View(V2NavMixin, TemplateView):
                 hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} {unit}<extra>{older_label}</extra>",
             ))
 
+        # External forecasts (AgileForecast / X2R)
+        _EXT_COLORS = {"AgileForecast": "#D55E00", "X2R": "#009E73"}
+        _ext_sources = []
+        if show_af:
+            _ext_sources.append(("AgileForecast", fetch_agileforecast))
+        if show_x2r:
+            _ext_sources.append(("X2R", fetch_x2r))
+        for ext_label, ext_fetcher in _ext_sources:
+            try:
+                ext_data = ext_fetcher(region)
+                ext_rows = ext_data.get("rows", [])
+                if not ext_rows:
+                    continue
+                ext_s = pd.Series(
+                    index=pd.to_datetime([r["date_time"] for r in ext_rows]),
+                    data=[float(r["agile_pred"]) for r in ext_rows],
+                ).sort_index()
+                try:
+                    ext_s.index = ext_s.index.tz_convert("GB")
+                except TypeError:
+                    ext_s.index = ext_s.index.tz_localize("GB")
+                ext_s = ext_s[(ext_s.index >= prior_gb) & (ext_s.index <= end_gb)]
+                if show_export:
+                    ext_s = import_agile_to_export_agile(ext_s, region=region)
+                if ext_s.empty:
+                    continue
+                created_at = pd.Timestamp(ext_data["source_created_at"]).tz_convert("GB")
+                ext_color = _EXT_COLORS[ext_label]
+                add_price(go.Scatter(
+                    x=ext_s.index,
+                    y=ext_s.values,
+                    mode="lines",
+                    line=dict(shape="hv", color=ext_color, width=1.5),
+                    name=f"{ext_label} ({created_at.strftime('%d %b %H:%M')})",
+                    hovertemplate=f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>{ext_label}</extra>",
+                ))
+            except Exception as exc:
+                logger.warning("GraphV2: external forecast %s failed: %s", ext_label, exc)
+
         # Now vline — appears across all subplots
         figure.add_vline(
             x=now_gb.timestamp() * 1000,
@@ -2205,6 +2246,8 @@ class GraphV2View(V2NavMixin, TemplateView):
                 "show_band": show_band,
                 "show_export": show_export,
                 "show_gen": show_gen,
+                "show_af": show_af,
+                "show_x2r": show_x2r,
                 "summary": summary,
                 "api_status": api_status,
                 "cheap_windows": cheap_windows,
