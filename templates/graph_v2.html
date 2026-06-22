@@ -8,10 +8,10 @@
   <div class="row g-2 mb-3">
     {% for src in api_status.sources %}
     <div class="col-6 col-sm-3">
-      <div class="card border-0 shadow-sm h-100" style="background:{% if src.health == 'ok' %}#1a4a2c{% elif src.health == 'warn' %}#4a3a00{% elif src.health == 'fail' %}#4a1a22{% else %}#2a2d31{% endif %}">
-        <div class="card-body py-2 px-3">
+      <div class="card border-0 shadow-sm h-100" style="background:{% if src.health == 'ok' %}#1a4a2c{% elif src.health == 'warn' %}#ffc107{% elif src.health == 'fail' %}#4a1a22{% else %}#2a2d31{% endif %}">
+        <div class="card-body py-2 px-3" style="{% if src.health == 'warn' %}color:#111{% endif %}">
           <div class="fw-semibold" style="font-size:.82rem">{{ src.name }}</div>
-          <div class="text-body-secondary" style="font-size:.72rem;margin-top:2px">{{ src.detail }}</div>
+          <div style="font-size:.72rem;margin-top:2px;{% if src.health == 'warn' %}color:#333{% else %}opacity:.65{% endif %}">{{ src.detail }}</div>
         </div>
       </div>
     </div>
@@ -152,20 +152,170 @@
   <div class="mb-1">{{ graph|safe }}</div>
 
   {# ======== Cheap / best windows ======== #}
-  {% if cheap_windows %}
-  <div class="card border-0 shadow-sm" style="background:#2a2d31">
+  {% if not is_raw_day_ahead_region %}
+  <div class="card border-0 shadow-sm" style="background:#2a2d31" id="cw-card">
     <div class="card-body py-2 px-3">
-      <h6 class="card-title mb-2 text-body-secondary" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">
-        {% if summary.is_export %}Best 2h export windows{% else %}Cheapest 2h windows{% endif %}
-      </h6>
-      {% for win in cheap_windows %}
-      <div class="d-flex align-items-center justify-content-between mb-1">
-        <span style="font-size:.82rem">{{ win.label }}</span>
-        <span class="badge bg-{{ win.badge }}" style="min-width:3.2rem;text-align:right">{{ win.avg }}{{ summary.unit }}</span>
+
+      {# Header + sort #}
+      <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
+        <h6 class="card-title mb-0 text-body-secondary" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">
+          {% if summary.is_export %}Best export windows{% else %}Cheapest windows{% endif %}
+        </h6>
+        <div class="btn-group btn-group-sm" role="group" aria-label="Sort">
+          <button type="button" class="btn btn-outline-secondary cw-sort-btn active" data-sort="datetime">Time</button>
+          <button type="button" class="btn btn-outline-secondary cw-sort-btn" data-sort="price">Price</button>
+          <button type="button" class="btn btn-outline-secondary cw-sort-btn" data-sort="duration">Duration</button>
+        </div>
       </div>
-      {% endfor %}
+
+      {# Sliders #}
+      <div class="row g-2 mb-2">
+        <div class="col-12 col-sm-4">
+          <div class="d-flex justify-content-between text-body-secondary mb-1" style="font-size:.72rem">
+            <span>{% if summary.is_export %}Min price{% else %}Max price{% endif %}</span>
+            <span id="cw-threshold-val" class="fw-semibold">—</span>
+          </div>
+          <input type="range" class="form-range" id="cw-threshold"
+                 min="-10" max="50" step="1" value="{% if summary.is_export %}0{% else %}30{% endif %}">
+        </div>
+        <div class="col-12 col-sm-4">
+          <div class="d-flex justify-content-between text-body-secondary mb-1" style="font-size:.72rem">
+            <span>Window</span>
+            <span id="cw-duration-val" class="fw-semibold">—</span>
+          </div>
+          <input type="range" class="form-range" id="cw-duration" min="1" max="12" step="1" value="4">
+        </div>
+        <div class="col-12 col-sm-4">
+          <div class="d-flex justify-content-between text-body-secondary mb-1" style="font-size:.72rem">
+            <span>Search period</span>
+            <span id="cw-period-val" class="fw-semibold">—</span>
+          </div>
+          <input type="range" class="form-range" id="cw-period" min="12" max="96" step="12" value="48">
+        </div>
+      </div>
+
+      <div id="cw-results"></div>
     </div>
   </div>
+
+  <script>
+  (function () {
+    const CW_PRICES  = {{ price_data_json|safe }};
+    const CW_NOW_MS  = {{ now_ms }};
+    const IS_EXPORT  = {% if summary.is_export %}true{% else %}false{% endif %};
+    const UNIT       = "{{ summary.unit }}";
+    let   cwSort     = 'datetime';
+
+    function durLabel(slots) {
+      const m = slots * 30;
+      return (m % 60 === 0) ? (m / 60) + 'h' : (m / 60).toFixed(1) + 'h';
+    }
+
+    function badge(p) {
+      if (IS_EXPORT) {
+        if (p < 0)  return 'danger';
+        if (p < 5)  return 'danger';
+        if (p < 15) return 'warning text-dark';
+        if (p < 25) return 'success';
+        return 'success';
+      }
+      if (p < 0)  return 'info';
+      if (p < 15) return 'success';
+      if (p < 25) return 'warning text-dark';
+      return 'danger';
+    }
+
+    function render() {
+      const threshold   = +document.getElementById('cw-threshold').value;
+      const windowSlots = +document.getElementById('cw-duration').value;
+      const searchHours = +document.getElementById('cw-period').value;
+      const searchMs    = searchHours * 3600000;
+
+      document.getElementById('cw-threshold-val').textContent = threshold + ' ' + UNIT;
+      document.getElementById('cw-duration-val').textContent  = durLabel(windowSlots);
+      document.getElementById('cw-period-val').textContent    = searchHours + 'h';
+
+      const future = CW_PRICES.filter(([ts]) => ts > CW_NOW_MS && ts <= CW_NOW_MS + searchMs);
+      const n = future.length;
+      const el = document.getElementById('cw-results');
+
+      if (n < windowSlots) {
+        el.innerHTML = '<div class="text-body-secondary" style="font-size:.8rem">Not enough data in range</div>';
+        return;
+      }
+
+      // Build candidates (rolling window averages that pass the threshold filter)
+      const candidates = [];
+      for (let i = 0; i <= n - windowSlots; i++) {
+        let sum = 0;
+        for (let j = i; j < i + windowSlots; j++) sum += future[j][1];
+        const avg = sum / windowSlots;
+        if (!IS_EXPORT && avg > threshold) continue;
+        if ( IS_EXPORT && avg < threshold) continue;
+        candidates.push({ i, avg, startMs: future[i][0], endMs: future[i + windowSlots - 1][0] + 1800000, slots: windowSlots });
+      }
+
+      // Greedy non-overlapping selection ordered by best avg price
+      const greedy = [...candidates].sort((a, b) => IS_EXPORT ? b.avg - a.avg : a.avg - b.avg);
+      const used = new Set();
+      const results = [];
+      for (const c of greedy) {
+        if (results.length >= 5) break;
+        let overlap = false;
+        for (let j = c.i; j < c.i + c.slots; j++) { if (used.has(j)) { overlap = true; break; } }
+        if (overlap) continue;
+        for (let j = c.i; j < c.i + c.slots; j++) used.add(j);
+        results.push(c);
+      }
+
+      // Final display sort
+      if      (cwSort === 'datetime')  results.sort((a, b) => a.startMs - b.startMs);
+      else if (cwSort === 'price')     results.sort((a, b) => IS_EXPORT ? b.avg - a.avg : a.avg - b.avg);
+      else if (cwSort === 'duration')  results.sort((a, b) => b.slots - a.slots);
+
+      if (!results.length) {
+        el.innerHTML = '<div class="text-body-secondary" style="font-size:.8rem">No windows match — try raising the threshold</div>';
+        return;
+      }
+
+      const d0 = new Date(CW_NOW_MS);
+      const todayMs = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate()).getTime();
+      const fmt     = ms => new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+      const fmtDt   = ms => {
+        const d    = new Date(ms);
+        const dayMs = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+        const pfx  = dayMs === todayMs ? 'Today' : dayMs === todayMs + 86400000 ? 'Tomorrow'
+                     : d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+        return pfx + ' ' + fmt(ms);
+      };
+
+      el.innerHTML = results.map(r =>
+        `<div class="d-flex align-items-center justify-content-between mb-1">
+          <span style="font-size:.82rem">${fmtDt(r.startMs)}–${fmt(r.endMs)}
+            <span class="text-body-secondary" style="font-size:.72rem">(${durLabel(r.slots)})</span></span>
+          <span class="badge bg-${badge(r.avg)}" style="min-width:3.5rem;text-align:right">${r.avg.toFixed(1)}${UNIT}</span>
+        </div>`
+      ).join('');
+    }
+
+    // Sort buttons
+    document.querySelectorAll('.cw-sort-btn').forEach(btn => {
+      btn.addEventListener('click', function () {
+        cwSort = this.dataset.sort;
+        document.querySelectorAll('.cw-sort-btn').forEach(b => b.classList.remove('active'));
+        this.classList.add('active');
+        render();
+      });
+    });
+
+    // Sliders
+    ['cw-threshold', 'cw-duration', 'cw-period'].forEach(id =>
+      document.getElementById(id).addEventListener('input', render)
+    );
+
+    render();
+  })();
+  </script>
   {% endif %}
 
 </div>

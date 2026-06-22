@@ -1,5 +1,6 @@
 from hmac import compare_digest
 from datetime import datetime, time as datetime_time, timedelta
+import json
 import logging
 from pathlib import Path
 import time
@@ -1920,28 +1921,47 @@ class GraphV2View(V2NavMixin, TemplateView):
                         used_positions.add(s)
                 cheap_windows = sorted(found, key=lambda w: w["start"])
 
+        # --- Colour strip: prefer confirmed actual, else forecast ---
+        _strip_parts = [s for s in [primary_s, actual] if not s.empty]
+        if _strip_parts:
+            strip_s = pd.concat(_strip_parts).sort_index()
+            strip_s = strip_s[~strip_s.index.duplicated(keep="last")]
+        else:
+            strip_s = pd.Series(dtype=float)
+        strip_colors = [color_fn(float(p) if not raw else None) for p in strip_s.values]
+
         # --- Build chart ---
+        _STRIP_ROW = 2
         if show_gen:
             figure = make_subplots(
-                rows=2,
+                rows=3,
                 cols=1,
-                subplot_titles=("", "Generation & Demand"),
+                subplot_titles=("", "", "Generation & Demand"),
                 shared_xaxes=True,
-                vertical_spacing=0.08,
-                row_heights=[0.6, 0.4],
+                vertical_spacing=0.04,
+                row_heights=[0.55, 0.04, 0.41],
             )
 
             def add_price(trace):
                 figure.add_trace(trace, row=1, col=1)
 
             def add_gen(trace):
-                figure.add_trace(trace, row=2, col=1)
+                figure.add_trace(trace, row=3, col=1)
 
-            chart_height = 620
+            chart_height = 660
         else:
-            figure = go.Figure()
-            add_price = figure.add_trace
-            chart_height = 420
+            figure = make_subplots(
+                rows=2,
+                cols=1,
+                shared_xaxes=True,
+                vertical_spacing=0,
+                row_heights=[0.94, 0.06],
+            )
+
+            def add_price(trace):
+                figure.add_trace(trace, row=1, col=1)
+
+            chart_height = 440
 
         # Uncertainty band — shaded fill drawn first so lines sit on top
         if show_band and not low_s.empty and not high_s.empty and not primary_s.empty:
@@ -2097,7 +2117,27 @@ class GraphV2View(V2NavMixin, TemplateView):
                     y=[(r.demand + r.solar + (r.total_wind - r.bm_wind)) / 1000 for r in h_rows],
                     line={"color": "#aaaa77", "width": 2}, name="Historic demand",
                 ))
-            figure.update_yaxes(title_text="Power [GW]", row=2, col=1)
+            figure.update_yaxes(title_text="Power [GW]", row=3, col=1)
+
+        # Colour strip at bottom of price chart
+        if not strip_s.empty:
+            figure.add_trace(
+                go.Bar(
+                    x=strip_s.index,
+                    y=[1] * len(strip_s),
+                    marker_color=strip_colors,
+                    marker_line_width=0,
+                    marker_line_color="rgba(0,0,0,0)",
+                    width=int(30 * 60 * 1000),
+                    offset=0,
+                    showlegend=False,
+                    hoverinfo="skip",
+                ),
+                row=_STRIP_ROW,
+                col=1,
+            )
+        figure.update_yaxes(visible=False, fixedrange=True, row=_STRIP_ROW, col=1)
+        figure.update_xaxes(showgrid=False, row=_STRIP_ROW, col=1)
 
         # Layout
         common_layout = dict(
@@ -2115,7 +2155,7 @@ class GraphV2View(V2NavMixin, TemplateView):
             hovermode="x unified",
             plot_bgcolor="#212529",
             paper_bgcolor="#1a1d21",
-            bargap=0.02,
+            bargap=0,
         )
         if show_gen:
             figure.update_layout(**common_layout)
@@ -2168,6 +2208,11 @@ class GraphV2View(V2NavMixin, TemplateView):
                 "summary": summary,
                 "api_status": api_status,
                 "cheap_windows": cheap_windows,
+                "price_data_json": json.dumps(
+                    [[int(ts.timestamp() * 1000), round(float(p), 4)]
+                     for ts, p in strip_s.items() if pd.notna(p)]
+                ) if not raw else "[]",
+                "now_ms": int(now_gb.timestamp() * 1000),
                 "day_options": self._DAY_OPTIONS,
                 "forecast_list": forecast_list,
                 "selected_ids": selected_ids,
