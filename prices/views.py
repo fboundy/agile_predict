@@ -1943,77 +1943,57 @@ class GraphV2View(V2NavMixin, TemplateView):
             add_price = figure.add_trace
             chart_height = 420
 
-        # Prepare error-bar arrays for uncertainty band (drawn on forecast bars)
-        # This is the correct idiom for showing uncertainty on bar charts — whiskers extend
-        # visibly above and below each bar regardless of bar colour.
-        upper_err = lower_err = None
+        # Uncertainty band — shaded fill drawn first so lines sit on top
         if show_band and not low_s.empty and not high_s.empty and not primary_s.empty:
             aligned_lo = low_s.reindex(primary_s.index)
             aligned_hi = high_s.reindex(primary_s.index)
-            upper_err = [
-                max(0.0, float(h) - float(p)) if pd.notna(h) and pd.notna(p) else 0.0
-                for h, p in zip(aligned_hi.values, primary_s.values)
-            ]
-            lower_err = [
-                max(0.0, float(p) - float(l)) if pd.notna(l) and pd.notna(p) else 0.0
-                for l, p in zip(aligned_lo.values, primary_s.values)
-            ]
+            add_price(go.Scatter(
+                x=list(primary_s.index),
+                y=aligned_lo.values,
+                mode="lines",
+                line=dict(width=0),
+                showlegend=False,
+                hoverinfo="skip",
+            ))
+            add_price(go.Scatter(
+                x=list(primary_s.index),
+                y=aligned_hi.values,
+                mode="lines",
+                line=dict(width=0),
+                fill="tonexty",
+                fillcolor="rgba(74,158,255,0.15)",
+                name="p10–p90",
+                hoverinfo="skip",
+            ))
 
-        # Confirmed actuals — two-layer: light colour bars for level context + white step-line
-        # for unmistakable "this is real confirmed data" signal vs forecast bars.
+        # Confirmed actuals — solid step line
         if not actual.empty:
-            add_price(
-                go.Bar(
-                    x=actual.index,
-                    y=actual.values,
-                    marker_color=[color_fn(p if not raw else None) for p in actual.values],
-                    marker_opacity=1.0,
-                    marker_line_width=0,
-                    showlegend=False,
-                    hovertemplate=f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>Confirmed</extra>",
-                    width=self._BAR_WIDTH_MS,
-                )
-            )
-            add_price(
-                go.Scatter(
-                    x=actual.index,
-                    y=actual.values,
-                    mode="lines",
-                    line=dict(shape="hv", color="rgba(255,255,255,0.85)", width=2.0),
-                    name="Confirmed Octopus price",
-                    hovertemplate=f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>Confirmed</extra>",
-                )
-            )
+            add_price(go.Scatter(
+                x=actual.index,
+                y=actual.values,
+                mode="lines",
+                line=dict(shape="hv", color="rgba(255,255,255,0.9)", width=2.0),
+                name="Confirmed",
+                hovertemplate=f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>Confirmed</extra>",
+            ))
 
-        # Primary forecast bars — full opacity; error bars carry the uncertainty band
+        # Primary forecast line
         if not primary_s.empty:
             latest_label = (
                 f"Forecast ({pd.Timestamp(latest.created_at).tz_convert('GB').strftime('%d %b %H:%M')})"
                 if latest
                 else "Forecast"
             )
-            bar_kw = dict(
+            add_price(go.Scatter(
                 x=primary_s.index,
                 y=primary_s.values,
-                marker_color=[color_fn(p if not raw else None) for p in primary_s.values],
-                marker_opacity=1.0,
+                mode="lines",
+                line=dict(shape="hv", color="#4a9eff", width=2.0),
                 name=latest_label,
                 hovertemplate=f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>Forecast</extra>",
-                width=self._BAR_WIDTH_MS,
-            )
-            if upper_err is not None:
-                bar_kw["error_y"] = dict(
-                    type="data",
-                    symmetric=False,
-                    array=upper_err,
-                    arrayminus=lower_err,
-                    color="rgba(255,255,255,0.55)",
-                    thickness=1.5,
-                    width=0,
-                )
-            add_price(go.Bar(**bar_kw))
+            ))
 
-        # Older selected forecasts — dotted line traces
+        # Older selected forecasts — solid lines
         older = [f for f in forecasts_to_plot if latest is None or f.id != latest.id]
         for i, fc_obj in enumerate(older[:3]):
             if raw:
@@ -2046,16 +2026,14 @@ class GraphV2View(V2NavMixin, TemplateView):
                 if show_export:
                     s = import_agile_to_export_agile(s, region=region)
             older_label = pd.Timestamp(fc_obj.created_at).tz_convert("GB").strftime("%d %b %H:%M")
-            add_price(
-                go.Scatter(
-                    x=s.index,
-                    y=s.values,
-                    mode="lines",
-                    line=dict(color=self._OLDER_COLORS[i % len(self._OLDER_COLORS)], width=1.5, dash="dot"),
-                    name=f"Forecast ({older_label})",
-                    hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} {unit}<extra>{older_label}</extra>",
-                )
-            )
+            add_price(go.Scatter(
+                x=s.index,
+                y=s.values,
+                mode="lines",
+                line=dict(shape="hv", color=self._OLDER_COLORS[i % len(self._OLDER_COLORS)], width=1.5),
+                name=f"Forecast ({older_label})",
+                hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} {unit}<extra>{older_label}</extra>",
+            ))
 
         # Now vline — appears across all subplots
         figure.add_vline(
@@ -2123,7 +2101,6 @@ class GraphV2View(V2NavMixin, TemplateView):
 
         # Layout
         common_layout = dict(
-            barmode="overlay",
             margin=dict(r=10, t=15, l=60, b=10),
             legend=dict(
                 orientation="h",

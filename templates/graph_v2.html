@@ -151,30 +151,6 @@
   {# ======== Chart ======== #}
   <div class="mb-1">{{ graph|safe }}</div>
 
-  {# Colour legend (below chart, compact single line) #}
-  {% if not is_raw_day_ahead_region %}
-  <div class="d-flex flex-wrap gap-1 align-items-center mb-3" style="font-size:.7rem">
-    {% if show_export %}
-    <span class="text-body-secondary me-1">Export price:</span>
-    <span class="badge bg-danger">&lt;0p (cost)</span>
-    <span class="badge" style="background:#fd7e14">0–5p</span>
-    <span class="badge bg-warning text-dark">5–15p</span>
-    <span class="badge" style="background:#20c997;color:#000">15–25p</span>
-    <span class="badge bg-success">25–35p</span>
-    <span class="badge" style="background:#6f42c1">&gt;35p (best)</span>
-    {% else %}
-    <span class="text-body-secondary me-1">Import price:</span>
-    <span class="badge" style="background:#6f42c1">&lt;0p Plunge</span>
-    <span class="badge bg-success">0–5p</span>
-    <span class="badge" style="background:#20c997;color:#000">5–15p</span>
-    <span class="badge bg-warning text-dark">15–25p</span>
-    <span class="badge" style="background:#fd7e14">25–35p</span>
-    <span class="badge bg-danger">&gt;35p</span>
-    {% endif %}
-    {% if show_band %}<span class="text-body-secondary ms-3">Whiskers = p10/p90 uncertainty band</span>{% endif %}
-  </div>
-  {% endif %}
-
   {# ======== Cheap / best windows ======== #}
   {% if cheap_windows %}
   <div class="card border-0 shadow-sm" style="background:#2a2d31">
