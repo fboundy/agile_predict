@@ -1,5 +1,4 @@
 {% extends "base.html" %}
-{% load static %}
 
 {% block content %}
 <div class="container-lg py-3">
@@ -8,9 +7,6 @@
     <h5 class="mb-0">Model stats</h5>
     <div class="text-body-secondary" style="font-size:.8rem">Training accuracy and diagnostic plots</div>
   </div>
-
-  {# Load Plotly once for all inline charts on this page #}
-  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 
   {% if trend_chart %}
   <div class="card border-0 shadow-sm mb-3" style="background:#2a2d31">

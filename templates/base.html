@@ -147,28 +147,6 @@
             </div>
         </footer>
 
-        <script>
-            document.addEventListener("DOMContentLoaded", (event) => {
-                const toggleButton = document.getElementById("colorModeToggle");
-                const bodyElement = document.body;
-
-                // Check localStorage for saved color mode
-                const savedColorMode = localStorage.getItem("colorMode");
-                if (savedColorMode) {
-                    bodyElement.setAttribute("data-bs-theme", savedColorMode);
-                }
-
-                toggleButton.addEventListener("click", () => {
-                    const currentTheme = bodyElement.getAttribute("data-bs-theme");
-                    const newTheme = currentTheme === "light" ? "dark" : "light";
-                    bodyElement.setAttribute("data-bs-theme", newTheme);
-
-                    // Save the current mode in localStorage
-                    localStorage.setItem("colorMode", newTheme);
-                });
-            });
-        </script>
-
         <script
             src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
             integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"

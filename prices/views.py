@@ -2607,7 +2607,7 @@ class StatsV2View(V2NavMixin, StatsView):
             yaxis={"title": "RMSE [p/kWh]", "rangemode": "tozero"},
             legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1},
         )
-        return fig.to_html(full_html=False, include_plotlyjs=False)
+        return fig.to_html(full_html=False, include_plotlyjs="cdn")
 
     @staticmethod
     def _build_diagnostic_charts():
