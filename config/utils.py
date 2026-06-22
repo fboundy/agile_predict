@@ -377,6 +377,54 @@ def get_latest_history(start):
         return hist.astype(float).dropna(), missing_cols
 
 
+def _neso_csv_fallback(resource_id, date_col, cols, rename, tz="UTC"):
+    """
+    When the NESO CKAN datastore API returns empty, fetch the resource's CSV file
+    directly. Uses resource_show to get the canonical download URL so we don't
+    hard-code a path that can change.
+    """
+    from io import StringIO
+
+    try:
+        meta = requests.get(
+            "https://api.neso.energy/api/3/action/resource_show",
+            params={"id": resource_id},
+            timeout=30,
+        )
+        meta.raise_for_status()
+        csv_url = meta.json()["result"]["url"]
+    except Exception as exc:
+        logger.warning("NESO CSV fallback: resource_show failed id=%s error=%s", resource_id, exc)
+        return pd.DataFrame(), str(exc)[:80]
+
+    try:
+        r = requests.get(csv_url, timeout=120)
+        r.raise_for_status()
+        df = pd.read_csv(StringIO(r.text))
+    except Exception as exc:
+        logger.warning("NESO CSV fallback: download failed url=%s error=%s", csv_url, exc)
+        return pd.DataFrame(), str(exc)[:80]
+
+    try:
+        df.index = pd.to_datetime(df[date_col])
+        if df.index.tzinfo is None:
+            df.index = df.index.tz_localize(tz, ambiguous="infer")
+        # Drop historical data we don't need — keep last 1 day + all future
+        cutoff = pd.Timestamp.now(tz=tz) - pd.Timedelta("1D")
+        df = df[df.index >= cutoff]
+        if cols:
+            df = df[cols]
+        if rename:
+            df = df.set_axis(rename, axis=1)
+        df = df.sort_index()
+        df = df[~df.index.duplicated()]
+        logger.info("NESO CSV fallback succeeded id=%s rows=%s", resource_id, len(df))
+        return df, None
+    except Exception as exc:
+        logger.warning("NESO CSV fallback: parse failed id=%s error=%s", resource_id, exc)
+        return pd.DataFrame(), str(exc)[:80]
+
+
 def get_latest_forecast():
     ndf_from = pd.Timestamp.now().normalize().strftime("%Y-%m-%d")
     ndf_to = (pd.Timestamp.now().normalize() + pd.Timedelta("24h")).strftime("%Y-%m-%d")
@@ -391,6 +439,7 @@ def get_latest_forecast():
             "date_col": "Datetime",
             "cols": ["Wind_Forecast"],
             "rename": ["bm_wind"],
+            "csv_fallback": "93c3048e-1dab-4057-a2a9-417540583929",
         },
         {
             "api_group": "neso_da_wind",
@@ -468,9 +517,23 @@ def get_latest_forecast():
     for x in forecast_data:
         group = x.get("api_group", "other")
         label = x.get("label", group)
-        ds_kwargs = {k: v for k, v in x.items() if k not in ("api_group", "label")}
+        csv_fallback_id = x.get("csv_fallback")
+        ds_kwargs = {k: v for k, v in x.items() if k not in ("api_group", "label", "csv_fallback")}
         data, e = DataSet(**ds_kwargs).download()
         n = len(data)
+
+        # If the datastore API returned nothing, try CSV fallback
+        if n == 0 and csv_fallback_id:
+            logger.info("API returned no data for %s — trying CSV fallback", label)
+            data, e = _neso_csv_fallback(
+                csv_fallback_id,
+                ds_kwargs.get("date_col"),
+                ds_kwargs.get("cols"),
+                ds_kwargs.get("rename"),
+                ds_kwargs.get("tz", "UTC"),
+            )
+            n = len(data)
+
         prev = source_details.get(group, {"label": label, "rows": 0, "error": None})
         prev["rows"] += n
         if n > 0:
