@@ -58,6 +58,7 @@
             <span class="display-6 fw-bold lh-1 badge bg-{{ summary.current_badge }}" style="font-size:1.7rem">{{ summary.current_price }}</span>
             <span class="text-body-secondary">{{ summary.unit }}</span>
           </div>
+          {% if not is_raw_day_ahead_region %}<div id="neg-price-alert" class="mt-1"></div>{% endif %}
         </div>
       </div>
     </div>
@@ -98,6 +99,8 @@
   </div>
 
   {# ======== Controls (above chart) ======== #}
+
+  {# Primary row: region + day range always visible; Filters button mobile-only #}
   <div class="rounded p-2 mb-2 d-flex flex-wrap align-items-center gap-2" style="background:#2a2d31">
 
     {# Region dropdown — JS preserves current query string on navigate #}
@@ -120,39 +123,51 @@
       {% endfor %}
     </div>
 
-    <div class="vr d-none d-sm-block" style="opacity:.3"></div>
+    {# Filters toggle — only visible on mobile (hidden on lg+) #}
+    <button class="btn btn-sm btn-outline-secondary ms-auto d-lg-none" type="button"
+            data-bs-toggle="collapse" data-bs-target="#v2-filters" aria-expanded="false"
+            aria-controls="v2-filters">
+      Filters &#9660;
+    </button>
 
-    {# Toggles #}
-    {% if not is_raw_day_ahead_region %}
-    <a href="?days={{ days }}&band={% if show_band %}0{% else %}1{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
-       class="btn btn-sm {% if show_band %}btn-outline-info active{% else %}btn-outline-secondary{% endif %}">
-      Uncertainty band
-    </a>
-    <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}&export={% if show_export %}0{% else %}1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
-       class="btn btn-sm {% if show_export %}btn-outline-warning active{% else %}btn-outline-secondary{% endif %}">
-      Export prices
-    </a>
-    {% endif %}
-    <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}&gen={% if show_gen %}0{% else %}1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
-       class="btn btn-sm {% if show_gen %}btn-outline-success active{% else %}btn-outline-secondary{% endif %}">
-      Gen &amp; demand
-    </a>
+  </div>
 
-    {# External forecast overlays #}
-    {% if not is_raw_day_ahead_region %}
-    <div class="vr d-none d-sm-block" style="opacity:.3"></div>
-    <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}&af={% if show_af %}0{% else %}1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
-       class="btn btn-sm"
-       style="border-color:#D55E00;{% if show_af %}background:#D55E00;color:#fff{% else %}color:#D55E00{% endif %}">
-      AgileForecast
-    </a>
-    <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_af %}&af=1{% endif %}&x2r={% if show_x2r %}0{% else %}1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
-       class="btn btn-sm"
-       style="border-color:#009E73;{% if show_x2r %}background:#009E73;color:#fff{% else %}color:#009E73{% endif %}">
-      X2R
-    </a>
-    {% endif %}
+  {# Secondary row: toggles — always visible lg+, collapsible on mobile #}
+  <div class="collapse d-lg-block mb-2" id="v2-filters">
+    <div class="rounded p-2 d-flex flex-wrap align-items-center gap-2" style="background:#2a2d31">
 
+      {# Toggles #}
+      {% if not is_raw_day_ahead_region %}
+      <a href="?days={{ days }}&band={% if show_band %}0{% else %}1{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+         class="btn btn-sm {% if show_band %}btn-outline-info active{% else %}btn-outline-secondary{% endif %}">
+        Uncertainty band
+      </a>
+      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}&export={% if show_export %}0{% else %}1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+         class="btn btn-sm {% if show_export %}btn-outline-warning active{% else %}btn-outline-secondary{% endif %}">
+        Export prices
+      </a>
+      {% endif %}
+      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}&gen={% if show_gen %}0{% else %}1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+         class="btn btn-sm {% if show_gen %}btn-outline-success active{% else %}btn-outline-secondary{% endif %}">
+        Gen &amp; demand
+      </a>
+
+      {# External forecast overlays #}
+      {% if not is_raw_day_ahead_region %}
+      <div class="vr d-none d-sm-block" style="opacity:.3"></div>
+      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}&af={% if show_af %}0{% else %}1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+         class="btn btn-sm"
+         style="border-color:#D55E00;{% if show_af %}background:#D55E00;color:#fff{% else %}color:#D55E00{% endif %}">
+        AgileForecast
+      </a>
+      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_af %}&af=1{% endif %}&x2r={% if show_x2r %}0{% else %}1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+         class="btn btn-sm"
+         style="border-color:#009E73;{% if show_x2r %}background:#009E73;color:#fff{% else %}color:#009E73{% endif %}">
+        X2R
+      </a>
+      {% endif %}
+
+    </div>
   </div>
 
   {# Forecast selector (collapsible, above chart) #}
@@ -348,9 +363,27 @@
     );
 
     render();
+
+    // Negative-price alert for next 24h
+    var neg24 = CW_PRICES.filter(function(ts_p) { return ts_p[0] > CW_NOW_MS && ts_p[0] <= CW_NOW_MS + 86400000 && ts_p[1] < 0; });
+    if (neg24.length > 0) {
+      var alertEl = document.getElementById('neg-price-alert');
+      if (alertEl) {
+        alertEl.innerHTML = '<span class="badge" style="background:#6f42c1;font-size:.7rem">&#9889; ' + neg24.length + ' negative slot' + (neg24.length !== 1 ? 's' : '') + ' in next 24h</span>';
+      }
+    }
   })();
   </script>
   {% endif %}
+
+  {# Auto-refresh at the next half-hour boundary #}
+  <script>
+  (function () {
+    var now = Date.now();
+    var msUntilNext = 1800000 - (now % 1800000) + 5000;
+    setTimeout(function () { location.reload(); }, msUntilNext);
+  })();
+  </script>
 
 </div>
 {% endblock content %}

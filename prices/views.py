@@ -2026,13 +2026,28 @@ class GraphV2View(V2NavMixin, TemplateView):
                 if latest
                 else "Forecast"
             )
+            if not low_s.empty and not high_s.empty:
+                _lo = low_s.reindex(primary_s.index).ffill().bfill().fillna(0)
+                _hi = high_s.reindex(primary_s.index).ffill().bfill().fillna(0)
+                fc_cd = [[float(lo), float(hi)] for lo, hi in zip(_lo.values, _hi.values)]
+                fc_hover = (
+                    f"%{{x|%d %b %H:%M}}<br>"
+                    f"<b>%{{y:.2f}} {unit}</b><br>"
+                    f"<span style='opacity:.65;font-size:.85em'>"
+                    f"p10: %{{customdata[0]:.2f}} · p90: %{{customdata[1]:.2f}} {unit}"
+                    f"</span><extra>Forecast</extra>"
+                )
+            else:
+                fc_cd = None
+                fc_hover = f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>Forecast</extra>"
             add_price(go.Scatter(
                 x=primary_s.index,
                 y=primary_s.values,
                 mode="lines",
                 line=dict(shape="hv", color="#4a9eff", width=2.0),
                 name=latest_label,
-                hovertemplate=f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>Forecast</extra>",
+                customdata=fc_cd,
+                hovertemplate=fc_hover,
             ))
 
         # Older selected forecasts — solid lines
