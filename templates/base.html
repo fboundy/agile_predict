@@ -43,11 +43,11 @@
                         <div class="collapse navbar-collapse" id="navbarSupportedContent">
                             <ul class="navbar-nav me-auto mb-2 mb-lg-0">
                                 <li class="nav-item">
-                                    <a class="nav-link active" aria-current="page" href="{{ home_link|default:'/v2/X/' }}">Home</a>
+                                    <a class="nav-link{% if current_page == 'home' %} active{% endif %}"{% if current_page == 'home' %} aria-current="page"{% endif %} href="{{ home_link|default:'/v2/X/' }}">Home</a>
                                 </li>
                                 <li class="nav-item dropdown">
                                     <a
-                                        class="nav-link dropdown-toggle"
+                                        class="nav-link dropdown-toggle{% if current_page == 'home' %} active{% endif %}"
                                         href="#"
                                         id="navbarDropdown"
                                         role="button"
@@ -69,16 +69,16 @@
                                     </ul>
                                 </li>
                                 <li class="nav-item">
-                                    <a class="nav-link" href="{{ api_link|default:'/v2/api_how_to/' }}">API and Home Assistant</a>
+                                    <a class="nav-link{% if current_page == 'api' %} active{% endif %}"{% if current_page == 'api' %} aria-current="page"{% endif %} href="{{ api_link|default:'/v2/api_how_to/' }}">API and Home Assistant</a>
                                 </li>
                                 <li class="nav-item">
-                                    <a class="nav-link" href="{{ stats_link|default:'/v2/stats/' }}">Stats</a>
+                                    <a class="nav-link{% if current_page == 'stats' %} active{% endif %}"{% if current_page == 'stats' %} aria-current="page"{% endif %} href="{{ stats_link|default:'/v2/stats/' }}">Stats</a>
                                 </li>
                                 <li class="nav-item">
-                                    <a class="nav-link" href="{{ history_link|default:'/v2/history/' }}">History</a>
+                                    <a class="nav-link{% if current_page == 'history' %} active{% endif %}"{% if current_page == 'history' %} aria-current="page"{% endif %} href="{{ history_link|default:'/v2/history/' }}">History</a>
                                 </li>
                                 <li class="nav-item">
-                                    <a class="nav-link" href="{{ about_link|default:'/v2/about/' }}">About</a>
+                                    <a class="nav-link{% if current_page == 'about' %} active{% endif %}"{% if current_page == 'about' %} aria-current="page"{% endif %} href="{{ about_link|default:'/v2/about/' }}">About</a>
                                 </li>
                                 {% if request.user.is_staff %}
                                 <li class="nav-item">

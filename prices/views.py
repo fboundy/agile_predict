@@ -1520,6 +1520,8 @@ class GraphFormView(FormView):
 class V2NavMixin:
     """Injects v2 navigation context so all base.html navbar links stay within /v2/."""
 
+    _nav_page = ""
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context.update(
@@ -1532,6 +1534,7 @@ class V2NavMixin:
                 "home_link": "/v2/X/",
                 "is_v2": True,
                 "classic_url": "/",
+                "current_page": self._nav_page,
             }
         )
         return context
@@ -1552,6 +1555,7 @@ class GraphV2View(V2NavMixin, TemplateView):
     """Colour-coded bar chart UI — alternative to the accordion-sidebar GraphFormView."""
 
     template_name = "graph_v2.html"
+    _nav_page = "home"
 
     _DAY_OPTIONS = [2, 3, 5, 7, 14]
     _BAR_WIDTH_MS = int(30 * 60 * 1000 * 0.92)
@@ -2273,6 +2277,7 @@ class HistoryV2View(V2NavMixin, HistoryView):
     """v2-styled history / accuracy view — always uses region X (national average)."""
 
     template_name = "history_v2.html"
+    _nav_page = "history"
 
     def get_kwargs(self):
         # Force region to X regardless of URL kwarg — no region selector in v2 history.
@@ -2525,6 +2530,7 @@ class HistoryV2View(V2NavMixin, HistoryView):
 
 class StatsV2View(V2NavMixin, StatsView):
     template_name = "stats_v2.html"
+    _nav_page = "stats"
 
     @staticmethod
     def _extra_cache_key():
@@ -2826,6 +2832,7 @@ class StatsV2View(V2NavMixin, StatsView):
 
 class AboutV2View(V2NavMixin, AboutView):
     template_name = "about_v2.html"
+    _nav_page = "about"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -2835,6 +2842,7 @@ class AboutV2View(V2NavMixin, AboutView):
 
 class ApiHowToV2View(V2NavMixin, ApiHowToView):
     template_name = "api_how_to_v2.html"
+    _nav_page = "api"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
