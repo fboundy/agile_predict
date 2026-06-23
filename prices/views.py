@@ -1535,6 +1535,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         show_band = self.request.GET.get("band", "1") != "0"
         show_export = self.request.GET.get("export", "0") == "1" and not raw
         show_gen = self.request.GET.get("gen", "1") == "1"
+        show_fc_gen = show_gen and self.request.GET.get("fg", "0") == "1"
         show_af = _truthy(self.request.GET.get("af", "")) and not raw
         show_x2r = _truthy(self.request.GET.get("x2r", "")) and not raw
         color_fn = _export_price_color if show_export else _price_color
@@ -2141,6 +2142,35 @@ class GraphV2View(V2NavMixin, TemplateView):
                     y=[(r.demand + r.solar + (r.total_wind - r.bm_wind)) / 1000 for r in h_rows],
                     line={"color": "#aaaa77", "width": 2}, name="Historic demand",
                 ))
+            if show_fc_gen and older:
+                for i, fc_obj in enumerate(older[:3]):
+                    fc_gen_rows = list(
+                        ForecastData.objects.filter(
+                            forecast=fc_obj,
+                            date_time__gte=prior_gb.tz_convert("UTC"),
+                            date_time__lte=end_gb.tz_convert("UTC"),
+                        ).order_by("date_time")
+                    )
+                    if not fc_gen_rows:
+                        continue
+                    color = self._OLDER_COLORS[i % len(self._OLDER_COLORS)]
+                    fc_label = pd.Timestamp(fc_obj.created_at).tz_convert("GB").strftime("%d %b %H:%M")
+                    add_gen(go.Scatter(
+                        x=[r.date_time for r in fc_gen_rows],
+                        y=[(r.nuclear + r.bm_wind + r.emb_wind + r.solar) / 1000 for r in fc_gen_rows],
+                        mode="lines",
+                        line=dict(color=color, width=1.5, dash="dot"),
+                        name=f"Gen ({fc_label})",
+                        hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} GW<extra>Gen {fc_label}</extra>",
+                    ))
+                    add_gen(go.Scatter(
+                        x=[r.date_time for r in fc_gen_rows],
+                        y=[(r.demand + r.solar + r.emb_wind) / 1000 for r in fc_gen_rows],
+                        mode="lines",
+                        line=dict(color=color, width=1.5, dash="dot"),
+                        name=f"Demand ({fc_label})",
+                        hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} GW<extra>Demand {fc_label}</extra>",
+                    ))
             figure.update_yaxes(title_text="Power [GW]", row=3, col=1)
 
         # Colour strip at bottom of price chart
@@ -2229,6 +2259,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 "show_band": show_band,
                 "show_export": show_export,
                 "show_gen": show_gen,
+                "show_fc_gen": show_fc_gen,
                 "show_af": show_af,
                 "show_x2r": show_x2r,
                 "summary": summary,
