@@ -22,7 +22,7 @@ from prices.external_forecasts import fetch_x2r
 from prices.forms import ForecastForm
 from prices.management.commands.update import Command as UpdateCommand
 from prices.management.commands.update import EXTRA_TREES_REGRESSOR_PARAMS, fit_day_ahead_ensemble, predict_day_ahead_ensemble
-from prices.models import AgileData, ExternalForecast, ForecastData, Forecasts, PriceHistory, RequestClientSeen, RequestMetric
+from prices.models import AgileData, ExternalForecast, ForecastData, Forecasts, PriceHistory
 from prices.views import GraphFormView, _update_options
 
 
@@ -435,38 +435,6 @@ class ExternalForecastTests(TestCase):
         self.assertEqual(forecast["name"], "X2R X 2026-05-01T09:00:00Z")
         self.assertAlmostEqual(forecast["rows"][0]["agile_pred"], expected)
 
-
-class RequestMetricsTests(TestCase):
-    def test_request_metric_records_web_and_unique_client(self):
-        response = self.client.get("/about", HTTP_USER_AGENT="metrics-test")
-
-        self.assertEqual(response.status_code, 200)
-        metric = RequestMetric.objects.get(surface=RequestMetric.SURFACE_WEB, path="/about")
-        self.assertEqual(metric.request_count, 1)
-        self.assertEqual(RequestClientSeen.objects.filter(surface=RequestMetric.SURFACE_WEB).count(), 1)
-
-    def test_repeated_same_client_increments_requests_without_new_unique_client(self):
-        for _ in range(2):
-            self.client.get("/about", HTTP_USER_AGENT="same-client")
-
-        metric = RequestMetric.objects.get(surface=RequestMetric.SURFACE_WEB, path="/about")
-        self.assertEqual(metric.request_count, 2)
-        self.assertEqual(RequestClientSeen.objects.filter(surface=RequestMetric.SURFACE_WEB).count(), 1)
-
-    def test_metrics_page_requires_staff_login(self):
-        response = self.client.get("/metrics")
-
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("/admin/login/", response["Location"])
-
-    def test_metrics_page_renders_for_staff_user(self):
-        user = User.objects.create_user(username="staff", password="pw", is_staff=True)
-        self.client.force_login(user)
-
-        response = self.client.get("/metrics")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Daily Requests")
 
 
 class ForecastFeatureTests(TestCase):

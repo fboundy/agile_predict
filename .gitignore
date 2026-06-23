@@ -28,3 +28,5 @@ catboost_info/
 *_results.csv
 /gp_*.csv
 /dl_results.csv
+
+.archive/

@@ -39,8 +39,6 @@ from .models import (
     History,
     PlotImage,
     PriceHistory,
-    RequestClientSeen,
-    RequestMetric,
     UpdateJob,
 )
 
@@ -511,56 +509,6 @@ class StatsView(TemplateView):
 
         return context
 
-
-class MetricsView(TemplateView):
-    template_name = "metrics.html"
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        days = 14
-        start_date = timezone.localdate() - timedelta(days=days - 1)
-
-        request_rows = (
-            RequestMetric.objects.filter(date__gte=start_date)
-            .values("date", "surface")
-            .annotate(requests=Sum("request_count"))
-            .order_by("-date", "surface")
-        )
-        unique_rows = {
-            (row["date"], row["surface"]): row["unique_clients"]
-            for row in RequestClientSeen.objects.filter(date__gte=start_date)
-            .values("date", "surface")
-            .annotate(unique_clients=Count("client_hash"))
-        }
-
-        daily_rows = []
-        for row in request_rows:
-            daily_rows.append(
-                {
-                    **row,
-                    "unique_clients": unique_rows.get((row["date"], row["surface"]), 0),
-                }
-            )
-
-        top_paths = (
-            RequestMetric.objects.filter(date__gte=start_date)
-            .values("surface", "path")
-            .annotate(requests=Sum("request_count"))
-            .order_by("-requests")[:25]
-        )
-
-        hourly_rows = (
-            RequestMetric.objects.filter(date=timezone.localdate())
-            .values("hour", "surface")
-            .annotate(requests=Sum("request_count"))
-            .order_by("hour", "surface")
-        )
-
-        context["daily_rows"] = daily_rows
-        context["top_paths"] = top_paths
-        context["hourly_rows"] = hourly_rows
-        context["days"] = days
-        return context
 
 
 class SiteLoginView(LoginView):
