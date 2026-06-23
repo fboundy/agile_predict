@@ -26,9 +26,7 @@ RUN set -ex && \
     rm -rf /root/.cache/
 COPY . /code
 
-ENV SECRET_KEY "uZMQT9hFNq6Amj1uzZFkfMW3iS1z8pVStJWNThKVOsSD3RP4KG"
-
-RUN python manage.py collectstatic --noinput
+RUN SECRET_KEY=collectstatic-build-placeholder python manage.py collectstatic --noinput
 
 EXPOSE 8000
 

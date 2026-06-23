@@ -1,9 +1,8 @@
-import xgboost as xg
+from catboost import CatBoostRegressor
+from lightgbm import LGBMRegressor
 from pathlib import Path
 from sklearn.metrics import mean_squared_error as MSE
-from sklearn.model_selection import cross_val_score
-from sklearn.neighbors import KernelDensity
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold, train_test_split
 
 import matplotlib
 
@@ -14,15 +13,16 @@ import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 import seaborn as sns
 
+from sklearn.ensemble import ExtraTreesRegressor
 from django.core.cache import cache  # Or store in the database if needed
-from django.db import close_old_connections
+from django.db import close_old_connections, transaction
 
 import numpy as np
 import os
 import logging
 import time
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from ...forecast_features import (
     build_forecast_frame,
     build_holdout_data,
@@ -34,7 +34,7 @@ from ...forecast_features import (
     select_daily_training_forecasts,
 )
 from ...external_forecasts import download_daily_external_forecasts
-from ...models import AgileData, ForecastData, Forecasts, History, PlotImage, PriceHistory
+from ...models import AgileData, ForecastData, Forecasts, History, PlotImage, PriceHistory, UpdateJob
 
 from config.utils import *
 from config.settings import GLOBAL_SETTINGS
@@ -42,8 +42,38 @@ from config.settings import GLOBAL_SETTINGS
 DAYS_TO_INCLUDE = 7
 MODEL_ITERS = 50
 MIN_HIST = 7
+MIN_FORECAST_ROWS = 200  # ~4 days; fewer rows means upstream APIs have degraded
 MAX_HIST = 28
 MAX_TEST_X = 10000
+EXTRA_TREES_REGRESSOR_PARAMS = {
+    "n_estimators": 700,
+    "min_samples_leaf": 4,
+    "max_features": 1.0,
+    "random_state": 42,
+    "n_jobs": 1,
+}
+CATBOOST_PARAMS = {
+    "iterations": 500,
+    "learning_rate": 0.05,
+    "depth": 6,
+    "l2_leaf_reg": 3,
+    "random_seed": 42,
+    "verbose": 0,
+}
+LGBM_PARAMS = {
+    "n_estimators": 500,
+    "learning_rate": 0.05,
+    "max_depth": 5,
+    "num_leaves": 31,
+    "min_child_samples": 5,
+    "subsample": 0.85,
+    "colsample_bytree": 0.85,
+    "reg_lambda": 3,
+    "random_state": 42,
+    "n_jobs": 1,
+    "verbose": -1,
+}
+
 
 log_dir = os.path.join(os.getcwd(), "logs")
 os.makedirs(log_dir, exist_ok=True)
@@ -120,54 +150,58 @@ def lighten_cmap(cmap_name="viridis", amount=0.5):
     )
 
 
-def kde_quantiles(kde, dt, pred, quantiles={"low": 0.1, "mid": 0.5, "high": 0.9}, lim=(0, 150), log_every=25):
-    if not isinstance(dt, list):
-        dt = [dt]
-    if not isinstance(pred, list):
-        pred = [pred]
+def fit_day_ahead_ensemble(train_X, train_y, sample_weights):
+    cat = CatBoostRegressor(**CATBOOST_PARAMS)
+    cat.fit(train_X, train_y, sample_weight=sample_weights)
 
-    results = {q: [] for q in quantiles}
-    total = len(dt)
-    started = time.monotonic()
-    price_points = len(range(int(lim[0]), int(lim[1])))
-    logger.info(
-        "Starting KDE quantiles rows=%s price_points_per_row=%s quantiles=%s lim=%s",
-        total,
-        price_points,
-        list(quantiles.keys()),
-        lim,
-    )
-    for row_number, (dt1, pred1) in enumerate(zip(dt, pred), start=1):
-        if row_number == 1 or row_number % log_every == 0 or row_number == total:
-            logger.info(
-                "KDE quantiles progress row=%s/%s elapsed_seconds=%.2f",
-                row_number,
-                total,
-                time.monotonic() - started,
-            )
+    lgbm = LGBMRegressor(**LGBM_PARAMS)
+    lgbm.fit(train_X, train_y, sample_weight=sample_weights)
 
-        row_started = time.monotonic()
-        x = np.array([[dt1, pred1, p] for p in range(int(lim[0]), int(lim[1]))])
-        c = pd.Series(index=x[:, 2], data=np.exp(kde.score_samples(x)).cumsum())
-        c /= c.iloc[-1]
-        if time.monotonic() - row_started > 5:
-            logger.info(
-                "Slow KDE quantile row row=%s/%s dt=%.4f pred=%.4f duration_seconds=%.2f",
-                row_number,
-                total,
-                dt1,
-                pred1,
-                time.monotonic() - row_started,
-            )
+    et = ExtraTreesRegressor(**EXTRA_TREES_REGRESSOR_PARAMS)
+    et.fit(train_X, train_y, sample_weight=sample_weights)
 
-        for q in quantiles:
-            if len(c[c < quantiles[q]]) > 0:
-                idx = c[c < quantiles[q]].index[-1]
-                results[q] += [(quantiles[q] - c[idx]) / (c[idx + 1] - c[idx]) + idx]
-            else:
-                results[q] += [np.nan]
-    logger.info("Finished KDE quantiles rows=%s elapsed_seconds=%.2f", total, time.monotonic() - started)
-    return results
+    logger.info("Fitted ensemble (CatBoost + LightGBM + ExtraTrees)")
+    return [cat, lgbm, et]
+
+
+def predict_day_ahead_ensemble(models, features):
+    preds = np.column_stack([m.predict(features) for m in models])
+    return preds.mean(axis=1)
+
+
+def cross_val_ensemble_rmse(train_X, train_y, sample_weights, n_splits=5):
+    kf = KFold(n_splits=n_splits, shuffle=False)
+    scores = []
+    for tr_idx, val_idx in kf.split(train_X):
+        fold_models = fit_day_ahead_ensemble(
+            train_X.iloc[tr_idx], train_y.iloc[tr_idx], sample_weights.iloc[tr_idx]
+        )
+        preds = predict_day_ahead_ensemble(fold_models, train_X.iloc[val_idx])
+        rmse = np.sqrt(np.mean((train_y.iloc[val_idx].values - preds) ** 2))
+        scores.append(rmse)
+        logger.info("Ensemble CV fold RMSE=%.3f", rmse)
+    return np.array(scores)
+
+
+def compute_horizon_quantiles(results, bins=(6, 12, 24, 36, 48)):
+    """
+    Compute empirical p10/p90 of (actual - predicted) residuals, binned by forecast horizon.
+    Returns dict mapping upper-edge hours -> (p10_offset, p90_offset).
+    """
+    residuals = results["day_ahead"] - results["pred"]
+    hours = results["dt"] * 24
+    global_p10 = float(np.percentile(residuals, 10))
+    global_p90 = float(np.percentile(residuals, 90))
+    horizon_q = {}
+    prev = 0
+    for upper in list(bins) + [np.inf]:
+        mask = (hours > prev) & (hours <= upper)
+        if mask.sum() >= 5:
+            horizon_q[upper] = (float(np.percentile(residuals[mask], 10)), float(np.percentile(residuals[mask], 90)))
+        else:
+            horizon_q[upper] = (global_p10, global_p90)
+        prev = upper
+    return horizon_q
 
 
 class Command(BaseCommand):
@@ -201,7 +235,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--feature_set",
             choices=sorted(FEATURE_SETS),
-            default="generation",
+            default="weather",
             help="Named feature set to use for model training.",
         )
 
@@ -358,16 +392,40 @@ class Command(BaseCommand):
             if debug:
                 logger.info("Getting latest Forecast")
 
-            fc, missing_fc = get_latest_forecast()
+            fc, missing_fc, source_rows, source_details = get_latest_forecast()
             refresh_db_connection("after fetching latest forecast")
 
-            if len(missing_fc) > 0:
-                logger.error(f">>> ERROR: Unable to run forecast due to missing columns: {', '.join(missing_fc)}")
-            else:
-                if debug:
-                    logger.info(fc)
+            # Persist source row counts and per-source details into the running UpdateJob
+            # so the UI can read traffic-light health across processes.
+            api_status_data = {
+                "source_rows": source_rows,
+                "source_details": source_details,
+                "forecast_rows": len(fc),
+                "checked_at": pd.Timestamp.now(tz="UTC").isoformat(),
+            }
+            try:
+                running_job = UpdateJob.objects.filter(
+                    job_type=UpdateJob.JOB_UPDATE, status=UpdateJob.STATUS_RUNNING,
+                ).order_by("-requested_at").first()
+                if running_job:
+                    running_job.options["api_status"] = api_status_data
+                    running_job.save(update_fields=["options"])
+            except Exception:
+                pass
+            logger.info("Upstream source rows: %s  total forecast rows: %d", source_rows, len(fc))
 
-                if len(fc) > 0:
+            if len(missing_fc) > 0:
+                raise CommandError(
+                    f"Upstream APIs missing columns: {', '.join(missing_fc)}. Aborting to avoid degraded forecast."
+                )
+
+            if len(fc) < MIN_FORECAST_ROWS:
+                raise CommandError(
+                    f"Upstream APIs returned only {len(fc)} forecast rows (minimum {MIN_FORECAST_ROWS}). "
+                    "Aborting to avoid degraded forecast."
+                )
+
+            if True:
                     refresh_db_connection("before loading training data")
                     fd = pd.DataFrame(list(ForecastData.objects.exclude(forecast_id__in=ignore_forecast).values()))
                     ff = pd.DataFrame(list(Forecasts.objects.exclude(id__in=ignore_forecast).values()))
@@ -386,31 +444,21 @@ class Command(BaseCommand):
                             logger.info(f"train_X:\n{train_X}")
                         sample_weights = ((np.log10((train_y - train_y.mean()).abs() + 10) * 5) - 4).round(0)
 
-                        xg_model = xg.XGBRegressor(
-                            objective="reg:squarederror",
-                            booster="dart",
-                            gamma=0.2,
-                            subsample=1.0,
-                            n_estimators=200,
-                            max_depth=10,
-                            colsample_bytree=1,
-                            n_jobs=1,
+                        logger.info(
+                            "Computing ensemble cross-validation score "
+                            f"({len(train_X)} rows, {len(train_X.columns)} features)"
                         )
-
-                        scores = cross_val_score(
-                            xg_model, train_X, train_y, cv=5, scoring="neg_root_mean_squared_error"
-                        )
-
-                        logger.info(f"Cross-val score: {scores}")
+                        scores = cross_val_ensemble_rmse(train_X, train_y, sample_weights)
+                        logger.info(f"Ensemble cross-val RMSE: {scores}")
                         refresh_db_connection("after cross-validation")
 
                         logger.info(
-                            "Fitting final XGBoost model "
+                            "Fitting final ensemble model "
                             f"({len(train_X)} rows, {len(train_X.columns)} features)"
                         )
-                        xg_model.fit(train_X, train_y, sample_weight=sample_weights, verbose=True)
-                        logger.info("Finished fitting final XGBoost model")
-                        refresh_db_connection("after fitting final XGBoost model")
+                        ensemble_models = fit_day_ahead_ensemble(train_X, train_y, sample_weights)
+                        logger.info("Finished fitting ensemble model")
+                        refresh_db_connection("after fitting ensemble model")
 
                         # Drop the training data set
                         logger.info("Preparing holdout/test dataset")
@@ -443,7 +491,7 @@ class Command(BaseCommand):
 
                         logger.info(f"Predicting holdout/test dataset ({len(test_X)} rows)")
                         results = test_X[["dt", "day_ahead"]].copy()
-                        results["pred"] = xg_model.predict(test_X[features])
+                        results["pred"] = predict_day_ahead_ensemble(ensemble_models, test_X[features])
                         logger.info("Finished holdout/test predictions")
 
                         # Add required columns before plotting
@@ -475,7 +523,7 @@ class Command(BaseCommand):
                                     index=[ff.index[-1] + 1],
                                     data={
                                         "created_at": [pd.Timestamp(new_name, tz="GB")],
-                                        "mean": [-np.mean(scores)],
+                                        "mean": [np.mean(scores)],
                                         "stdev": [np.std(scores)],
                                     },
                                 ),
@@ -614,10 +662,15 @@ class Command(BaseCommand):
                             save_plot(fig, "4_kde_error_by_horizon")
                             logger.info("Saved stats plot 4/5: forecast error by horizon")
 
-                        # 5. Feature Importance (XGBoost built-in)
+                        # 5. Feature Importance (ensemble average of normalised importances)
                         fig, ax = plt.subplots(figsize=(8, 6))
-                        xg.plot_importance(xg_model, ax=ax, importance_type="gain", show_values=False)
-                        ax.set_title("XGBoost Feature Importance (Gain)")
+                        cat_imp = ensemble_models[0].get_feature_importance().astype(float)
+                        lgbm_imp = ensemble_models[1].feature_importances_.astype(float)
+                        et_imp = ensemble_models[2].feature_importances_.astype(float)
+                        avg_imp = (cat_imp / cat_imp.sum() + lgbm_imp / lgbm_imp.sum() + et_imp / et_imp.sum()) / 3
+                        pd.Series(avg_imp, index=features).sort_values().plot.barh(ax=ax)
+                        ax.set_title("Ensemble Feature Importance (Average)")
+                        ax.set_xlabel("Relative Importance")
                         save_plot(fig, "5_feature_importance")
                         logger.info("Saved stats plot 5/5: feature importance")
 
@@ -635,60 +688,72 @@ class Command(BaseCommand):
                     fc = add_latest_forecast_features(fc)
                     if len(ff) > 0:
                         logger.info(f"Predicting latest forecast ({len(fc)} rows)")
-                        fc["day_ahead"] = xg_model.predict(latest_prediction_features(fc, train_X.columns))
+                        prediction_features = latest_prediction_features(fc, train_X.columns)
+                        fc["day_ahead"] = predict_day_ahead_ensemble(ensemble_models, prediction_features)
                         logger.info("Finished latest forecast prediction")
 
+                        fc["day_ahead_classified"] = np.nan
+                        fc["day_ahead_extra_trees"] = np.nan
+                        fc["plunge_probability"] = np.nan
+
                         if (len(test_X) > 10) and (not no_ranges):
-                            kde_fit_data = results[["dt", "pred", "day_ahead"]].to_numpy()
-                            logger.info(
-                                "Fitting KDE for forecast range estimates rows=%s cols=%s",
-                                kde_fit_data.shape[0],
-                                kde_fit_data.shape[1],
-                            )
-                            kde_started = time.monotonic()
-                            kde = KernelDensity()
-                            kde.fit(kde_fit_data)
-                            logger.info("Finished KDE fit elapsed_seconds=%.2f", time.monotonic() - kde_started)
+                            interval_started = time.monotonic()
 
-                            xlim = (
-                                np.floor(results[["pred", "day_ahead"]].min(axis=1).min() / 11) * 10,
-                                np.ceil(results[["pred", "day_ahead"]].max(axis=1).max() / 9) * 10,
-                            )
+                            # Empirical horizon quantiles from holdout residuals
+                            horizon_q = compute_horizon_quantiles(results)
                             logger.info(
-                                "Calculating KDE forecast range quantiles forecast_rows=%s xlim=%s",
-                                len(fc),
-                                xlim,
+                                "Horizon quantiles (p10/p90 by hours-ahead): %s",
+                                {
+                                    ("inf" if k == np.inf else int(k)): (f"{v[0]:.2f}", f"{v[1]:.2f}")
+                                    for k, v in horizon_q.items()
+                                },
                             )
-                            quantile_started = time.monotonic()
+                            sorted_keys = sorted(horizon_q)
+                            fc_hours = fc["dt"] * 24
+                            fc["day_ahead_low"] = fc["day_ahead"] + fc_hours.apply(
+                                lambda h: next((horizon_q[k] for k in sorted_keys if h <= k), horizon_q[sorted_keys[-1]])[0]
+                            )
+                            fc["day_ahead_high"] = fc["day_ahead"] + fc_hours.apply(
+                                lambda h: next((horizon_q[k] for k in sorted_keys if h <= k), horizon_q[sorted_keys[-1]])[1]
+                            )
 
-                            fc = pd.concat(
-                                [
-                                    fc,
-                                    pd.DataFrame(
-                                        index=fc.index,
-                                        data=kde_quantiles(
-                                            kde,
-                                            fc["dt"].to_list(),
-                                            fc["day_ahead"].to_list(),
-                                            lim=xlim,
-                                            quantiles={"day_ahead_low": 0.1, "day_ahead_high": 0.9},
-                                        ),
-                                    ),
-                                ],
-                                axis=1,
-                            )
-                            logger.info(
-                                "Finished KDE forecast range estimates elapsed_seconds=%.2f",
-                                time.monotonic() - quantile_started,
-                            )
+                            # Ensemble weather for day-adaptive intervals
+                            weather_members = get_weather_ensemble()
+                            if weather_members:
+                                logger.info("Running model on %d weather ensemble members", len(weather_members))
+                                member_preds = []
+                                for member in weather_members:
+                                    member_fc = fc.copy()
+                                    for col in ["temp_2m", "wind_10m", "rad"]:
+                                        if col in member.columns and col in member_fc.columns:
+                                            member_fc[col] = (
+                                                member[col].reindex(member_fc.index).ffill().bfill()
+                                            )
+                                    member_preds.append(
+                                        predict_day_ahead_ensemble(
+                                            ensemble_models,
+                                            latest_prediction_features(member_fc, train_X.columns),
+                                        )
+                                    )
+                                member_arr = np.column_stack(member_preds)
+                                ens_low = np.percentile(member_arr, 10, axis=1)
+                                ens_high = np.percentile(member_arr, 90, axis=1)
+                                fc["day_ahead_low"] = np.minimum(fc["day_ahead_low"].values, ens_low)
+                                fc["day_ahead_high"] = np.maximum(fc["day_ahead_high"].values, ens_high)
+                                logger.info("Applied ensemble weather intervals members=%d", len(weather_members))
+                            else:
+                                logger.info("Ensemble weather unavailable, using empirical quantiles only")
 
                             for case in ["low", "high"]:
                                 fc[f"day_ahead_{case}"] = (
                                     fc[f"day_ahead_{case}"].rolling(3, center=True).mean().bfill().ffill()
                                 )
-
                             fc["day_ahead_low"] = fc[["day_ahead", "day_ahead_low"]].min(axis=1)
                             fc["day_ahead_high"] = fc[["day_ahead", "day_ahead_high"]].max(axis=1)
+                            logger.info(
+                                "Finished forecast intervals elapsed_seconds=%.2f",
+                                time.monotonic() - interval_started,
+                            )
 
                         else:
                             logger.info("Using fallback +/-10% forecast ranges")
@@ -697,6 +762,9 @@ class Command(BaseCommand):
 
                     else:
                         fc["day_ahead"] = None
+                        fc["day_ahead_classified"] = None
+                        fc["day_ahead_extra_trees"] = None
+                        fc["plunge_probability"] = None
                         fc["day_ahead_low"] = None
                         fc["day_ahead_high"] = None
 
@@ -761,9 +829,18 @@ class Command(BaseCommand):
 
                     if debug:
                         logger.info(
-                            pd.concat([scale_factors, fc[["day_ahead", "day_ahead_low", "day_ahead_high"]]], axis=1)
+                            pd.concat(
+                                [
+                                    scale_factors,
+                                    fc[["day_ahead", "day_ahead_low", "day_ahead_high"]],
+                                ],
+                                axis=1,
+                            )
                         )
 
+                    agile_regions = [
+                        region for region in regions if not GLOBAL_SETTINGS["REGIONS"][region].get("raw_day_ahead")
+                    ]
                     ag = pd.concat(
                         [
                             pd.DataFrame(
@@ -781,10 +858,10 @@ class Command(BaseCommand):
                                     .round(2),
                                 },
                             )
-                            for region in regions
+                            for region in agile_regions
                         ]
                     )
-                    logger.info(f"Prepared agile forecast data ({len(ag)} rows across {len(regions)} regions)")
+                    logger.info(f"Prepared agile forecast data ({len(ag)} rows across {len(agile_regions)} regions)")
 
                     # fc = fc[list(fd.columns)[3:]]
                     fc = fc[
@@ -799,6 +876,9 @@ class Command(BaseCommand):
                             "rad",
                             "demand",
                             "day_ahead",
+                            "day_ahead_classified",
+                            "day_ahead_extra_trees",
+                            "plunge_probability",
                         ]
                     ]
 
@@ -807,15 +887,16 @@ class Command(BaseCommand):
                         logger.info(f"Forecast\n{fc}")
 
                     refresh_db_connection("before saving forecast rows")
-                    this_forecast = Forecasts(name=new_name, mean=-np.mean(scores), stdev=np.std(scores))
-                    logger.info(f"Saving forecast record: {new_name}")
-                    this_forecast.save()
-                    fc["forecast"] = this_forecast
-                    ag["forecast"] = this_forecast
-                    logger.info(f"Writing ForecastData rows: {len(fc)}")
-                    df_to_Model(fc, ForecastData)
-                    logger.info(f"Writing AgileData rows: {len(ag)}")
-                    df_to_Model(ag, AgileData)
+                    with transaction.atomic():
+                        this_forecast = Forecasts(name=new_name, mean=np.mean(scores), stdev=np.std(scores))
+                        logger.info(f"Saving forecast record: {new_name}")
+                        this_forecast.save()
+                        fc["forecast"] = this_forecast
+                        ag["forecast"] = this_forecast
+                        logger.info(f"Writing ForecastData rows: {len(fc)}")
+                        df_to_Model(fc, ForecastData)
+                        logger.info(f"Writing AgileData rows: {len(ag)}")
+                        df_to_Model(ag, AgileData)
                     logger.info(f"Finished writing forecast {this_forecast.id}: {this_forecast.name}")
 
         if debug:

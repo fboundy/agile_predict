@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+
+{% block content %}
+
+<div class="container-lg py-5">
+    <div class="row justify-content-center">
+        <div class="col-md-9 col-lg-6">
+            <div class="card bg-dark-subtle p-4">
+                <h3 class="mb-3">Register</h3>
+                <p>
+                    Registered users have access to additional analytics. Registration is approved on a case by case
+                    basis by the site administrators.
+                </p>
+                <form method="post">
+                    {% csrf_token %}
+                    {{ form|crispy }}
+                    <button type="submit" class="btn btn-primary w-100">Register</button>
+                </form>
+                <div class="border-top mt-4 pt-3 small text-body-secondary">
+                    Already registered?
+                    <a href="{% url 'login' %}" class="link-secondary">Login</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock content %}

@@ -1,4 +1,6 @@
 import pandas as pd
+import numpy as np
+import re
 import requests
 import time
 import logging
@@ -68,7 +70,11 @@ def get_gas_ttf_history(start=None, end=None):
     start = as_utc(start or "2023-07-01")
     end = as_utc(end or pd.Timestamp.now(tz="UTC")) + pd.Timedelta("1D")
     url = "https://query2.finance.yahoo.com/v8/finance/chart/TTF=F"
-    params = {"range": "max", "interval": "1d"}
+    params = {
+        "period1": int(start.timestamp()),
+        "period2": int(end.timestamp()),
+        "interval": "1d",
+    }
     headers = {"User-Agent": "Mozilla/5.0"}
 
     try:
@@ -371,28 +377,84 @@ def get_latest_history(start):
         return hist.astype(float).dropna(), missing_cols
 
 
+def _neso_csv_fallback(resource_id, date_col, cols, rename, tz="UTC"):
+    """
+    When the NESO CKAN datastore API returns empty, fetch the resource's CSV file
+    directly. Uses resource_show to get the canonical download URL so we don't
+    hard-code a path that can change.
+    """
+    from io import StringIO
+
+    try:
+        meta = requests.get(
+            "https://api.neso.energy/api/3/action/resource_show",
+            params={"id": resource_id},
+            timeout=30,
+        )
+        meta.raise_for_status()
+        csv_url = meta.json()["result"]["url"]
+    except Exception as exc:
+        logger.warning("NESO CSV fallback: resource_show failed id=%s error=%s", resource_id, exc)
+        return pd.DataFrame(), str(exc)[:80]
+
+    try:
+        r = requests.get(csv_url, timeout=120)
+        r.raise_for_status()
+        df = pd.read_csv(StringIO(r.text))
+    except Exception as exc:
+        logger.warning("NESO CSV fallback: download failed url=%s error=%s", csv_url, exc)
+        return pd.DataFrame(), str(exc)[:80]
+
+    try:
+        df.index = pd.to_datetime(df[date_col])
+        if df.index.tzinfo is None:
+            df.index = df.index.tz_localize(tz, ambiguous="infer")
+        # Drop historical data we don't need — keep last 1 day + all future
+        cutoff = pd.Timestamp.now(tz=tz) - pd.Timedelta("1D")
+        df = df[df.index >= cutoff]
+        if cols:
+            df = df[cols]
+        if rename:
+            df = df.set_axis(rename, axis=1)
+        df = df.sort_index()
+        df = df[~df.index.duplicated()]
+        logger.info("NESO CSV fallback succeeded id=%s rows=%s", resource_id, len(df))
+        return df, None
+    except Exception as exc:
+        logger.warning("NESO CSV fallback: parse failed id=%s error=%s", resource_id, exc)
+        return pd.DataFrame(), str(exc)[:80]
+
+
 def get_latest_forecast():
     ndf_from = pd.Timestamp.now().normalize().strftime("%Y-%m-%d")
     ndf_to = (pd.Timestamp.now().normalize() + pd.Timedelta("24h")).strftime("%Y-%m-%d")
 
     forecast_data = [
         {
+            "api_group": "neso_wind",
+            "label": "WINDFOR",
             "url": "https://api.neso.energy/api/3/action/datastore_search?resource_id=93c3048e-1dab-4057-a2a9-417540583929&limit=1000",
             "record_path": ["result", "records"],
             "tz": "UTC",
             "date_col": "Datetime",
             "cols": ["Wind_Forecast"],
             "rename": ["bm_wind"],
+            "csv_fallback": "93c3048e-1dab-4057-a2a9-417540583929",
         },
         {
+            "api_group": "neso_da_wind",
+            "label": "WINDFOR-DA",
             "url": "https://api.neso.energy/api/3/action/datastore_search?resource_id=b2f03146-f05d-4824-a663-3a4f36090c71&limit=1000",
             "record_path": ["result", "records"],
             "tz": "UTC",
             "date_col": "Datetime_GMT",
             "cols": ["Incentive_forecast"],
             "rename": ["da_wind"],
+            "csv_fallback": "b2f03146-f05d-4824-a663-3a4f36090c71",
         },
         {
+            "api_group": "neso_solar",
+            "label": "EMBSOLARFOR",
             "url": "https://api.neso.energy/api/3/action/datastore_search?resource_id=db6c038f-98af-4570-ab60-24d71ebd0ae5&limit=1000",
             "record_path": ["result", "records"],
             "tz": "UTC",
@@ -400,15 +462,21 @@ def get_latest_forecast():
             "rename": ["solar", "emb_wind"],
             "date_col": "DATE_GMT",
             "time_col": "TIME_GMT",
+            "csv_fallback": "db6c038f-98af-4570-ab60-24d71ebd0ae5",
         },
         {
+            "api_group": "neso_demand",
+            "label": "NATDEMAND",
             "url": "https://api.neso.energy/api/3/action/datastore_search?resource_id=7c0411cd-2714-4bb5-a408-adb065edf34d&limit=5000",
             "record_path": ["result", "records"],
             "date_col": "GDATETIME",
             "tz": "UTC",
             "cols": ["NATIONALDEMAND"],
+            "csv_fallback": "7c0411cd-2714-4bb5-a408-adb065edf34d",
         },
         {
+            "api_group": "openmeteo",
+            "label": "Open-Meteo",
             "url": "https://api.open-meteo.com/v1/forecast",
             "params": {
                 "latitude": 54.0,
@@ -425,6 +493,8 @@ def get_latest_forecast():
             "rename": ["temp_2m", "wind_10m", "rad"],
         },
         {
+            "api_group": "bmrs",
+            "label": "NDF",
             # "url": f"https://data.elexon.co.uk/bmrs/api/v1/datasets/NDF?publishDateTimeFrom={ndf_from}&publishDateTimeTo={ndf_to}",
             "url": f"https://data.elexon.co.uk/bmrs/api/v1/datasets/NDF",
             "params": {"publishDateTimeFrom": ndf_from, "publishDateTimeTo": ndf_to},
@@ -437,14 +507,51 @@ def get_latest_forecast():
 
     downloaded_data = []
     download_errors = []
+    source_rows = {}
+    source_details = {}  # api_group → {label, rows, error}
+
+    def _err_str(e):
+        if isinstance(e, int):
+            return f"HTTP {e}"
+        if e is not None:
+            return str(e)[:80]
+        return "no data returned"
 
     for x in forecast_data:
-        data, e = DataSet(**x).download()
-        if len(data) > 0:
+        group = x.get("api_group", "other")
+        label = x.get("label", group)
+        csv_fallback_id = x.get("csv_fallback")
+        ds_kwargs = {k: v for k, v in x.items() if k not in ("api_group", "label", "csv_fallback")}
+        data, e = DataSet(**ds_kwargs).download()
+        n = len(data)
+
+        # If the datastore API returned nothing, try CSV fallback
+        used_csv_fallback = False
+        if n == 0 and csv_fallback_id:
+            logger.info("API returned no data for %s — trying CSV fallback", label)
+            data, e = _neso_csv_fallback(
+                csv_fallback_id,
+                ds_kwargs.get("date_col"),
+                ds_kwargs.get("cols"),
+                ds_kwargs.get("rename"),
+                ds_kwargs.get("tz", "UTC"),
+            )
+            n = len(data)
+            if n > 0:
+                used_csv_fallback = True
+
+        prev = source_details.get(group, {"label": label, "rows": 0, "error": None, "fallback": False})
+        prev["rows"] += n
+        if n > 0:
             downloaded_data += [data]
-            # print(f"{x}:\n{data}\n\n")
+            source_rows[group] = source_rows.get(group, 0) + n
+            if used_csv_fallback:
+                prev["fallback"] = True
         else:
             download_errors += [e]
+            if prev["error"] is None:
+                prev["error"] = _err_str(e)
+        source_details[group] = prev
 
     df = pd.concat(downloaded_data, axis=1)
 
@@ -473,7 +580,7 @@ def get_latest_forecast():
     missing_cols += [c for c in all_cols if c not in df.columns]
     if len(missing_cols) > 0:
         logger.error("No forecast data for columns=%s", missing_cols)
-        return pd.DataFrame(), missing_cols
+        return pd.DataFrame(), missing_cols, source_rows, source_details
     else:
         df["date_time"] = pd.to_datetime(df.index)
         df["time"] = df["date_time"].dt.hour + df["date_time"].dt.minute / 60
@@ -483,7 +590,71 @@ def get_latest_forecast():
         df.index = pd.to_datetime(df.index).tz_convert("GB")
         df.drop(["date_time"], axis=1, inplace=True)
 
-        return df.sort_index().dropna(), missing_cols
+        return df.sort_index().dropna(), missing_cols, source_rows, source_details
+
+
+def get_weather_ensemble(n_members=10, forecast_days=3):
+    """
+    Fetch ICON seamless ensemble weather from Open-Meteo.
+    Returns a list of DataFrames (30-min, GB timezone, columns: temp_2m, wind_10m, rad).
+    Returns empty list on any failure so callers can degrade gracefully.
+    """
+    url = "https://ensemble-api.open-meteo.com/v1/ensemble"
+    params = {
+        "latitude": 54.0,
+        "longitude": 2.3,
+        "hourly": ["temperature_2m", "wind_speed_10m", "direct_radiation"],
+        "models": "icon_seamless",
+        "forecast_days": forecast_days,
+    }
+    try:
+        response = requests.get(url=url, params=params, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        logger.warning("Ensemble weather fetch failed: %s", e)
+        return []
+
+    hourly = data.get("hourly", {})
+    raw_times = hourly.get("time", [])
+    if not raw_times:
+        logger.warning("Ensemble weather: empty response from %s", url)
+        return []
+
+    times = pd.to_datetime(raw_times).tz_localize("UTC")
+
+    member_nums = sorted({
+        int(m.group(1))
+        for key in hourly
+        for m in [re.match(r".+_member(\d+)$", key)]
+        if m
+    })
+    if not member_nums:
+        logger.warning("Ensemble weather: no member columns found")
+        return []
+
+    use_members = member_nums[:n_members]
+    logger.info("Ensemble weather: %d members available, using %d", len(member_nums), len(use_members))
+
+    members = []
+    for num in use_members:
+        suffix = f"_member{num:02d}"
+        try:
+            df = pd.DataFrame(
+                {
+                    "temp_2m": hourly.get(f"temperature_2m{suffix}", [np.nan] * len(times)),
+                    "wind_10m": hourly.get(f"wind_speed_10m{suffix}", [np.nan] * len(times)),
+                    "rad": hourly.get(f"direct_radiation{suffix}", [np.nan] * len(times)),
+                },
+                index=times,
+            )
+            df = df.resample("30min").interpolate(method="time")
+            df.index = df.index.tz_convert("GB")
+            members.append(df)
+        except Exception as e:
+            logger.warning("Ensemble weather: failed to process member %02d: %s", num, e)
+
+    return members
 
 
 class DataSet:
@@ -685,6 +856,11 @@ def day_ahead_to_agile(df, reverse=False, region="G", export=False):
     x["In"] = x["In"].astype(float)
     x["Out"] = x["In"]
     x["Peak"] = (x.index.hour >= 16) & (x.index.hour < 19)
+
+    if regions.get(region, {}).get("raw_day_ahead"):
+        if export:
+            raise ValueError("Export pricing is not available for raw day-ahead prices")
+        return x["Out"].rename("day_ahead")
 
     if export:
         factor, base_adder, peak_adder = regions[region]["export_factors"]

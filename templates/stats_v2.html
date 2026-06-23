@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-lg py-3">
+
+  <div class="mb-3">
+    <h5 class="mb-0">Model stats</h5>
+    <div class="text-body-secondary" style="font-size:.8rem">Training accuracy and diagnostic plots</div>
+  </div>
+
+  {% if trend_chart %}
+  <div class="card border-0 shadow-sm mb-3" style="background:#2a2d31">
+    <div class="card-body py-2 px-3">
+      <h6 class="text-body-secondary mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">
+        Model error trend over time
+      </h6>
+      <p class="text-body-secondary mb-2" style="font-size:.82rem">
+        Cross-validation RMSE for each forecast run (5-fold). The line is the mean across folds; the band is ±1 standard deviation.
+        A downward trend indicates the model is improving as more data is collected.
+      </p>
+      {{ trend_chart|safe }}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if stats %}
+  <div class="card border-0 shadow-sm mb-3" style="background:#2a2d31">
+    <div class="card-body py-2 px-3">
+      <h6 class="text-body-secondary mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">
+        Forecast error heatmap — last 7 days
+      </h6>
+      <p class="text-body-secondary mb-2" style="font-size:.82rem">
+        Actual Agile price shown in yellow; thin grey lines are historical forecasts.
+        The heatmap shows how errors evolve over forecast date — warm colours indicate larger error.
+      </p>
+      {{ stats|safe }}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if diagnostic_charts %}
+  <div class="d-flex align-items-baseline justify-content-between flex-wrap gap-2 mb-2">
+    <h6 class="text-body-secondary mb-0" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Diagnostic plots — last 30 days</h6>
+    {% if diagnostic_unique_slots %}
+    <span class="text-body-secondary" style="font-size:.75rem">{{ diagnostic_unique_slots }} half-hour slots · {{ diagnostic_date_from }} – {{ diagnostic_date_to }}</span>
+    {% endif %}
+  </div>
+  <div class="row g-3">
+    {% for plot in diagnostic_charts %}
+    <div class="{% if forloop.first %}col-12{% else %}col-md-6{% endif %}">
+      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+        <div class="card-body py-2 px-3">
+          <h6 class="mb-1" style="font-size:.82rem;font-weight:600">{{ plot.title }}</h6>
+          {% if plot.description %}
+          <p class="text-body-secondary mb-2" style="font-size:.78rem">{{ plot.description }}</p>
+          {% endif %}
+          {{ plot.chart|safe }}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="card border-0 shadow-sm" style="background:#2a2d31">
+    <div class="card-body py-3 text-center text-body-secondary" style="font-size:.85rem">
+      No diagnostic data available yet. Run a forecast to generate plots.
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock content %}

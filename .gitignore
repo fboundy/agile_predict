@@ -1,11 +1,30 @@
 __pycache__/
+*.py[cod]
 .venv/
 .local/
 *.sqlite3
+*.sqlite3.*
+*.sqlite3-*
 *.bat
 .vscode/
 .env
+.env.*
+!.env.example
 .creds.txt
 logs/
+*.log
 static/
 plots/
+
+# CatBoost training artifacts
+catboost_info/
+
+# Root-level experiment and analysis scripts
+/model_*.py
+/check_env*.py
+/query_db.py
+
+# Experiment result CSVs
+*_results.csv
+/gp_*.csv
+/dl_results.csv
