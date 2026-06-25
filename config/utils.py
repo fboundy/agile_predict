@@ -173,7 +173,11 @@ def get_rte_french_nuclear(start=None, end=None):
 
     # Forward-fill across the forecast window (up to end)
     if start is not None and end is not None:
-        idx = pd.date_range(start=start, end=end, freq="30min", tz="UTC")
+        idx = pd.date_range(
+            start=pd.Timestamp(start).tz_convert("UTC"),
+            end=pd.Timestamp(end).tz_convert("UTC"),
+            freq="30min",
+        )
         s = s.reindex(idx.union(s.index)).ffill().reindex(idx)
     s.name = "fr_nuclear"
     return s
@@ -219,9 +223,13 @@ def get_neso_opmr(start=None, end=None):
 
     # Broadcast daily values to 30-min slots across the forecast window
     if start is not None and end is not None:
-        idx = pd.date_range(start=start, end=end, freq="30min", tz="UTC")
+        idx = pd.date_range(
+            start=pd.Timestamp(start).tz_convert("UTC"),
+            end=pd.Timestamp(end).tz_convert("UTC"),
+            freq="30min",
+        )
     else:
-        idx = pd.date_range(start=df.index[0], periods=48 * len(df), freq="30min", tz="UTC")
+        idx = pd.date_range(start=df.index[0], periods=48 * len(df), freq="30min")
 
     # Reindex daily series onto 30-min slots then forward-fill within each day
     day_series = df["National Surplus"].copy()
