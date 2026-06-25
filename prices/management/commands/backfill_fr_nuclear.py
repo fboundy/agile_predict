@@ -1,69 +1,89 @@
 """
-Backfill fr_nuclear on historical ForecastData using RTE eco2mix historical dataset.
+Backfill fr_nuclear on historical ForecastData using ENTSO-E A75 actual
+generation data (psrType=B14 = Nuclear) for France.
+eco2mix consolidated dataset has a 5-month+ delay; ENTSO-E has full history.
 For each forecast, looks up the French nuclear value at forecast creation time
 (matching production behaviour: current value forward-filled to all future slots).
 """
 import requests
 import pandas as pd
+from xml.etree import ElementTree as ET
 
+from django.conf import settings
 from django.core.management.base import BaseCommand
 
 from prices.models import ForecastData, Forecasts
 
-RTE_URL = "https://opendata.reseaux-energies.fr/api/explore/v2.1/catalog/datasets/eco2mix-national-cons-def/records"
-PAGE_SIZE = 100
+ENTSOE_URL = "https://web-api.tp.entsoe.eu/api"
 BATCH_SIZE = 2000
 
 
-def fetch_rte_nuclear_history(start_dt, end_dt):
+def _parse_entsoe_qty(xml_text):
+    """Parse ENTSO-E generation XML into UTC-indexed Series of quantities."""
+    root = ET.fromstring(xml_text)
+    if "Acknowledgement" in root.tag:
+        return pd.Series(dtype=float)
+    records = []
+    for ts in root.findall(".//{*}TimeSeries"):
+        for period in ts.findall("{*}Period"):
+            start_el = period.find("{*}timeInterval/{*}start")
+            res_el   = period.find("{*}resolution")
+            if start_el is None or res_el is None:
+                continue
+            start_ts = pd.Timestamp(start_el.text, tz="UTC")
+            minutes  = {"PT60M": 60, "PT30M": 30, "PT15M": 15}.get(res_el.text, 60)
+            for point in period.findall("{*}Point"):
+                pos_el = point.find("{*}position")
+                qty_el = point.find("{*}quantity")
+                if pos_el is None or qty_el is None:
+                    continue
+                ts_val = start_ts + pd.Timedelta(minutes=minutes * (int(pos_el.text) - 1))
+                records.append({"ts": ts_val, "qty": float(qty_el.text)})
+    if not records:
+        return pd.Series(dtype=float)
+    return pd.DataFrame(records).set_index("ts")["qty"].sort_index()
+
+
+def fetch_entsoe_fr_nuclear(start_dt, end_dt):
     """
-    Paginate the eco2mix consolidated dataset for the target date range.
-    ODS API v2.1 where clause doesn't support timestamp filters (returns 400),
-    so we use total_count to calculate the offset into the descending-sorted
-    dataset that corresponds to our start date, then filter in Python.
+    Fetch ENTSO-E A75 actual nuclear generation for France in monthly chunks.
     Returns a 30-min resampled UTC-indexed Series named 'fr_nuclear'.
     """
-    start_ts = pd.Timestamp(start_dt).tz_convert("UTC")
-    end_ts   = pd.Timestamp(end_dt).tz_convert("UTC")
+    token = getattr(settings, "ENTSOE_API_KEY", "")
+    if not token:
+        return pd.Series(dtype=float, name="fr_nuclear")
 
-    # ODS API has a maximum offset limit, so we fetch newest-first (desc)
-    # and stop once records go older than our start date.
-    records = []
-    offset = 0
-    while True:
-        resp = requests.get(RTE_URL, params={
-            "select":   "date_heure,nucleaire",
-            "order_by": "date_heure desc",
-            "limit":    PAGE_SIZE,
-            "offset":   offset,
-        }, timeout=30)
+    start_ts = pd.Timestamp(start_dt).tz_convert("UTC").normalize()
+    end_ts   = pd.Timestamp(end_dt).tz_convert("UTC").normalize() + pd.Timedelta("1d")
+
+    all_series = []
+    chunk_start = start_ts
+    while chunk_start < end_ts:
+        chunk_end = min(chunk_start + pd.Timedelta("32d"), end_ts)
+        params = {
+            "securityToken": token,
+            "documentType":  "A75",
+            "processType":   "A16",
+            "in_Domain":     "10YFR-RTE------C",
+            "psrType":       "B14",
+            "periodStart":   chunk_start.strftime("%Y%m%d%H%M"),
+            "periodEnd":     chunk_end.strftime("%Y%m%d%H%M"),
+        }
+        resp = requests.get(ENTSOE_URL, params=params, timeout=30)
         resp.raise_for_status()
-        batch = resp.json().get("results", [])
-        if not batch:
-            break
-        records.extend(batch)
-        offset += PAGE_SIZE
-        # Stop once the oldest record in this batch is before our start
-        oldest_ts = pd.Timestamp(batch[-1]["date_heure"]).tz_convert("UTC")
-        if oldest_ts < start_ts:
-            break
+        s = _parse_entsoe_qty(resp.text)
+        if not s.empty:
+            all_series.append(s)
+        chunk_start = chunk_end
 
-    if not records:
+    if not all_series:
         return pd.Series(dtype=float, name="fr_nuclear")
 
-    df = pd.DataFrame(records)
-    df["date_heure"] = pd.to_datetime(df["date_heure"], utc=True)
-    df = df.set_index("date_heure").sort_index()
-    # Filter to actual date range
-    df = df[(df.index >= start_ts) & (df.index <= end_ts)]
-    df["nucleaire"] = pd.to_numeric(df["nucleaire"], errors="coerce")
-    df = df.dropna(subset=["nucleaire"])
-    if df.empty:
-        return pd.Series(dtype=float, name="fr_nuclear")
-
-    s = df["nucleaire"].resample("30min").mean().ffill()
-    s.name = "fr_nuclear"
-    return s
+    combined = pd.concat(all_series).sort_index()
+    combined = combined[~combined.index.duplicated(keep="last")]
+    combined = combined.resample("30min").mean().ffill()
+    combined.name = "fr_nuclear"
+    return combined
 
 
 class Command(BaseCommand):
@@ -91,8 +111,8 @@ class Command(BaseCommand):
 
         min_dt = min(f.created_at for f in forecasts) - pd.Timedelta("1h")
         max_dt = max(f.created_at for f in forecasts) + pd.Timedelta("1h")
-        self.stdout.write(f"Fetching RTE nuclear: {min_dt.date()} → {max_dt.date()} …")
-        nuclear_ts = fetch_rte_nuclear_history(min_dt, max_dt)
+        self.stdout.write(f"Fetching ENTSO-E A75 FR nuclear: {min_dt.date()} → {max_dt.date()} …")
+        nuclear_ts = fetch_entsoe_fr_nuclear(min_dt, max_dt)
         self.stdout.write(f"  Got {len(nuclear_ts)} data points")
 
         if nuclear_ts.empty:
