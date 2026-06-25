@@ -1805,10 +1805,31 @@ class GraphV2View(V2NavMixin, TemplateView):
                 return f"forecast: {_stored_forecast_rows} rows"
             return "insufficient data"
 
+        _rank = {"fail": 0, "unknown": 1, "warn": 2, "ok": 3}
+        _worst_health = lambda a, b: min([a, b], key=lambda h: _rank.get(h, 1))
+
+        # NESO consolidated: forecast data + OPMR
+        _neso_combined_health = _worst_health(_neso_health, _opmr_health)
+        if _neso_combined_health == "ok":
+            _neso_combined_detail = "OK"
+        elif _neso_health != "ok":
+            _neso_combined_detail = _neso_detail()
+        else:
+            _neso_combined_detail = f"OPMR: {_opmr_rows} rows" if _opmr_rows > 0 else _src_detail("neso_opmr")
+
+        # Open-Meteo consolidated: UK + France
+        _om_combined_health = _worst_health(_om_health, _om_fr_health)
+        if _om_combined_health == "ok":
+            _om_combined_detail = "OK"
+        elif _om_health != "ok":
+            _om_combined_detail = _src_detail("openmeteo")
+        else:
+            _om_combined_detail = f"FR: {_om_fr_rows} rows" if _om_fr_rows > 0 else _src_detail("openmeteo_fr")
+
         api_sources = [
-            {"name": "NESO", "health": _neso_health, "detail": _neso_detail()},
+            {"name": "NESO", "health": _neso_combined_health, "detail": _neso_combined_detail},
             {"name": "BMRS", "health": _bmrs_health, "detail": "OK" if _bmrs_health == "ok" else _src_detail("bmrs")},
-            {"name": "Open-Meteo", "health": _om_health, "detail": "OK" if _om_health == "ok" else _src_detail("openmeteo")},
+            {"name": "Open-Meteo", "health": _om_combined_health, "detail": _om_combined_detail},
             {
                 "name": "Octopus",
                 "health": _octopus_health,
@@ -1817,24 +1838,10 @@ class GraphV2View(V2NavMixin, TemplateView):
                 ),
             },
             {
-                "name": "RTE (FR nuclear)",
+                "name": "RTE (nuclear)",
                 "health": _rte_health,
                 "detail": "OK" if _rte_health == "ok" else (
                     f"{_rte_rows} rows" if _rte_rows > 0 else _src_detail("rte_nuclear")
-                ),
-            },
-            {
-                "name": "NESO OPMR",
-                "health": _opmr_health,
-                "detail": "OK" if _opmr_health == "ok" else (
-                    f"{_opmr_rows} rows" if _opmr_rows > 0 else _src_detail("neso_opmr")
-                ),
-            },
-            {
-                "name": "Open-Meteo FR",
-                "health": _om_fr_health,
-                "detail": "OK" if _om_fr_health == "ok" else (
-                    f"{_om_fr_rows} rows" if _om_fr_rows > 0 else _src_detail("openmeteo_fr")
                 ),
             },
         ]
