@@ -17,18 +17,29 @@ BATCH_SIZE = 2000
 
 def fetch_rte_nuclear_history(start_dt, end_dt):
     """
-    Paginate the eco2mix consolidated dataset for the full date range.
+    Paginate the eco2mix consolidated dataset for the target date range.
+    ODS API v2.1 where clause doesn't support timestamp filters (returns 400),
+    so we use total_count to calculate the offset into the descending-sorted
+    dataset that corresponds to our start date, then filter in Python.
     Returns a 30-min resampled UTC-indexed Series named 'fr_nuclear'.
     """
-    start_str = pd.Timestamp(start_dt).tz_convert("UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
-    end_str   = pd.Timestamp(end_dt).tz_convert("UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
-    where = f'date_heure >= "{start_str}" AND date_heure <= "{end_str}"'
+    start_ts = pd.Timestamp(start_dt).tz_convert("UTC")
+    end_ts   = pd.Timestamp(end_dt).tz_convert("UTC")
 
-    records, offset = [], 0
+    # Get total record count to estimate starting offset
+    r0 = requests.get(RTE_URL, params={"select": "date_heure", "limit": 1, "order_by": "date_heure desc"}, timeout=15)
+    r0.raise_for_status()
+    total = r0.json().get("total_count", 0)
+    # Each 15-min record; estimate records in our window + generous buffer
+    window_days = max((end_ts - start_ts).days + 2, 5)
+    window_records = window_days * 96
+    start_offset = max(0, total - window_records - 500)
+
+    records = []
+    offset = start_offset
     while True:
         resp = requests.get(RTE_URL, params={
             "select":   "date_heure,nucleaire",
-            "where":    where,
             "order_by": "date_heure asc",
             "limit":    PAGE_SIZE,
             "offset":   offset,
@@ -39,7 +50,9 @@ def fetch_rte_nuclear_history(start_dt, end_dt):
             break
         records.extend(batch)
         offset += PAGE_SIZE
-        if len(batch) < PAGE_SIZE:
+        # Stop once we've gone past end_ts (ODS returns ascending order)
+        last_ts = pd.Timestamp(batch[-1]["date_heure"])
+        if last_ts.tz_convert("UTC") > end_ts:
             break
 
     if not records:
@@ -48,6 +61,8 @@ def fetch_rte_nuclear_history(start_dt, end_dt):
     df = pd.DataFrame(records)
     df["date_heure"] = pd.to_datetime(df["date_heure"], utc=True)
     df = df.set_index("date_heure").sort_index()
+    # Filter to actual date range
+    df = df[(df.index >= start_ts) & (df.index <= end_ts)]
     df["nucleaire"] = pd.to_numeric(df["nucleaire"], errors="coerce")
     df = df.dropna(subset=["nucleaire"])
     if df.empty:
