@@ -138,6 +138,100 @@ def nuclear_availability_to_half_hourly(df, start=None, end=None):
     return half_hourly.loc[start:end].rename("nuclear")
 
 
+def get_rte_french_nuclear(start=None, end=None):
+    """
+    Fetch French nuclear generation from RTE eco2mix (real-time, 15-min).
+    Resamples to 30-min and forward-fills across the forecast window.
+    Returns a Series indexed by UTC timestamps named 'fr_nuclear'.
+    """
+    try:
+        # Use the consolidated (historical) dataset — no null future rows, last ~24h of actuals.
+        # ODS API max limit is 100 records per request; 96 rows = 24h at 15-min resolution.
+        url = "https://opendata.reseaux-energies.fr/api/explore/v2.1/catalog/datasets/eco2mix-national-cons-def/records"
+        params = {
+            "select": "date_heure,nucleaire",
+            "order_by": "date_heure desc",
+            "limit": 96,
+        }
+        response = requests.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        records = response.json().get("results", [])
+        if not records:
+            return pd.Series(dtype=float, name="fr_nuclear")
+        df = pd.DataFrame(records)
+        df["date_heure"] = pd.to_datetime(df["date_heure"], utc=True)
+        df = df.set_index("date_heure").sort_index()
+        df["nucleaire"] = pd.to_numeric(df["nucleaire"], errors="coerce")
+        df = df.dropna(subset=["nucleaire"])
+        if df.empty:
+            return pd.Series(dtype=float, name="fr_nuclear")
+        # Resample 15-min → 30-min
+        s = df["nucleaire"].resample("30min").mean()
+    except Exception:
+        logger.exception("Unable to download RTE eco2mix French nuclear data")
+        return pd.Series(dtype=float, name="fr_nuclear")
+
+    # Forward-fill across the forecast window (up to end)
+    if start is not None and end is not None:
+        idx = pd.date_range(start=start, end=end, freq="30min", tz="UTC")
+        s = s.reindex(idx.union(s.index)).ffill().reindex(idx)
+    s.name = "fr_nuclear"
+    return s
+
+
+def get_neso_opmr(start=None, end=None):
+    """
+    Fetch NESO Daily Operational Planning Margin Requirement.
+    Returns a Series of National Surplus (MW) indexed by UTC timestamps (30-min),
+    broadcast from daily values across the forecast window.
+    """
+    try:
+        # Sort by _id desc (insertion order) so the most recently published batch comes first.
+        # NESO publishes ~14 records per day (one per forecast date). Taking 100 gives ~7 days
+        # of the most recent publication plus overlap from yesterday's.
+        url = "https://api.neso.energy/api/3/action/datastore_search"
+        params = {
+            "resource_id": "0eede912-8820-4c66-a58a-f7436d36b95f",
+            "limit": 100,
+            "sort": "_id desc",
+        }
+        response = requests.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        records = response.json().get("result", {}).get("records", [])
+        if not records:
+            return pd.Series(dtype=float, name="opmr_surplus")
+        df = pd.DataFrame(records)
+        df["Date"] = pd.to_datetime(df["Date"], utc=True)
+        df["Publish Date"] = pd.to_datetime(df["Publish Date"], utc=True)
+        df["National Surplus"] = pd.to_numeric(df["National Surplus"], errors="coerce")
+        # Take the most recently published forecast for each target date
+        df = df.sort_values("Publish Date").drop_duplicates(subset="Date", keep="last")
+        df = df.set_index("Date").sort_index()
+        # Keep only future/current dates
+        today = pd.Timestamp.now(tz="UTC").normalize()
+        df = df[df.index >= today - pd.Timedelta("1d")]
+    except Exception:
+        logger.exception("Unable to download NESO OPMR data")
+        return pd.Series(dtype=float, name="opmr_surplus")
+
+    if len(df) == 0:
+        return pd.Series(dtype=float, name="opmr_surplus")
+
+    # Broadcast daily values to 30-min slots across the forecast window
+    if start is not None and end is not None:
+        idx = pd.date_range(start=start, end=end, freq="30min", tz="UTC")
+    else:
+        idx = pd.date_range(start=df.index[0], periods=48 * len(df), freq="30min", tz="UTC")
+
+    # Reindex daily series onto 30-min slots then forward-fill within each day
+    day_series = df["National Surplus"].copy()
+    day_series.index = day_series.index.normalize()
+    day_series = day_series[~day_series.index.duplicated(keep="last")]
+    result = day_series.reindex(idx, method="ffill")
+    result.name = "opmr_surplus"
+    return result
+
+
 def get_latest_nuclear_forecast(start=None, end=None):
     url = "https://data.elexon.co.uk/bmrs/api/v1/forecast/availability/daily"
     params = {"fuelType": "NUCLEAR", "format": "json"}
@@ -576,6 +670,28 @@ def get_latest_forecast():
 
     df["gas_ttf"] = gas_ttf_at(pd.Timestamp.now(tz="UTC"))
 
+    # French nuclear (RTE eco2mix) — optional, nullable
+    fr_nuc = get_rte_french_nuclear(start=df.index.min(), end=df.index.max())
+    if len(fr_nuc) > 0:
+        df["fr_nuclear"] = fr_nuc.reindex(df.index, method="ffill")
+        source_rows["rte_nuclear"] = int(fr_nuc.notna().sum())
+        source_details["rte_nuclear"] = {"label": "RTE eco2mix", "rows": source_rows["rte_nuclear"], "error": None, "fallback": False}
+    else:
+        df["fr_nuclear"] = None
+        source_rows["rte_nuclear"] = 0
+        source_details["rte_nuclear"] = {"label": "RTE eco2mix", "rows": 0, "error": "no data", "fallback": False}
+
+    # NESO OPMR (daily operating margin) — optional, nullable
+    opmr = get_neso_opmr(start=df.index.min(), end=df.index.max())
+    if len(opmr) > 0:
+        df["opmr_surplus"] = opmr.reindex(df.index, method="ffill")
+        source_rows["neso_opmr"] = int(opmr.notna().sum())
+        source_details["neso_opmr"] = {"label": "NESO OPMR", "rows": source_rows["neso_opmr"], "error": None, "fallback": False}
+    else:
+        df["opmr_surplus"] = None
+        source_rows["neso_opmr"] = 0
+        source_details["neso_opmr"] = {"label": "NESO OPMR", "rows": 0, "error": "no data", "fallback": False}
+
     all_cols = ["emb_wind", "bm_wind", "solar", "nuclear", "gas_ttf", "demand", "temp_2m", "wind_10m", "rad"]
     missing_cols += [c for c in all_cols if c not in df.columns]
     if len(missing_cols) > 0:
@@ -590,7 +706,8 @@ def get_latest_forecast():
         df.index = pd.to_datetime(df.index).tz_convert("GB")
         df.drop(["date_time"], axis=1, inplace=True)
 
-        return df.sort_index().dropna(), missing_cols, source_rows, source_details
+        # dropna only on required columns; fr_nuclear and opmr_surplus are optional
+        return df.sort_index().dropna(subset=all_cols), missing_cols, source_rows, source_details
 
 
 def get_weather_ensemble(n_members=10, forecast_days=3):

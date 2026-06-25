@@ -674,6 +674,23 @@ class Command(BaseCommand):
                         save_plot(fig, "5_feature_importance")
                         logger.info("Saved stats plot 5/5: feature importance")
 
+                        # Persist feature importances to the running UpdateJob so the v2 stats
+                        # page can render them as a Plotly chart without filesystem access.
+                        try:
+                            _fi_dict = {
+                                str(f): round(float(v), 6)
+                                for f, v in zip(features, avg_imp.tolist())
+                            }
+                            _fi_job = UpdateJob.objects.filter(
+                                job_type=UpdateJob.JOB_UPDATE,
+                                status=UpdateJob.STATUS_RUNNING,
+                            ).order_by("-requested_at").first()
+                            if _fi_job:
+                                _fi_job.options["feature_importance"] = _fi_dict
+                                _fi_job.save(update_fields=["options"])
+                        except Exception:
+                            pass
+
                         # fig, ax = plt.subplots(figsize=(8, 6))
                         # bins = [0, 1, 2, 3, 5, 10, 15]
                         # labels = [f"{i}-{j}" for i, j in zip(bins[:-1], bins[1:])]
@@ -879,6 +896,7 @@ class Command(BaseCommand):
                             "day_ahead_classified",
                             "day_ahead_extra_trees",
                             "plunge_probability",
+                            *[c for c in ("fr_nuclear", "opmr_surplus") if c in fc.columns],
                         ]
                     ]
 

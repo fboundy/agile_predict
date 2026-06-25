@@ -1722,6 +1722,8 @@ class GraphV2View(V2NavMixin, TemplateView):
         _stored_forecast_rows = job_api_status.get("forecast_rows", -1)
         _bmrs_rows = source_rows.get("bmrs", -1)
         _om_rows = source_rows.get("openmeteo", -1)
+        _rte_rows = source_rows.get("rte_nuclear", -1)
+        _opmr_rows = source_rows.get("neso_opmr", -1)
 
         def _bin_health(rows, threshold):
             if rows < 0:
@@ -1748,6 +1750,8 @@ class GraphV2View(V2NavMixin, TemplateView):
 
         _bmrs_health = _bin_health(_bmrs_rows, _BMRS_THRESHOLD)
         _om_health = _bin_health(_om_rows, _NESO_THRESHOLD)
+        _rte_health = _bin_health(_rte_rows, 24)    # ≥24 rows = at least 12h of 30-min data
+        _opmr_health = _bin_health(_opmr_rows, 14)  # ≥14 rows = at least 7 days broadcast
 
         # Octopus: check freshness of PriceHistory (binary: ok if ≤ 26 h old)
         latest_price = PriceHistory.objects.order_by("-date_time").first()
@@ -1808,6 +1812,20 @@ class GraphV2View(V2NavMixin, TemplateView):
                 "health": _octopus_health,
                 "detail": "OK" if _octopus_health == "ok" else (
                     f"stale: {int(_octopus_hours_old)}h old" if _octopus_hours_old is not None else "no data"
+                ),
+            },
+            {
+                "name": "RTE (FR nuclear)",
+                "health": _rte_health,
+                "detail": "OK" if _rte_health == "ok" else (
+                    f"{_rte_rows} rows" if _rte_rows > 0 else _src_detail("rte_nuclear")
+                ),
+            },
+            {
+                "name": "NESO OPMR",
+                "health": _opmr_health,
+                "detail": "OK" if _opmr_health == "ok" else (
+                    f"{_opmr_rows} rows" if _opmr_rows > 0 else _src_detail("neso_opmr")
                 ),
             },
         ]
@@ -2171,7 +2189,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                         name=f"Demand ({fc_label})",
                         hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} GW<extra>Demand {fc_label}</extra>",
                     ))
-            figure.update_yaxes(title_text="Power [GW]", row=3, col=1)
+            figure.update_yaxes(title_text="Power [GW]", fixedrange=True, row=3, col=1)
 
         # Colour strip at bottom of price chart
         if not strip_s.empty:
@@ -2218,6 +2236,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 zeroline=True,
                 zerolinecolor="#888",
                 zerolinewidth=2,
+                fixedrange=True,
                 row=1,
                 col=1,
             )
@@ -2229,6 +2248,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                     zeroline=True,
                     zerolinecolor="#888",
                     zerolinewidth=2,
+                    fixedrange=True,
                 ),
             )
 
@@ -2410,6 +2430,7 @@ class HistoryV2View(V2NavMixin, HistoryView):
         fig.update_yaxes(
             title_text=price_unit,
             range=[0, shared_max],
+            fixedrange=True,
             row=1,
             col=1,
         )
@@ -2419,6 +2440,7 @@ class HistoryV2View(V2NavMixin, HistoryView):
             zeroline=True,
             zerolinecolor="#888",
             zerolinewidth=2,
+            fixedrange=True,
             row=2,
             col=1,
         )
@@ -2856,12 +2878,84 @@ class StatsV2View(V2NavMixin, StatsView):
             "chart": fig4.to_html(full_html=False, include_plotlyjs=False),
         })
 
+        # Chart 5: Feature Importance
+        fi_chart = StatsV2View._build_feature_importance_chart()
+        if fi_chart:
+            charts.append(fi_chart)
+
         return {
             "charts": charts,
             "sample_count": sample_count,
             "unique_slots": unique_slots,
             "date_from": date_from,
             "date_to": date_to,
+        }
+
+
+    @staticmethod
+    def _build_feature_importance_chart():
+        """Read feature importances from the most recent UpdateJob and return a chart dict."""
+        fi_job = (
+            UpdateJob.objects
+            .exclude(options__feature_importance=None)
+            .order_by("-requested_at")
+            .first()
+        )
+        if fi_job is None:
+            return None
+        fi = fi_job.options.get("feature_importance", {})
+        if not fi:
+            return None
+
+        _FEATURE_LABELS = {
+            "bm_wind": "BM wind (MW)",
+            "solar": "Solar (MW)",
+            "emb_wind": "Embedded wind (MW)",
+            "nuclear": "UK nuclear (MW)",
+            "fr_nuclear": "FR nuclear (MW)",
+            "gas_ttf": "Gas TTF (€/MWh)",
+            "demand": "Demand (MW)",
+            "temp_2m": "Temperature (°C)",
+            "wind_10m": "Wind speed (m/s)",
+            "rad": "Radiation (W/m²)",
+            "opmr_surplus": "OPMR surplus (MW)",
+            "peak": "Peak hours (16–19)",
+            "weekend": "Weekend",
+            "days_ago": "Forecast age (days)",
+            "dt": "Lead time (days)",
+            "time": "Time of day",
+            "dow": "Day of week",
+        }
+
+        sorted_items = sorted(fi.items(), key=lambda x: x[1])
+        labels = [_FEATURE_LABELS.get(k, k) for k, _ in sorted_items]
+        values = [v for _, v in sorted_items]
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=values,
+            y=labels,
+            orientation="h",
+            marker_color="#4a90d9",
+            hovertemplate="%{y}<br>Importance: %{x:.4f}<extra></extra>",
+        ))
+        fig.update_layout(
+            template="plotly_dark",
+            plot_bgcolor="#212529",
+            paper_bgcolor="#343a40",
+            height=max(300, 30 * len(labels) + 60),
+            margin={"r": 10, "t": 30, "l": 170, "b": 50},
+            xaxis={"title": "Relative importance (ensemble average)"},
+            yaxis={"title": ""},
+        )
+        return {
+            "title": "Feature Importance",
+            "description": (
+                "Average normalised feature importance across the three ensemble models (CatBoost, LightGBM, ExtraTrees). "
+                "Higher bars indicate features that most strongly drive the predicted price. "
+                "Updated each time the model retrains."
+            ),
+            "chart": fig.to_html(full_html=False, include_plotlyjs=False),
         }
 
 

@@ -139,6 +139,8 @@ class ForecastData(models.Model):
     wind_10m = models.FloatField()
     rad = models.FloatField()
     demand = models.FloatField()
+    fr_nuclear = models.FloatField(null=True, blank=True)
+    opmr_surplus = models.FloatField(null=True, blank=True)
     # other_gen_capacity = models.FloatField()
     # intercon_capacity = models.FloatField()
 
