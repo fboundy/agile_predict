@@ -34,11 +34,12 @@ def fetch_opmr_history(earliest_date, latest_publish):
     total = r0.json().get("result", {}).get("total", 0)
 
     # Each target date gets ~14 publication records (one per published day).
-    # Estimate how many records to skip: records before our window.
+    # Start 90 days before our earliest target date to ensure full coverage,
+    # then page forward. 90 days × 14 records/day = 1,260 record buffer.
     today_est = pd.Timestamp(earliest_date).normalize()
     dataset_start = pd.Timestamp("2021-03-14", tz="UTC")
-    days_before = max((today_est - dataset_start).days - 30, 0)
-    start_offset = max(0, int(days_before * 14) - 500)  # generous buffer
+    days_before = max((today_est - dataset_start).days - 90, 0)
+    start_offset = max(0, int(days_before * 14) - 1500)  # generous buffer
 
     all_records = []
     offset = start_offset
