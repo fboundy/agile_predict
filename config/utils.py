@@ -138,86 +138,44 @@ def nuclear_availability_to_half_hourly(df, start=None, end=None):
     return half_hourly.loc[start:end].rename("nuclear")
 
 
-def _parse_entsoe_prices(xml_text):
+def get_open_meteo_fr_weather(start=None, end=None):
     """
-    Parse an ENTSO-E Price Document (A44) XML into a UTC-indexed Series of prices.
-    Handles both quantity (flow) and price.amount elements.
-    Returns empty Series on error or when no data (Acknowledgement document).
+    Fetch 16-day Open-Meteo weather forecast for central France (47°N, 2°E).
+    Returns a DataFrame with columns fr_wind (m/s) and fr_rad (W/m²) at 30-min
+    resolution, as a continental supply-side proxy for interconnector direction.
+    High FR wind / solar → lower continental prices → more likely FR→GB flow.
     """
-    from xml.etree import ElementTree as ET
-    root = ET.fromstring(xml_text)
-    if "Acknowledgement" in root.tag:
-        return pd.Series(dtype=float)
-
-    records = []
-    for ts in root.findall(".//{*}TimeSeries"):
-        for period in ts.findall("{*}Period"):
-            start_el = period.find("{*}timeInterval/{*}start")
-            res_el   = period.find("{*}resolution")
-            if start_el is None or res_el is None:
-                continue
-            start_ts = pd.Timestamp(start_el.text, tz="UTC")
-            minutes  = {"PT60M": 60, "PT30M": 30, "PT15M": 15}.get(res_el.text, 60)
-            for point in period.findall("{*}Point"):
-                pos_el   = point.find("{*}position")
-                price_el = point.find("{*}price.amount")
-                if pos_el is None or price_el is None:
-                    continue
-                ts_val = start_ts + pd.Timedelta(minutes=minutes * (int(pos_el.text) - 1))
-                records.append({"ts": ts_val, "price": float(price_el.text)})
-
-    if not records:
-        return pd.Series(dtype=float)
-    return pd.DataFrame(records).set_index("ts")["price"].sort_index()
-
-
-def get_entsoe_fr_price(start=None, end=None):
-    """
-    Fetch French day-ahead electricity market price (EUR/MWh) from ENTSO-E (A44).
-    Available through D+1 (~12-36h ahead); forward-filled for the rest of the
-    forecast window. Acts as a continental price signal correlated with GB prices
-    via the interconnectors.
-    """
-    from django.conf import settings
-    token = getattr(settings, "ENTSOE_API_KEY", "")
-    if not token:
-        return pd.Series(dtype=float, name="fr_price")
-
-    FR = "10YFR-RTE------C"
-    # Fetch 2 days back (anchor) + 2 days ahead (D+1 is as far as DA prices reach)
-    p_start = pd.Timestamp.now(tz="UTC").normalize() - pd.Timedelta("2d")
-    p_end   = pd.Timestamp.now(tz="UTC").normalize() + pd.Timedelta("3d")
-    url = "https://web-api.tp.entsoe.eu/api"
-    params = {
-        "securityToken": token,
-        "documentType":  "A44",
-        "out_Domain":    FR,
-        "in_Domain":     FR,
-        "periodStart":   p_start.strftime("%Y%m%d%H%M"),
-        "periodEnd":     p_end.strftime("%Y%m%d%H%M"),
-    }
     try:
+        url = "https://api.open-meteo.com/v1/forecast"
+        params = {
+            "latitude":   47.0,
+            "longitude":  2.0,
+            "hourly":     "wind_speed_10m,shortwave_radiation",
+            "wind_speed_unit": "ms",
+            "timeformat": "unixtime",
+            "timezone":   "UTC",
+            "forecast_days": 16,
+        }
         resp = requests.get(url, params=params, timeout=30)
         resp.raise_for_status()
-        s = _parse_entsoe_prices(resp.text)
-        if s.empty:
-            return pd.Series(dtype=float, name="fr_price")
+        data = resp.json()
+        times = pd.to_datetime(data["hourly"]["time"], unit="s", utc=True)
+        df = pd.DataFrame({
+            "fr_wind": data["hourly"]["wind_speed_10m"],
+            "fr_rad":  data["hourly"]["shortwave_radiation"],
+        }, index=times)
+        df = df.resample("30min").interpolate(method="time")
+        if start is not None and end is not None:
+            idx = pd.date_range(
+                start=pd.Timestamp(start).tz_convert("UTC"),
+                end=pd.Timestamp(end).tz_convert("UTC"),
+                freq="30min",
+            )
+            df = df.reindex(idx.union(df.index)).interpolate(method="time").reindex(idx)
+        return df
     except Exception:
-        logger.exception("ENTSO-E: failed to fetch FR day-ahead price")
-        return pd.Series(dtype=float, name="fr_price")
-
-    # Resample to 30-min and forward-fill across the forecast window
-    s = s.resample("30min").mean().ffill()
-    if start is not None and end is not None:
-        idx = pd.date_range(
-            start=pd.Timestamp(start).tz_convert("UTC"),
-            end=pd.Timestamp(end).tz_convert("UTC"),
-            freq="30min",
-        )
-        s = s.reindex(idx.union(s.index)).ffill().reindex(idx)
-
-    s.name = "fr_price"
-    return s
+        logger.exception("Open-Meteo FR: failed to fetch French weather")
+        return pd.DataFrame(columns=["fr_wind", "fr_rad"])
 
 
 def get_rte_french_nuclear(start=None, end=None):
@@ -782,16 +740,19 @@ def get_latest_forecast():
         source_rows["neso_opmr"] = 0
         source_details["neso_opmr"] = {"label": "NESO OPMR", "rows": 0, "error": "no data", "fallback": False}
 
-    # ENTSO-E French day-ahead price (EUR/MWh) — optional, nullable
-    fr_p = get_entsoe_fr_price(start=df.index.min(), end=df.index.max())
-    if len(fr_p) > 0:
-        df["fr_price"] = fr_p.reindex(df.index, method="ffill")
-        source_rows["entsoe"] = int(fr_p.notna().sum())
-        source_details["entsoe"] = {"label": "ENTSO-E", "rows": source_rows["entsoe"], "error": None, "fallback": False}
+    # Open-Meteo France weather (wind+rad) — continental supply proxy, 16-day forecast
+    fr_wx = get_open_meteo_fr_weather(start=df.index.min(), end=df.index.max())
+    if not fr_wx.empty and fr_wx["fr_wind"].notna().any():
+        df["fr_wind"] = fr_wx["fr_wind"].reindex(df.index, method="nearest")
+        df["fr_rad"]  = fr_wx["fr_rad"].reindex(df.index, method="nearest")
+        _fr_rows = int(fr_wx["fr_wind"].notna().sum())
+        source_rows["openmeteo_fr"] = _fr_rows
+        source_details["openmeteo_fr"] = {"label": "Open-Meteo FR", "rows": _fr_rows, "error": None, "fallback": False}
     else:
-        df["fr_price"] = None
-        source_rows["entsoe"] = 0
-        source_details["entsoe"] = {"label": "ENTSO-E", "rows": 0, "error": "no data", "fallback": False}
+        df["fr_wind"] = None
+        df["fr_rad"]  = None
+        source_rows["openmeteo_fr"] = 0
+        source_details["openmeteo_fr"] = {"label": "Open-Meteo FR", "rows": 0, "error": "no data", "fallback": False}
 
     all_cols = ["emb_wind", "bm_wind", "solar", "nuclear", "gas_ttf", "demand", "temp_2m", "wind_10m", "rad"]
     missing_cols += [c for c in all_cols if c not in df.columns]

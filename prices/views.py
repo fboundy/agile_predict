@@ -1724,7 +1724,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         _om_rows = source_rows.get("openmeteo", -1)
         _rte_rows = source_rows.get("rte_nuclear", -1)
         _opmr_rows = source_rows.get("neso_opmr", -1)
-        _entsoe_rows = source_rows.get("entsoe", -1)
+        _om_fr_rows = source_rows.get("openmeteo_fr", -1)
 
         def _bin_health(rows, threshold):
             if rows < 0:
@@ -1753,7 +1753,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         _om_health = _bin_health(_om_rows, _NESO_THRESHOLD)
         _rte_health = _bin_health(_rte_rows, 24)      # ≥24 rows = at least 12h of 30-min data
         _opmr_health = _bin_health(_opmr_rows, 14)   # ≥14 rows = at least 7 days broadcast
-        _entsoe_health = _bin_health(_entsoe_rows, 48)  # ≥48 rows = at least 24h of scheduled flows
+        _om_fr_health = _bin_health(_om_fr_rows, 336)  # ≥336 rows = at least 7 days of 30-min data
 
         # Octopus: check freshness of PriceHistory (binary: ok if ≤ 26 h old)
         latest_price = PriceHistory.objects.order_by("-date_time").first()
@@ -1831,10 +1831,10 @@ class GraphV2View(V2NavMixin, TemplateView):
                 ),
             },
             {
-                "name": "ENTSO-E",
-                "health": _entsoe_health,
-                "detail": "OK" if _entsoe_health == "ok" else (
-                    f"{_entsoe_rows} rows" if _entsoe_rows > 0 else _src_detail("entsoe")
+                "name": "Open-Meteo FR",
+                "health": _om_fr_health,
+                "detail": "OK" if _om_fr_health == "ok" else (
+                    f"{_om_fr_rows} rows" if _om_fr_rows > 0 else _src_detail("openmeteo_fr")
                 ),
             },
         ]
@@ -2928,7 +2928,8 @@ class StatsV2View(V2NavMixin, StatsView):
             "wind_10m": "Wind speed (m/s)",
             "rad": "Radiation (W/m²)",
             "opmr_surplus": "OPMR surplus (MW)",
-            "fr_price": "France day-ahead price (EUR/MWh)",
+            "fr_wind": "France wind speed (m/s)",
+            "fr_rad": "France solar radiation (W/m²)",
             "peak": "Peak hours (16–19)",
             "weekend": "Weekend",
             "days_ago": "Forecast age (days)",

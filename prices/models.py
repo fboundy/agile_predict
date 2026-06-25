@@ -141,7 +141,8 @@ class ForecastData(models.Model):
     demand = models.FloatField()
     fr_nuclear = models.FloatField(null=True, blank=True)
     opmr_surplus = models.FloatField(null=True, blank=True)
-    fr_price = models.FloatField(null=True, blank=True)
+    fr_wind = models.FloatField(null=True, blank=True)
+    fr_rad = models.FloatField(null=True, blank=True)
 
     # def __str__(self):
     #     return f"{self.date_time.strftime('%Y-%m-%dT%H:%M%Z') {self.agile:5.2f}}"
