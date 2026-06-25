@@ -141,8 +141,7 @@ class ForecastData(models.Model):
     demand = models.FloatField()
     fr_nuclear = models.FloatField(null=True, blank=True)
     opmr_surplus = models.FloatField(null=True, blank=True)
-    # other_gen_capacity = models.FloatField()
-    # intercon_capacity = models.FloatField()
+    interconnector_flow = models.FloatField(null=True, blank=True)
 
     # def __str__(self):
     #     return f"{self.date_time.strftime('%Y-%m-%dT%H:%M%Z') {self.agile:5.2f}}"

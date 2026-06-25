@@ -1724,6 +1724,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         _om_rows = source_rows.get("openmeteo", -1)
         _rte_rows = source_rows.get("rte_nuclear", -1)
         _opmr_rows = source_rows.get("neso_opmr", -1)
+        _entsoe_rows = source_rows.get("entsoe", -1)
 
         def _bin_health(rows, threshold):
             if rows < 0:
@@ -1750,8 +1751,9 @@ class GraphV2View(V2NavMixin, TemplateView):
 
         _bmrs_health = _bin_health(_bmrs_rows, _BMRS_THRESHOLD)
         _om_health = _bin_health(_om_rows, _NESO_THRESHOLD)
-        _rte_health = _bin_health(_rte_rows, 24)    # ≥24 rows = at least 12h of 30-min data
-        _opmr_health = _bin_health(_opmr_rows, 14)  # ≥14 rows = at least 7 days broadcast
+        _rte_health = _bin_health(_rte_rows, 24)      # ≥24 rows = at least 12h of 30-min data
+        _opmr_health = _bin_health(_opmr_rows, 14)   # ≥14 rows = at least 7 days broadcast
+        _entsoe_health = _bin_health(_entsoe_rows, 48)  # ≥48 rows = at least 24h of scheduled flows
 
         # Octopus: check freshness of PriceHistory (binary: ok if ≤ 26 h old)
         latest_price = PriceHistory.objects.order_by("-date_time").first()
@@ -1826,6 +1828,13 @@ class GraphV2View(V2NavMixin, TemplateView):
                 "health": _opmr_health,
                 "detail": "OK" if _opmr_health == "ok" else (
                     f"{_opmr_rows} rows" if _opmr_rows > 0 else _src_detail("neso_opmr")
+                ),
+            },
+            {
+                "name": "ENTSO-E",
+                "health": _entsoe_health,
+                "detail": "OK" if _entsoe_health == "ok" else (
+                    f"{_entsoe_rows} rows" if _entsoe_rows > 0 else _src_detail("entsoe")
                 ),
             },
         ]
@@ -2919,6 +2928,7 @@ class StatsV2View(V2NavMixin, StatsView):
             "wind_10m": "Wind speed (m/s)",
             "rad": "Radiation (W/m²)",
             "opmr_surplus": "OPMR surplus (MW)",
+            "interconnector_flow": "Interconnector net import (MW)",
             "peak": "Peak hours (16–19)",
             "weekend": "Weekend",
             "days_ago": "Forecast age (days)",

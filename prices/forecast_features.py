@@ -22,9 +22,18 @@ EXPERIMENT_FEATURE_SETS = {
         "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
         "temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear",
     ],
+    "interconnect": [
+        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
+        "interconnector_flow",
+    ],
+    "weather_fuel_interconnect": [
+        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
+        "temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "interconnector_flow",
+    ],
     "full": [
         "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
         "temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear", "opmr_surplus",
+        "interconnector_flow",
     ],
 }
 
