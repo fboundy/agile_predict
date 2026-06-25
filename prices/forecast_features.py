@@ -1,5 +1,32 @@
 import pandas as pd
 
+# Candidate feature sets evaluated by the periodic feature experiment.
+# Keys are stored in UpdateJob.options["feature_experiment"]["feature_set"].
+EXPERIMENT_FEATURE_SETS = {
+    "generation": [
+        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
+    ],
+    "weather": [
+        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
+        "temp_2m", "wind_10m", "rad",
+    ],
+    "fuel": [
+        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
+        "nuclear", "gas_ttf",
+    ],
+    "weather_fuel": [
+        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
+        "temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf",
+    ],
+    "weather_fuel_fr": [
+        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
+        "temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear",
+    ],
+    "full": [
+        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
+        "temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear", "opmr_surplus",
+    ],
+}
 
 FEATURE_SETS = {
     "default": (
