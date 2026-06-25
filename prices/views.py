@@ -1838,7 +1838,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 ),
             },
             {
-                "name": "RTE (nuclear)",
+                "name": "FR nuclear",
                 "health": _rte_health,
                 "detail": "OK" if _rte_health == "ok" else (
                     f"{_rte_rows} rows" if _rte_rows > 0 else _src_detail("rte_nuclear")

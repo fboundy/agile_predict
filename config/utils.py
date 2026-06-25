@@ -178,37 +178,68 @@ def get_open_meteo_fr_weather(start=None, end=None):
         return pd.DataFrame(columns=["fr_wind", "fr_rad"])
 
 
+def _parse_entsoe_qty(xml_text):
+    """Parse ENTSO-E generation XML into a UTC-indexed Series of quantities."""
+    from xml.etree import ElementTree as ET
+    root = ET.fromstring(xml_text)
+    if "Acknowledgement" in root.tag:
+        return pd.Series(dtype=float)
+    records = []
+    for ts in root.findall(".//{*}TimeSeries"):
+        for period in ts.findall("{*}Period"):
+            start_el = period.find("{*}timeInterval/{*}start")
+            res_el   = period.find("{*}resolution")
+            if start_el is None or res_el is None:
+                continue
+            start_ts = pd.Timestamp(start_el.text, tz="UTC")
+            minutes  = {"PT60M": 60, "PT30M": 30, "PT15M": 15}.get(res_el.text, 60)
+            for point in period.findall("{*}Point"):
+                pos_el = point.find("{*}position")
+                qty_el = point.find("{*}quantity")
+                if pos_el is None or qty_el is None:
+                    continue
+                ts_val = start_ts + pd.Timedelta(minutes=minutes * (int(pos_el.text) - 1))
+                records.append({"ts": ts_val, "qty": float(qty_el.text)})
+    if not records:
+        return pd.Series(dtype=float)
+    return pd.DataFrame(records).set_index("ts")["qty"].sort_index()
+
+
 def get_rte_french_nuclear(start=None, end=None):
     """
-    Fetch French nuclear generation from RTE eco2mix (real-time, 15-min).
-    Resamples to 30-min and forward-fills across the forecast window.
+    Fetch French nuclear actual generation from ENTSO-E (A75, psrType B14).
+    Fetches the last 3 days of actuals (R-0 from ENTSO-E), resamples to 30-min,
+    and forward-fills across the forecast window.
     Returns a Series indexed by UTC timestamps named 'fr_nuclear'.
+
+    Replaces the previous RTE eco2mix source, which has a ~5-month publication
+    delay and was returning January 2026 values in June 2026.
     """
+    from django.conf import settings
+    token = getattr(settings, "ENTSOE_API_KEY", "")
+    if not token:
+        return pd.Series(dtype=float, name="fr_nuclear")
+
     try:
-        # Use the consolidated (historical) dataset — no null future rows, last ~24h of actuals.
-        # ODS API max limit is 100 records per request; 96 rows = 24h at 15-min resolution.
-        url = "https://opendata.reseaux-energies.fr/api/explore/v2.1/catalog/datasets/eco2mix-national-cons-def/records"
-        params = {
-            "select": "date_heure,nucleaire",
-            "order_by": "date_heure desc",
-            "limit": 96,
-        }
-        response = requests.get(url, params=params, timeout=30)
-        response.raise_for_status()
-        records = response.json().get("results", [])
-        if not records:
+        now = pd.Timestamp.now(tz="UTC")
+        p_start = (now - pd.Timedelta("3d")).normalize()
+        p_end   = now.normalize() + pd.Timedelta("1d")
+        resp = requests.get("https://web-api.tp.entsoe.eu/api", params={
+            "securityToken": token,
+            "documentType":  "A75",
+            "processType":   "A16",
+            "in_Domain":     "10YFR-RTE------C",
+            "psrType":       "B14",
+            "periodStart":   p_start.strftime("%Y%m%d%H%M"),
+            "periodEnd":     p_end.strftime("%Y%m%d%H%M"),
+        }, timeout=30)
+        resp.raise_for_status()
+        s = _parse_entsoe_qty(resp.text)
+        if s.empty:
             return pd.Series(dtype=float, name="fr_nuclear")
-        df = pd.DataFrame(records)
-        df["date_heure"] = pd.to_datetime(df["date_heure"], utc=True)
-        df = df.set_index("date_heure").sort_index()
-        df["nucleaire"] = pd.to_numeric(df["nucleaire"], errors="coerce")
-        df = df.dropna(subset=["nucleaire"])
-        if df.empty:
-            return pd.Series(dtype=float, name="fr_nuclear")
-        # Resample 15-min → 30-min
-        s = df["nucleaire"].resample("30min").mean()
+        s = s.resample("30min").mean()
     except Exception:
-        logger.exception("Unable to download RTE eco2mix French nuclear data")
+        logger.exception("ENTSO-E A75: failed to fetch FR nuclear generation")
         return pd.Series(dtype=float, name="fr_nuclear")
 
     # Forward-fill across the forecast window (up to end)
@@ -718,16 +749,16 @@ def get_latest_forecast():
 
     df["gas_ttf"] = gas_ttf_at(pd.Timestamp.now(tz="UTC"))
 
-    # French nuclear (RTE eco2mix) — optional, nullable
+    # French nuclear actual generation (ENTSO-E A75) — optional, nullable
     fr_nuc = get_rte_french_nuclear(start=df.index.min(), end=df.index.max())
     if len(fr_nuc) > 0:
         df["fr_nuclear"] = fr_nuc.reindex(df.index, method="ffill")
         source_rows["rte_nuclear"] = int(fr_nuc.notna().sum())
-        source_details["rte_nuclear"] = {"label": "RTE eco2mix", "rows": source_rows["rte_nuclear"], "error": None, "fallback": False}
+        source_details["rte_nuclear"] = {"label": "ENTSO-E FR nuclear", "rows": source_rows["rte_nuclear"], "error": None, "fallback": False}
     else:
         df["fr_nuclear"] = None
         source_rows["rte_nuclear"] = 0
-        source_details["rte_nuclear"] = {"label": "RTE eco2mix", "rows": 0, "error": "no data", "fallback": False}
+        source_details["rte_nuclear"] = {"label": "ENTSO-E FR nuclear", "rows": 0, "error": "no data", "fallback": False}
 
     # NESO OPMR (daily operating margin) — optional, nullable
     opmr = get_neso_opmr(start=df.index.min(), end=df.index.max())
