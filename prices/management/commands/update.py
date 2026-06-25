@@ -405,7 +405,7 @@ class Command(BaseCommand):
             }
             try:
                 running_job = UpdateJob.objects.filter(
-                    job_type=UpdateJob.JOB_UPDATE, status=UpdateJob.STATUS_RUNNING,
+                    job_type=UpdateJob.JOB_UPDATE,
                 ).order_by("-requested_at").first()
                 if running_job:
                     running_job.options["api_status"] = api_status_data
@@ -683,7 +683,6 @@ class Command(BaseCommand):
                             }
                             _fi_job = UpdateJob.objects.filter(
                                 job_type=UpdateJob.JOB_UPDATE,
-                                status=UpdateJob.STATUS_RUNNING,
                             ).order_by("-requested_at").first()
                             if _fi_job:
                                 _fi_job.options["feature_importance"] = _fi_dict
