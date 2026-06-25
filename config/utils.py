@@ -138,112 +138,86 @@ def nuclear_availability_to_half_hourly(df, start=None, end=None):
     return half_hourly.loc[start:end].rename("nuclear")
 
 
-def _parse_entsoe_xml(xml_text):
-    """Parse an ENTSO-E Publication_MarketDocument into a UTC-indexed Series of quantities."""
+def _parse_entsoe_prices(xml_text):
+    """
+    Parse an ENTSO-E Price Document (A44) XML into a UTC-indexed Series of prices.
+    Handles both quantity (flow) and price.amount elements.
+    Returns empty Series on error or when no data (Acknowledgement document).
+    """
     from xml.etree import ElementTree as ET
     root = ET.fromstring(xml_text)
-    # Namespace varies by document type; detect from root tag
-    ns_uri = root.tag.split("}")[0].lstrip("{") if "}" in root.tag else ""
-    ns = {"ns": ns_uri} if ns_uri else {}
-    tag = lambda t: f"ns:{t}" if ns else t
+    if "Acknowledgement" in root.tag:
+        return pd.Series(dtype=float)
 
     records = []
-    for ts in root.findall(tag("TimeSeries"), ns):
-        for period in ts.findall(tag("Period"), ns):
-            start_el = period.find(f"{tag('timeInterval')}/{tag('start')}", ns)
-            res_el   = period.find(tag("resolution"), ns)
+    for ts in root.findall(".//{*}TimeSeries"):
+        for period in ts.findall("{*}Period"):
+            start_el = period.find("{*}timeInterval/{*}start")
+            res_el   = period.find("{*}resolution")
             if start_el is None or res_el is None:
                 continue
             start_ts = pd.Timestamp(start_el.text, tz="UTC")
-            res_map  = {"PT60M": 60, "PT30M": 30, "PT15M": 15}
-            minutes  = res_map.get(res_el.text, 60)
-            for point in period.findall(tag("Point"), ns):
-                pos_el = point.find(tag("position"), ns)
-                qty_el = point.find(tag("quantity"), ns)
-                if pos_el is None or qty_el is None:
+            minutes  = {"PT60M": 60, "PT30M": 30, "PT15M": 15}.get(res_el.text, 60)
+            for point in period.findall("{*}Point"):
+                pos_el   = point.find("{*}position")
+                price_el = point.find("{*}price.amount")
+                if pos_el is None or price_el is None:
                     continue
                 ts_val = start_ts + pd.Timedelta(minutes=minutes * (int(pos_el.text) - 1))
-                records.append({"ts": ts_val, "qty": float(qty_el.text)})
+                records.append({"ts": ts_val, "price": float(price_el.text)})
 
     if not records:
         return pd.Series(dtype=float)
-    df = pd.DataFrame(records).set_index("ts")
-    return df["qty"].sort_index()
+    return pd.DataFrame(records).set_index("ts")["price"].sort_index()
 
 
-def _fetch_entsoe_series(token, doc_type, out_domain, in_domain, period_start, period_end):
-    url = "https://web-api.tp.entsoe.eu/api"
-    params = {
-        "securityToken": token,
-        "documentType":  doc_type,
-        "out_Domain":    out_domain,
-        "in_Domain":     in_domain,
-        "periodStart":   period_start.strftime("%Y%m%d%H%M"),
-        "periodEnd":     period_end.strftime("%Y%m%d%H%M"),
-    }
-    resp = requests.get(url, params=params, timeout=30)
-    resp.raise_for_status()
-    return _parse_entsoe_xml(resp.text)
-
-
-def get_entsoe_interconnector_flows(start=None, end=None):
+def get_entsoe_fr_price(start=None, end=None):
     """
-    Fetch GB net interconnector imports (MW) from ENTSO-E scheduled commercial
-    exchanges (A09). Positive = net import to GB.
-
-    Covers FR, BE, NL, DK neighbours. Uses scheduled day-ahead flows where
-    available (~D+1) then forward-fills across the forecast window.
+    Fetch French day-ahead electricity market price (EUR/MWh) from ENTSO-E (A44).
+    Available through D+1 (~12-36h ahead); forward-filled for the rest of the
+    forecast window. Acts as a continental price signal correlated with GB prices
+    via the interconnectors.
     """
     from django.conf import settings
     token = getattr(settings, "ENTSOE_API_KEY", "")
     if not token:
-        return pd.Series(dtype=float, name="interconnector_flow")
+        return pd.Series(dtype=float, name="fr_price")
 
-    GB = "10Y1001A1001A016"
-    NEIGHBOURS = {
-        "FR": "10YFR-RTE------C",
-        "BE": "10YBE----------2",
-        "NL": "10YNL----------L",
-        "DK": "10YDK-1--------W",
-    }
-    DOC_TYPE = "A09"  # Scheduled commercial exchanges (day-ahead)
-
-    # Fetch window: 2 days back (to anchor forward-fill) + 2 days ahead
+    FR = "10YFR-RTE------C"
+    # Fetch 2 days back (anchor) + 2 days ahead (D+1 is as far as DA prices reach)
     p_start = pd.Timestamp.now(tz="UTC").normalize() - pd.Timedelta("2d")
     p_end   = pd.Timestamp.now(tz="UTC").normalize() + pd.Timedelta("3d")
+    url = "https://web-api.tp.entsoe.eu/api"
+    params = {
+        "securityToken": token,
+        "documentType":  "A44",
+        "out_Domain":    FR,
+        "in_Domain":     FR,
+        "periodStart":   p_start.strftime("%Y%m%d%H%M"),
+        "periodEnd":     p_end.strftime("%Y%m%d%H%M"),
+    }
+    try:
+        resp = requests.get(url, params=params, timeout=30)
+        resp.raise_for_status()
+        s = _parse_entsoe_prices(resp.text)
+        if s.empty:
+            return pd.Series(dtype=float, name="fr_price")
+    except Exception:
+        logger.exception("ENTSO-E: failed to fetch FR day-ahead price")
+        return pd.Series(dtype=float, name="fr_price")
 
-    net = pd.Series(dtype=float)
-    rows_fetched = 0
-    for country, domain in NEIGHBOURS.items():
-        try:
-            imp = _fetch_entsoe_series(token, DOC_TYPE, domain, GB, p_start, p_end)
-            exp = _fetch_entsoe_series(token, DOC_TYPE, GB, domain, p_start, p_end)
-            if imp.empty and exp.empty:
-                continue
-            idx = imp.index.union(exp.index)
-            net_cc = imp.reindex(idx).fillna(0) - exp.reindex(idx).fillna(0)
-            net = net_cc if net.empty else net.add(net_cc, fill_value=0)
-            rows_fetched += len(net_cc)
-        except Exception:
-            logger.exception("ENTSO-E: failed to fetch %s↔GB flow", country)
-
-    if net.empty:
-        return pd.Series(dtype=float, name="interconnector_flow")
-
-    # Resample to 30-min
-    net = net.resample("30min").mean().ffill()
-
-    # Forward-fill across the forecast window
+    # Resample to 30-min and forward-fill across the forecast window
+    s = s.resample("30min").mean().ffill()
     if start is not None and end is not None:
         idx = pd.date_range(
             start=pd.Timestamp(start).tz_convert("UTC"),
             end=pd.Timestamp(end).tz_convert("UTC"),
             freq="30min",
         )
-        net = net.reindex(idx.union(net.index)).ffill().reindex(idx)
+        s = s.reindex(idx.union(s.index)).ffill().reindex(idx)
 
-    net.name = "interconnector_flow"
-    return net
+    s.name = "fr_price"
+    return s
 
 
 def get_rte_french_nuclear(start=None, end=None):
@@ -808,14 +782,14 @@ def get_latest_forecast():
         source_rows["neso_opmr"] = 0
         source_details["neso_opmr"] = {"label": "NESO OPMR", "rows": 0, "error": "no data", "fallback": False}
 
-    # ENTSO-E interconnector net imports — optional, nullable
-    ic = get_entsoe_interconnector_flows(start=df.index.min(), end=df.index.max())
-    if len(ic) > 0:
-        df["interconnector_flow"] = ic.reindex(df.index, method="ffill")
-        source_rows["entsoe"] = int(ic.notna().sum())
+    # ENTSO-E French day-ahead price (EUR/MWh) — optional, nullable
+    fr_p = get_entsoe_fr_price(start=df.index.min(), end=df.index.max())
+    if len(fr_p) > 0:
+        df["fr_price"] = fr_p.reindex(df.index, method="ffill")
+        source_rows["entsoe"] = int(fr_p.notna().sum())
         source_details["entsoe"] = {"label": "ENTSO-E", "rows": source_rows["entsoe"], "error": None, "fallback": False}
     else:
-        df["interconnector_flow"] = None
+        df["fr_price"] = None
         source_rows["entsoe"] = 0
         source_details["entsoe"] = {"label": "ENTSO-E", "rows": 0, "error": "no data", "fallback": False}
 

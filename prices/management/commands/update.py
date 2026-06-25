@@ -1083,7 +1083,7 @@ class Command(BaseCommand):
                             "day_ahead_classified",
                             "day_ahead_extra_trees",
                             "plunge_probability",
-                            *[c for c in ("fr_nuclear", "opmr_surplus", "interconnector_flow") if c in fc.columns],
+                            *[c for c in ("fr_nuclear", "opmr_surplus", "fr_price") if c in fc.columns],
                         ]
                     ]
 

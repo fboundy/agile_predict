@@ -22,18 +22,18 @@ EXPERIMENT_FEATURE_SETS = {
         "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
         "temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear",
     ],
-    "interconnect": [
+    "fr_price": [
         "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
-        "interconnector_flow",
+        "fr_price",
     ],
-    "weather_fuel_interconnect": [
+    "weather_fuel_fr_price": [
         "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
-        "temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "interconnector_flow",
+        "temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_price",
     ],
     "full": [
         "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
         "temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear", "opmr_surplus",
-        "interconnector_flow",
+        "fr_price",
     ],
 }
 

@@ -2928,7 +2928,7 @@ class StatsV2View(V2NavMixin, StatsView):
             "wind_10m": "Wind speed (m/s)",
             "rad": "Radiation (W/m²)",
             "opmr_surplus": "OPMR surplus (MW)",
-            "interconnector_flow": "Interconnector net import (MW)",
+            "fr_price": "France day-ahead price (EUR/MWh)",
             "peak": "Peak hours (16–19)",
             "weekend": "Weekend",
             "days_ago": "Forecast age (days)",
