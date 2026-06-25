@@ -382,6 +382,12 @@ class Command(BaseCommand):
         )
 
         parser.add_argument(
+            "--force_experiment",
+            action="store_true",
+            help="Force the feature-set experiment to run regardless of the 14-day schedule.",
+        )
+
+        parser.add_argument(
             "--train_frac",
         )
 
@@ -435,7 +441,8 @@ class Command(BaseCommand):
             pass
 
         _experiment_due = (
-            _last_exp_date is None
+            options.get("force_experiment")
+            or _last_exp_date is None
             or (pd.Timestamp.now(tz="UTC") - _last_exp_date).days >= 14
         )
         if _experiment_due:
