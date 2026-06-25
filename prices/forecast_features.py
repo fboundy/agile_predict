@@ -26,6 +26,14 @@ EXPERIMENT_FEATURE_SETS = {
         "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
         "fr_wind", "fr_rad",
     ],
+    "fr_weather_opmr": [
+        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
+        "fr_wind", "fr_rad", "opmr_surplus",
+    ],
+    "fr_weather_nuclear": [
+        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
+        "fr_wind", "fr_rad", "fr_nuclear",
+    ],
     "weather_fuel_fr_weather": [
         "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
         "temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_wind", "fr_rad",
