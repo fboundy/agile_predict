@@ -26,21 +26,14 @@ def fetch_rte_nuclear_history(start_dt, end_dt):
     start_ts = pd.Timestamp(start_dt).tz_convert("UTC")
     end_ts   = pd.Timestamp(end_dt).tz_convert("UTC")
 
-    # Get total record count to estimate starting offset
-    r0 = requests.get(RTE_URL, params={"select": "date_heure", "limit": 1, "order_by": "date_heure desc"}, timeout=15)
-    r0.raise_for_status()
-    total = r0.json().get("total_count", 0)
-    # Each 15-min record; estimate records in our window + generous buffer
-    window_days = max((end_ts - start_ts).days + 2, 5)
-    window_records = window_days * 96
-    start_offset = max(0, total - window_records - 500)
-
+    # ODS API has a maximum offset limit, so we fetch newest-first (desc)
+    # and stop once records go older than our start date.
     records = []
-    offset = start_offset
+    offset = 0
     while True:
         resp = requests.get(RTE_URL, params={
             "select":   "date_heure,nucleaire",
-            "order_by": "date_heure asc",
+            "order_by": "date_heure desc",
             "limit":    PAGE_SIZE,
             "offset":   offset,
         }, timeout=30)
@@ -50,9 +43,9 @@ def fetch_rte_nuclear_history(start_dt, end_dt):
             break
         records.extend(batch)
         offset += PAGE_SIZE
-        # Stop once we've gone past end_ts (ODS returns ascending order)
-        last_ts = pd.Timestamp(batch[-1]["date_heure"])
-        if last_ts.tz_convert("UTC") > end_ts:
+        # Stop once the oldest record in this batch is before our start
+        oldest_ts = pd.Timestamp(batch[-1]["date_heure"]).tz_convert("UTC")
+        if oldest_ts < start_ts:
             break
 
     if not records:
