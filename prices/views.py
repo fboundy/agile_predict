@@ -1818,13 +1818,20 @@ class GraphV2View(V2NavMixin, TemplateView):
             _neso_combined_detail = f"OPMR: {_opmr_rows} rows" if _opmr_rows > 0 else _src_detail("neso_opmr")
 
         # Open-Meteo consolidated: UK + France
-        _om_combined_health = _worst_health(_om_health, _om_fr_health)
+        # Only include FR in the combined health if it has been fetched at least once.
+        # A never-fetched source (rows=-1, "unknown") should not degrade the UK result.
+        if _om_fr_rows >= 0:
+            _om_combined_health = _worst_health(_om_health, _om_fr_health)
+        else:
+            _om_combined_health = _om_health
         if _om_combined_health == "ok":
             _om_combined_detail = "OK"
         elif _om_health != "ok":
             _om_combined_detail = _src_detail("openmeteo")
-        else:
+        elif _om_fr_rows >= 0:
             _om_combined_detail = f"FR: {_om_fr_rows} rows" if _om_fr_rows > 0 else _src_detail("openmeteo_fr")
+        else:
+            _om_combined_detail = "OK"
 
         api_sources = [
             {"name": "NESO", "health": _neso_combined_health, "detail": _neso_combined_detail},
