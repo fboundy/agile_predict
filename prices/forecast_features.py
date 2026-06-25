@@ -99,10 +99,11 @@ def resolve_feature_columns(feature_set="generation", explicit_features=None, dr
     if explicit_features:
         features = [feature.strip() for feature in explicit_features.split(",") if feature.strip()]
     else:
+        all_sets = {**FEATURE_SETS, **EXPERIMENT_FEATURE_SETS}
         try:
-            features = list(FEATURE_SETS[feature_set])
+            features = list(all_sets[feature_set])
         except KeyError as exc:
-            valid = ", ".join(sorted(FEATURE_SETS))
+            valid = ", ".join(sorted(all_sets))
             raise ValueError(f"Unknown feature set '{feature_set}'. Valid feature sets: {valid}") from exc
 
     if no_day_of_week:
