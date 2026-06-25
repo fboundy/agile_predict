@@ -69,7 +69,7 @@ def fetch_entsoe_fr_nuclear(start_dt, end_dt):
             "periodStart":   chunk_start.strftime("%Y%m%d%H%M"),
             "periodEnd":     chunk_end.strftime("%Y%m%d%H%M"),
         }
-        resp = requests.get(ENTSOE_URL, params=params, timeout=30)
+        resp = requests.get(ENTSOE_URL, params=params, timeout=120)
         resp.raise_for_status()
         s = _parse_entsoe_qty(resp.text)
         if not s.empty:
