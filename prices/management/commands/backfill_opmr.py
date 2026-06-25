@@ -125,7 +125,8 @@ class Command(BaseCommand):
             )
 
             # Fetch slots for this forecast that need backfilling
-            slot_qs = ForecastData.objects.filter(forecast=forecast, opmr_surplus__isnull=True).only("pk", "date_time", "opmr_surplus")
+            slot_filter = {"forecast": forecast} if force else {"forecast": forecast, "opmr_surplus__isnull": True}
+            slot_qs = ForecastData.objects.filter(**slot_filter).only("pk", "date_time", "opmr_surplus")
             rows = list(slot_qs)
             for row in rows:
                 slot_date = pd.Timestamp(row.date_time).tz_convert("UTC").normalize()
