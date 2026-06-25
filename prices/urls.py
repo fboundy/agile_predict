@@ -1,4 +1,5 @@
 from django.urls import path
+from django.views.generic import RedirectView
 from .views import (
     AboutV2View,
     AboutView,
@@ -43,5 +44,5 @@ urlpatterns = [
     path("v2/api_how_to/", ApiHowToV2View.as_view(), name="api_how_to_v2"),
     path("v2/<str:region>/", GraphV2View.as_view(), name="graph_v2_region"),
     path("<str:region>/", GraphFormView.as_view(), name="graph"),
-    path("", GraphFormView.as_view(), name="graph"),
+    path("", RedirectView.as_view(url="/v2/X/", permanent=False)),
 ]

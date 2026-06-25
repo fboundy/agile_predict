@@ -1494,7 +1494,7 @@ class V2NavMixin:
                 "about_link": "/v2/about/",
                 "home_link": "/v2/X/",
                 "is_v2": True,
-                "classic_url": "/",
+                "classic_url": "/X/",
                 "current_page": self._nav_page,
             }
         )
