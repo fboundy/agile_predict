@@ -2,55 +2,20 @@ import pandas as pd
 
 # Candidate feature sets evaluated by the periodic feature experiment.
 # Keys are stored in UpdateJob.options["feature_experiment"]["feature_set"].
+# opmr_surplus is included in every set — it is a fixed base feature.
+# The experiment evaluates what optional features to add on top of it.
+_BASE = ["bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend", "opmr_surplus"]
 EXPERIMENT_FEATURE_SETS = {
-    "generation": [
-        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
-    ],
-    "weather": [
-        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
-        "temp_2m", "wind_10m", "rad",
-    ],
-    "fuel": [
-        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
-        "nuclear", "gas_ttf",
-    ],
-    "weather_fuel": [
-        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
-        "temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf",
-    ],
-    "weather_fuel_fr": [
-        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
-        "temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear",
-    ],
-    "fr_weather": [
-        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
-        "fr_wind", "fr_rad",
-    ],
-    "fr_weather_opmr": [
-        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
-        "fr_wind", "fr_rad", "opmr_surplus",
-    ],
-    "fr_weather_nuclear": [
-        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
-        "fr_wind", "fr_rad", "fr_nuclear",
-    ],
-    "weather_fuel_fr_weather": [
-        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
-        "temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_wind", "fr_rad",
-    ],
-    "full": [
-        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
-        "temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear", "opmr_surplus",
-        "fr_wind", "fr_rad",
-    ],
-    "generation_gas_opmr": [
-        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
-        "gas_ttf", "opmr_surplus",
-    ],
-    "fr_weather_gas_opmr": [
-        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
-        "fr_wind", "fr_rad", "gas_ttf", "opmr_surplus",
-    ],
+    "generation":           _BASE,
+    "fr_weather":           _BASE + ["fr_wind", "fr_rad"],
+    "weather":              _BASE + ["temp_2m", "wind_10m", "rad"],
+    "fuel":                 _BASE + ["nuclear", "gas_ttf"],
+    "fr_weather_nuclear":   _BASE + ["fr_wind", "fr_rad", "fr_nuclear"],
+    "fr_weather_gas":       _BASE + ["fr_wind", "fr_rad", "gas_ttf"],
+    "weather_fuel":         _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf"],
+    "weather_fuel_fr":      _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear"],
+    "weather_fuel_fr_weather": _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_wind", "fr_rad"],
+    "full":                 _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear", "fr_wind", "fr_rad"],
 }
 
 FEATURE_SETS = {
