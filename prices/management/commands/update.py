@@ -151,6 +151,16 @@ def lighten_cmap(cmap_name="viridis", amount=0.5):
     )
 
 
+class _MedianImputedModel:
+    """Wraps a sklearn model that doesn't handle NaN, filling with training-set medians."""
+    def __init__(self, model, fill_values):
+        self.model = model
+        self.fill_values = fill_values
+
+    def predict(self, X):
+        return self.model.predict(pd.DataFrame(X).fillna(self.fill_values))
+
+
 def fit_day_ahead_ensemble(train_X, train_y, sample_weights):
     cat = CatBoostRegressor(**CATBOOST_PARAMS)
     cat.fit(train_X, train_y, sample_weight=sample_weights)
@@ -158,11 +168,12 @@ def fit_day_ahead_ensemble(train_X, train_y, sample_weights):
     lgbm = LGBMRegressor(**LGBM_PARAMS)
     lgbm.fit(train_X, train_y, sample_weight=sample_weights)
 
+    col_medians = train_X.median()
     et = ExtraTreesRegressor(**EXTRA_TREES_REGRESSOR_PARAMS)
-    et.fit(train_X, train_y, sample_weight=sample_weights)
+    et.fit(train_X.fillna(col_medians), train_y, sample_weight=sample_weights)
 
     logger.info("Fitted ensemble (CatBoost + LightGBM + ExtraTrees)")
-    return [cat, lgbm, et]
+    return [cat, lgbm, _MedianImputedModel(et, col_medians)]
 
 
 def predict_day_ahead_ensemble(models, features):
