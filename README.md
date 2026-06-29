@@ -16,7 +16,7 @@ Forecasts Octopus Agile electricity import and export prices up to 14 days ahead
 
 ## Model
 
-Three-model ensemble (CatBoost, LightGBM, ExtraTrees) trained on a rolling 28-day window of half-hourly forecasts. Features include UK generation mix (wind, solar, nuclear), demand, gas price (TTF), UK and French weather, French nuclear output, and NESO operating margin reserve (OPMR). Forecast intervals are derived empirically from holdout residuals binned by horizon and from Open-Meteo ensemble weather perturbations.
+Three-model ensemble (CatBoost, LightGBM, ExtraTrees) trained on a rolling 90-day window of half-hourly forecasts. Training samples are weighted by linear z-score so extreme prices (spikes, negative) are prioritised. Features include a fixed base (UK generation mix, demand, NESO operating margin reserve surplus, calendar flags) plus an experimentally selected optional set (currently French weather: fr_wind, fr_rad). Forecast intervals are derived empirically from holdout residuals binned by horizon and from Open-Meteo ensemble weather perturbations.
 
 ## Development setup
 

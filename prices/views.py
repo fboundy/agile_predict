@@ -3115,6 +3115,11 @@ class AboutV2View(V2NavMixin, AboutView):
         return context
 
 
+class ModelDetailV2View(V2NavMixin, TemplateView):
+    template_name = "model_detail_v2.html"
+    _nav_page = "about"
+
+
 class ApiHowToV2View(V2NavMixin, ApiHowToView):
     template_name = "api_how_to_v2.html"
     _nav_page = "api"
