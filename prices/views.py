@@ -1006,6 +1006,7 @@ class HistoryView(TemplateView):
 
         context["graph"] = figure.to_html(
             full_html=False,
+            include_plotlyjs="cdn",
             config={
                 "modeBarButtonsToRemove": [
                     "zoom",
@@ -1435,6 +1436,8 @@ class GraphFormView(FormView):
         )
 
         context["graph"] = figure.to_html(
+            full_html=False,
+            include_plotlyjs="cdn",
             config={
                 "modeBarButtonsToRemove": [
                     "zoom",
@@ -1445,7 +1448,7 @@ class GraphFormView(FormView):
                     "autoScale",
                     "resetScale",
                 ]
-            }
+            },
         )
         context["live_external_forecasts_enabled"] = _can_use_admin_only_features(self.request)
         context["live_external_counts"] = live_external_counts
@@ -2528,6 +2531,7 @@ class HistoryV2View(V2NavMixin, HistoryView):
 
         return fig.to_html(
             full_html=False,
+            include_plotlyjs=False,
             config={"displayModeBar": False, "responsive": True},
         )
 
