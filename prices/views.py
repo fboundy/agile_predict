@@ -2688,6 +2688,7 @@ class StatsV2View(V2NavMixin, StatsView):
             "diagnostic_unique_slots": diag["unique_slots"],
             "diagnostic_date_from": diag["date_from"],
             "diagnostic_date_to": diag["date_to"],
+            "feature_experiment": self._build_feature_experiment_section(),
         }
         cache.set(cache_key, v2_extra, timeout=60 * 60 * 24)
         context.update(v2_extra)
@@ -3039,6 +3040,68 @@ class StatsV2View(V2NavMixin, StatsView):
                 "Updated each time the model retrains."
             ),
             "chart": fig.to_html(full_html=False, include_plotlyjs=False),
+        }
+
+    @staticmethod
+    def _build_feature_experiment_section():
+        """Build a feature-experiment results chart from the most recent UpdateJob."""
+        exp_job = (
+            UpdateJob.objects
+            .exclude(options__feature_experiment=None)
+            .order_by("-requested_at")
+            .first()
+        )
+        if exp_job is None:
+            return None
+        exp = exp_job.options.get("feature_experiment", {})
+        results = exp.get("results", {})
+        winner = exp.get("feature_set", "")
+        date_str = exp.get("date", "")
+        if not results:
+            return None
+
+        sorted_items = sorted(results.items(), key=lambda x: x[1]["score"])
+        names = [name for name, _ in sorted_items]
+        scores = [data["score"] for _, data in sorted_items]
+        wmae_vals = [data["wmae"] for _, data in sorted_items]
+        wrmse_vals = [data["wrmse"] for _, data in sorted_items]
+        colors = ["#28a745" if name == winner else "#4a90d9" for name in names]
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=scores,
+            y=names,
+            orientation="h",
+            marker_color=colors,
+            customdata=list(zip(wmae_vals, wrmse_vals)),
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "Score: %{x:.4f}<br>"
+                "wMAE: %{customdata[0]:.4f}<br>"
+                "wRMSE: %{customdata[1]:.4f}"
+                "<extra></extra>"
+            ),
+        ))
+        fig.update_layout(
+            template="plotly_dark",
+            plot_bgcolor="#212529",
+            paper_bgcolor="#343a40",
+            height=max(280, 32 * len(names) + 80),
+            margin={"r": 10, "t": 20, "l": 200, "b": 50},
+            xaxis={"title": "Combined score (lower is better)"},
+            yaxis={"title": ""},
+        )
+
+        try:
+            run_date = pd.Timestamp(date_str).strftime("%d %b %Y %H:%M UTC")
+        except Exception:
+            run_date = date_str
+
+        return {
+            "winner": winner,
+            "run_date": run_date,
+            "chart": fig.to_html(full_html=False, include_plotlyjs=False),
+            "set_count": len(results),
         }
 
 
