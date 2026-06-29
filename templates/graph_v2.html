@@ -24,13 +24,13 @@
   {# ======== Status cards (data sources + externals) collapsed behind toggle ======== #}
   {% if api_status or ext_statuses %}
   <div class="mb-3">
-    <button class="btn btn-sm d-flex align-items-center gap-2 px-2 py-1 w-100 text-start"
-            style="background:#2a2d31;border:none;color:#dee2e6;border-radius:.375rem"
+    <button id="status-btn" class="btn d-flex align-items-center gap-3 px-3 py-2 w-100 text-start"
+            style="background:#2a2d31;border:none;color:#dee2e6;border-radius:.375rem;transition:background .2s"
             type="button" data-bs-toggle="collapse" data-bs-target="#status-detail"
             aria-expanded="false" aria-controls="status-detail">
-      <span style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;opacity:.6">Data sources</span>
-      <span id="status-indicator" style="font-size:.72rem"></span>
-      <span class="ms-auto" style="font-size:.7rem;opacity:.4">&#9660;</span>
+      <span style="font-size:.8rem;text-transform:uppercase;letter-spacing:.06em;opacity:.75;font-weight:600">Data sources</span>
+      <span id="status-indicator" style="font-size:.82rem"></span>
+      <span class="ms-auto" style="font-size:.75rem;opacity:.4">&#9660;</span>
     </button>
     <div class="collapse" id="status-detail">
       <div class="row g-2 mt-1">
@@ -66,10 +66,18 @@
       if (h === 'fail') worst = 'fail';
       else if (h === 'warn' && worst !== 'fail') worst = 'warn';
     });
-    var el = document.getElementById('status-indicator');
-    if (worst === 'fail')      el.innerHTML = '<span style="color:#f77">✕ fault</span>';
-    else if (worst === 'warn') el.innerHTML = '<span style="color:#ffc107">⚠ warning</span>';
-    else                       el.innerHTML = '<span style="color:#4caf6e">✓ all OK</span>';
+    var btn = document.getElementById('status-btn');
+    var el  = document.getElementById('status-indicator');
+    if (worst === 'fail') {
+      btn.style.background = '#4a1a22';
+      el.innerHTML = '<span style="color:#f77">&#x2715; fault</span>';
+    } else if (worst === 'warn') {
+      btn.style.background = '#4a3800';
+      el.innerHTML = '<span style="color:#ffc107">&#x26A0; warning</span>';
+    } else {
+      btn.style.background = '#1a4a2c';
+      el.innerHTML = '<span style="color:#6fcf8e">&#x2713; all OK</span>';
+    }
   })();
   </script>
   {% endif %}
@@ -251,7 +259,26 @@
   {% endif %}
 
   {# ======== Chart ======== #}
+  <div class="d-flex justify-content-end mb-1 d-sm-none">
+    <button id="legend-toggle" class="btn btn-sm btn-outline-secondary" style="font-size:.75rem">Legend</button>
+  </div>
   <div class="mb-1">{{ graph|safe }}</div>
+  <script>
+  (function () {
+    if (window.innerWidth >= 576) return;
+    var plotDiv = document.querySelector('.plotly-graph-div');
+    var btn = document.getElementById('legend-toggle');
+    if (!plotDiv || !btn) return;
+    var legendOn = false;
+    Plotly.relayout(plotDiv, {showlegend: false});
+    btn.addEventListener('click', function () {
+      legendOn = !legendOn;
+      Plotly.relayout(plotDiv, {showlegend: legendOn});
+      btn.textContent = legendOn ? 'Hide legend' : 'Legend';
+      btn.classList.toggle('active', legendOn);
+    });
+  })();
+  </script>
 
   {# ======== Cheap / best windows ======== #}
   {% if not is_raw_day_ahead_region %}
