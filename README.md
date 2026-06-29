@@ -7,16 +7,16 @@ Forecasts Octopus Agile electricity import and export prices up to 14 days ahead
 | Source | Data |
 |---|---|
 | [Elexon BMRS](https://bmrs.elexon.co.uk/) | UK nuclear availability, demand |
-| [NESO](https://www.nationalgrideso.com/data-portal) | Wind, solar, embedded wind and demand forecasts; daily operating margin (OPMR) |
-| [RTE eco2mix](https://opendata.reseaux-energies.fr/) | French nuclear generation (interconnector signal) |
-| [Open-Meteo](https://open-meteo.com) | Temperature, wind speed, radiation (forecast + ensemble) |
+| [NESO](https://www.nationalgrideso.com/data-portal) | Wind, solar, embedded wind and demand forecasts; daily operating margin reserve (OPMR) |
+| [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/) | French nuclear generation (interconnector signal) |
+| [Open-Meteo](https://open-meteo.com) | UK and French temperature, wind speed, radiation (forecast + ensemble) |
 | [Octopus Energy](https://developer.octopus.energy/docs/api/) | Agile tariff prices (actuals) |
 | [Nord Pool](https://www.nordpoolgroup.com/) | GB60 day-ahead prices |
 | [Yahoo Finance](https://finance.yahoo.com/) | TTF natural gas futures |
 
 ## Model
 
-Three-model ensemble (CatBoost, LightGBM, ExtraTrees) trained on a rolling 28-day window of half-hourly forecasts. Features include generation mix (wind, solar, nuclear), demand, gas price, and weather. Forecast intervals are derived empirically from holdout residuals binned by horizon and from Open-Meteo ensemble weather perturbations.
+Three-model ensemble (CatBoost, LightGBM, ExtraTrees) trained on a rolling 28-day window of half-hourly forecasts. Features include UK generation mix (wind, solar, nuclear), demand, gas price (TTF), UK and French weather, French nuclear output, and NESO operating margin reserve (OPMR). Forecast intervals are derived empirically from holdout residuals binned by horizon and from Open-Meteo ensemble weather perturbations.
 
 ## Development setup
 
@@ -69,7 +69,9 @@ fly deploy --app prices
 
 Migrations run automatically as the `release_command` before each rolling update.
 
-The daily forecast update runs via a cron job (`@reboot` on the Proxmox CT host, calling `bin/runserver.sh`).
+The daily forecast update and Agile price refresh are triggered by cron jobs on the self-hosted Proxmox CT that POST to the fly.io web app (`bin/cron_update.sh`, `bin/cron_latest_agile.sh`). The CT also runs a local dev server started at boot via `bin/runserver.sh`.
+
+The chart UI defaults to the v2 interface (`/v2/<region>/`). Forecast comparison overlays from [AgileForecast](https://agileforecast.co.uk) and [X2R](https://x2r.uk) can be toggled on; if a live fetch fails the UI falls back to the most recent stored data and shows a status indicator.
 
 ## Project structure
 
