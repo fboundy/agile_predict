@@ -1512,6 +1512,34 @@ class ProductionLoginRequiredMixin:
         return super().dispatch(request, *args, **kwargs)
 
 
+def _ext_db_fallback(source, region, start, end):
+    """Return the most recent stored ExternalForecast rows for a source/region, or None if absent."""
+    latest = (
+        ExternalForecast.objects
+        .filter(source=source, region=region)
+        .order_by("-source_created_at")
+        .first()
+    )
+    if latest is None:
+        return None
+    age_hours = (timezone.now() - latest.downloaded_at).total_seconds() / 3600
+    rows = [
+        {"date_time": r.date_time, "agile_pred": float(r.agile_pred)}
+        for r in ExternalForecast.objects.filter(
+            source=source,
+            region=region,
+            source_created_at=latest.source_created_at,
+            date_time__gte=start,
+            date_time__lte=end,
+        ).order_by("date_time")
+    ]
+    return {
+        "rows": rows,
+        "source_created_at": latest.source_created_at,
+        "is_fresh": age_hours <= 36,
+    }
+
+
 class GraphV2View(V2NavMixin, TemplateView):
     """Colour-coded bar chart UI — alternative to the accordion-sidebar GraphFormView."""
 
@@ -2084,42 +2112,70 @@ class GraphV2View(V2NavMixin, TemplateView):
 
         # External forecasts (AgileForecast / X2R)
         _EXT_COLORS = {"AgileForecast": "#D55E00", "X2R": "#009E73"}
-        _ext_sources = []
+        _EXT_SOURCES = {
+            "AgileForecast": (fetch_agileforecast, ExternalForecast.SOURCE_AGILEFORECAST),
+            "X2R": (fetch_x2r, ExternalForecast.SOURCE_X2R),
+        }
+        _ext_labels = []
         if show_af:
-            _ext_sources.append(("AgileForecast", fetch_agileforecast))
+            _ext_labels.append("AgileForecast")
         if show_x2r:
-            _ext_sources.append(("X2R", fetch_x2r))
-        for ext_label, ext_fetcher in _ext_sources:
+            _ext_labels.append("X2R")
+
+        ext_statuses = []
+        for ext_label in _ext_labels:
+            ext_fetcher, ext_source_const = _EXT_SOURCES[ext_label]
+            ext_data = None
+            ext_health = "ok"
+            ext_detail = "Live"
+
             try:
                 ext_data = ext_fetcher(region)
-                ext_rows = ext_data.get("rows", [])
-                if not ext_rows:
-                    continue
-                ext_s = pd.Series(
-                    index=pd.to_datetime([r["date_time"] for r in ext_rows]),
-                    data=[float(r["agile_pred"]) for r in ext_rows],
-                ).sort_index()
-                try:
-                    ext_s.index = ext_s.index.tz_convert("GB")
-                except TypeError:
-                    ext_s.index = ext_s.index.tz_localize("GB")
-                ext_s = ext_s[(ext_s.index >= prior_gb) & (ext_s.index <= end_gb)]
-                if show_export:
-                    ext_s = import_agile_to_export_agile(ext_s, region=region)
-                if ext_s.empty:
-                    continue
-                created_at = pd.Timestamp(ext_data["source_created_at"]).tz_convert("GB")
-                ext_color = _EXT_COLORS[ext_label]
-                add_price(go.Scatter(
-                    x=ext_s.index,
-                    y=ext_s.values,
-                    mode="lines",
-                    line=dict(shape="hv", color=ext_color, width=1.5),
-                    name=f"{ext_label} ({created_at.strftime('%d %b %H:%M')})",
-                    hovertemplate=f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>{ext_label}</extra>",
-                ))
             except Exception as exc:
-                logger.warning("GraphV2: external forecast %s failed: %s", ext_label, exc)
+                logger.warning("GraphV2: %s live call failed: %s", ext_label, exc)
+                fallback = _ext_db_fallback(ext_source_const, region, prior_gb, end_gb)
+                if fallback is not None:
+                    ext_data = fallback
+                    ext_health = "warn" if fallback["is_fresh"] else "fail"
+                    ext_detail = "Stored data (live unavailable)" if fallback["is_fresh"] else "Stale data (download failed)"
+                else:
+                    ext_statuses.append({"name": ext_label, "health": "fail", "detail": "No data available"})
+                    continue
+
+            ext_rows = ext_data.get("rows", [])
+            if not ext_rows:
+                ext_statuses.append({"name": ext_label, "health": "fail", "detail": "No data"})
+                continue
+
+            ext_s = pd.Series(
+                index=pd.to_datetime([r["date_time"] for r in ext_rows]),
+                data=[float(r["agile_pred"]) for r in ext_rows],
+            ).sort_index()
+            try:
+                ext_s.index = ext_s.index.tz_convert("GB")
+            except TypeError:
+                ext_s.index = ext_s.index.tz_localize("GB")
+            ext_s = ext_s[(ext_s.index >= prior_gb) & (ext_s.index <= end_gb)]
+            if show_export:
+                ext_s = import_agile_to_export_agile(ext_s, region=region)
+            if ext_s.empty:
+                ext_statuses.append({"name": ext_label, "health": "warn", "detail": "No data in range"})
+                continue
+
+            created_at = pd.Timestamp(ext_data["source_created_at"]).tz_convert("GB")
+            if ext_health == "ok":
+                ext_detail = f"Live ({created_at.strftime('%d %b %H:%M')})"
+            ext_statuses.append({"name": ext_label, "health": ext_health, "detail": ext_detail})
+
+            ext_color = _EXT_COLORS[ext_label]
+            add_price(go.Scatter(
+                x=ext_s.index,
+                y=ext_s.values,
+                mode="lines",
+                line=dict(shape="hv", color=ext_color, width=1.5),
+                name=f"{ext_label} ({created_at.strftime('%d %b %H:%M')})",
+                hovertemplate=f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>{ext_label}</extra>",
+            ))
 
         # Now vline — appears across all subplots
         figure.add_vline(
@@ -2316,6 +2372,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 "day_options": self._DAY_OPTIONS,
                 "forecast_list": forecast_list,
                 "selected_ids": selected_ids,
+                "ext_statuses": ext_statuses,
                 "graph": figure.to_html(
                     full_html=False,
                     config={"displayModeBar": False, "responsive": True},

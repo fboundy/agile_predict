@@ -37,6 +37,22 @@
   </div>
   {% endif %}
 
+  {# ======== External forecast status cards ======== #}
+  {% if ext_statuses %}
+  <div class="row g-2 mb-3">
+    {% for src in ext_statuses %}
+    <div class="col-6 col-lg-3">
+      <div class="card border-0 shadow-sm h-100" style="background:{% if src.health == 'ok' %}#1a4a2c{% elif src.health == 'warn' %}#ffc107{% elif src.health == 'fail' %}#4a1a22{% else %}#2a2d31{% endif %}">
+        <div class="card-body py-2 px-3" style="{% if src.health == 'warn' %}color:#111{% endif %}">
+          <div class="fw-semibold" style="font-size:.82rem">{{ src.name }}</div>
+          <div style="font-size:.72rem;margin-top:2px;{% if src.health == 'warn' %}color:#333{% else %}opacity:.65{% endif %}">{{ src.detail }}</div>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   {# ======== Page header ======== #}
   <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
     <div>
