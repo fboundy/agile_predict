@@ -1,10 +1,31 @@
+import functools
 import pandas as pd
+
+
+@functools.lru_cache(maxsize=1)
+def _uk_bank_holidays() -> frozenset:
+    """Return a frozenset of 'YYYY-MM-DD' strings for England & Wales bank holidays."""
+    try:
+        import requests as _req
+        r = _req.get("https://www.gov.uk/bank-holidays.json", timeout=10)
+        r.raise_for_status()
+        return frozenset(e["date"] for e in r.json()["england-and-wales"]["events"])
+    except Exception:
+        return frozenset()
+
+
+def _bank_holiday_series(idx) -> "pd.Series":
+    """Return an int Series (0/1) indicating England & Wales bank holidays for a DatetimeIndex."""
+    bh = _uk_bank_holidays()
+    gb_dates = idx.tz_convert("GB").normalize().strftime("%Y-%m-%d")
+    return pd.Series(gb_dates.isin(bh).astype(int), index=idx)
+
 
 # Candidate feature sets evaluated by the periodic feature experiment.
 # Keys are stored in UpdateJob.options["feature_experiment"]["feature_set"].
 # opmr_surplus is included in every set — it is a fixed base feature.
 # The experiment evaluates what optional features to add on top of it.
-_BASE = ["bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend", "opmr_surplus"]
+_BASE = ["bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend", "bank_holiday", "opmr_surplus"]
 EXPERIMENT_FEATURE_SETS = {
     "generation":           _BASE,
     "fr_weather":           _BASE + ["fr_wind", "fr_rad"],
@@ -99,6 +120,7 @@ def add_derived_features(df, now=None):
 
     df["dow"] = df.index.day_of_week
     df["weekend"] = (df.index.day_of_week >= 5).astype(int)
+    df["bank_holiday"] = _bank_holiday_series(df.index)
     df["time"] = df.index.tz_convert("GB").hour + df.index.minute / 60
     df["days_ago"] = (now - df["created_at"]).dt.total_seconds() / 3600 / 24
     df["dt"] = (df.index - df["created_at"]).dt.total_seconds() / 3600 / 24
@@ -114,6 +136,7 @@ def add_latest_forecast_features(fc, now=None):
 
     fc["dow"] = fc.index.day_of_week
     fc["weekend"] = (fc.index.day_of_week >= 5).astype(int)
+    fc["bank_holiday"] = _bank_holiday_series(fc.index)
     fc["days_ago"] = 0
     fc["time"] = fc.index.tz_convert("GB").hour + fc.index.minute / 60
     fc["dt"] = (fc.index - now).total_seconds() / 86400
