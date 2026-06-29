@@ -59,6 +59,34 @@ python manage.py update
 
 This fetches all upstream data, retrains the ensemble, and writes new `ForecastData` and `AgileData` rows.
 
+Key flags:
+
+| Flag | Description |
+|---|---|
+| `--feature_set <name>` | Override the stored optimal feature set for this run |
+| `--features col1,col2,...` | Specify exact feature columns instead of a named set |
+| `--drop_feature <col>` | Remove a column from the selected feature set (repeatable) |
+| `--force_experiment` | Force the feature-set experiment regardless of the 14-day schedule |
+| `--debug` | Verbose logging of intermediate data and shapes |
+
+### Feature experiments
+
+Every 14 days the update run automatically evaluates all candidate feature sets defined in `prices/forecast_features.py` (`EXPERIMENT_FEATURE_SETS`) using walk-forward cross-validation (5 folds, 21-day train / 3-day test). Each set is scored on a weighted combination of MAE and RMSE, with short-horizon forecasts (<3 days) weighted 3× and medium-horizon (<7 days) weighted 2×. The winning set is persisted in the database and used for all subsequent runs until the next experiment.
+
+Current candidate sets: `generation`, `weather`, `fuel`, `weather_fuel`, `weather_fuel_fr`, `fr_weather`, `fr_weather_opmr`, `fr_weather_nuclear`, `weather_fuel_fr_weather`, `full`.
+
+To force a re-evaluation immediately:
+
+```bash
+python manage.py update --force_experiment
+```
+
+To lock in a specific set for a single run (bypasses the experiment result):
+
+```bash
+python manage.py update --feature_set weather_fuel_fr
+```
+
 ## Production
 
 Hosted on [fly.io](https://fly.io) (app name: `prices`). Deploy with:
