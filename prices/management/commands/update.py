@@ -326,7 +326,8 @@ def run_feature_experiment(df, ff_all, prices, _logger=None):
 
             ensemble = np.mean(preds, axis=0)
             residuals = ensemble - np.array(test_y)
-            weights = _horizon_weights(dt_vals)
+            _z = (np.array(test_y) - float(train_y.mean())) / float(train_y.std())
+            weights = _horizon_weights(dt_vals) * np.maximum(1.0, np.abs(_z))
             wmae  = float(np.average(np.abs(residuals), weights=weights))
             wrmse = float(np.sqrt(np.average(residuals ** 2, weights=weights)))
             fold_scores.append({"wmae": wmae, "wrmse": wrmse})
