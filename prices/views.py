@@ -2375,6 +2375,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 "ext_statuses": ext_statuses,
                 "graph": figure.to_html(
                     full_html=False,
+                    include_plotlyjs="cdn",
                     config={"displayModeBar": False, "responsive": True},
                 ),
                 "classic_url": f"/{region}/",
