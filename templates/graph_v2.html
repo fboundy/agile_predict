@@ -21,36 +21,57 @@
 </script>
 <div class="container-lg py-3">
 
-  {# ======== Data source status cards ======== #}
-  {% if api_status %}
-  <div class="row g-2 mb-3">
-    {% for src in api_status.sources %}
-    <div class="col-6 col-lg">
-      <div class="card border-0 shadow-sm h-100" style="background:{% if src.health == 'ok' %}#1a4a2c{% elif src.health == 'warn' %}#ffc107{% elif src.health == 'fail' %}#4a1a22{% else %}#2a2d31{% endif %}">
-        <div class="card-body py-2 px-3" style="{% if src.health == 'warn' %}color:#111{% endif %}">
-          <div class="fw-semibold" style="font-size:.82rem">{{ src.name }}</div>
-          <div style="font-size:.72rem;margin-top:2px;{% if src.health == 'warn' %}color:#333{% else %}opacity:.65{% endif %}">{{ src.detail }}</div>
+  {# ======== Status cards (data sources + externals) collapsed behind toggle ======== #}
+  {% if api_status or ext_statuses %}
+  <div class="mb-3">
+    <button class="btn btn-sm d-flex align-items-center gap-2 px-2 py-1 w-100 text-start"
+            style="background:#2a2d31;border:none;color:#dee2e6;border-radius:.375rem"
+            type="button" data-bs-toggle="collapse" data-bs-target="#status-detail"
+            aria-expanded="false" aria-controls="status-detail">
+      <span style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;opacity:.6">Data sources</span>
+      <span id="status-indicator" style="font-size:.72rem"></span>
+      <span class="ms-auto" style="font-size:.7rem;opacity:.4">&#9660;</span>
+    </button>
+    <div class="collapse" id="status-detail">
+      <div class="row g-2 mt-1">
+        {% if api_status %}{% for src in api_status.sources %}
+        <div class="col-6 col-sm-4 col-md-3" data-health="{{ src.health }}">
+          <div class="card border-0 shadow-sm h-100" style="background:{% if src.health == 'ok' %}#1a4a2c{% elif src.health == 'warn' %}#ffc107{% elif src.health == 'fail' %}#4a1a22{% else %}#2a2d31{% endif %}">
+            <div class="card-body py-2 px-3" style="{% if src.health == 'warn' %}color:#111{% endif %}">
+              <div class="fw-semibold" style="font-size:.82rem">{{ src.name }}</div>
+              <div style="font-size:.72rem;margin-top:2px;{% if src.health == 'warn' %}color:#333{% else %}opacity:.65{% endif %}">{{ src.detail }}</div>
+            </div>
+          </div>
         </div>
+        {% endfor %}{% endif %}
+        {% if ext_statuses %}{% for src in ext_statuses %}
+        <div class="col-6 col-sm-4 col-md-3" data-health="{{ src.health }}">
+          <div class="card border-0 shadow-sm h-100" style="background:{% if src.health == 'ok' %}#1a4a2c{% elif src.health == 'warn' %}#ffc107{% elif src.health == 'fail' %}#4a1a22{% else %}#2a2d31{% endif %}">
+            <div class="card-body py-2 px-3" style="{% if src.health == 'warn' %}color:#111{% endif %}">
+              <div class="fw-semibold" style="font-size:.82rem">{{ src.name }}</div>
+              <div style="font-size:.72rem;margin-top:2px;{% if src.health == 'warn' %}color:#333{% else %}opacity:.65{% endif %}">{{ src.detail }}</div>
+            </div>
+          </div>
+        </div>
+        {% endfor %}{% endif %}
       </div>
     </div>
-    {% endfor %}
   </div>
-  {% endif %}
-
-  {# ======== External forecast status cards ======== #}
-  {% if ext_statuses %}
-  <div class="row g-2 mb-3">
-    {% for src in ext_statuses %}
-    <div class="col-6 col-lg-3">
-      <div class="card border-0 shadow-sm h-100" style="background:{% if src.health == 'ok' %}#1a4a2c{% elif src.health == 'warn' %}#ffc107{% elif src.health == 'fail' %}#4a1a22{% else %}#2a2d31{% endif %}">
-        <div class="card-body py-2 px-3" style="{% if src.health == 'warn' %}color:#111{% endif %}">
-          <div class="fw-semibold" style="font-size:.82rem">{{ src.name }}</div>
-          <div style="font-size:.72rem;margin-top:2px;{% if src.health == 'warn' %}color:#333{% else %}opacity:.65{% endif %}">{{ src.detail }}</div>
-        </div>
-      </div>
-    </div>
-    {% endfor %}
-  </div>
+  <script>
+  (function () {
+    var cards = document.querySelectorAll('#status-detail [data-health]');
+    var worst = 'ok';
+    cards.forEach(function (c) {
+      var h = c.dataset.health;
+      if (h === 'fail') worst = 'fail';
+      else if (h === 'warn' && worst !== 'fail') worst = 'warn';
+    });
+    var el = document.getElementById('status-indicator');
+    if (worst === 'fail')      el.innerHTML = '<span style="color:#f77">✕ fault</span>';
+    else if (worst === 'warn') el.innerHTML = '<span style="color:#ffc107">⚠ warning</span>';
+    else                       el.innerHTML = '<span style="color:#4caf6e">✓ all OK</span>';
+  })();
+  </script>
   {% endif %}
 
   {# ======== Page header ======== #}
@@ -120,23 +141,29 @@
   <div class="rounded p-2 mb-2 d-flex flex-wrap align-items-center gap-2" style="background:#2a2d31">
 
     {# Region dropdown — JS preserves current query string on navigate #}
-    <select class="form-select form-select-sm" style="width:auto;max-width:200px;background:#343a40;border-color:#495057;color:#dee2e6"
-      onchange="var p=new URLSearchParams(window.location.search);window.location='/v2/'+this.value+'/?' +p.toString()">
-      <option value="X" {% if region == "X" %}selected{% endif %}>National (X)</option>
-      {% for key, name in REGIONS.items %}{% if key != "X" and key != "Z" %}
-      <option value="{{ key }}" {% if region == key %}selected{% endif %}>{{ key }}: {{ name }}</option>
-      {% endif %}{% endfor %}
-      <option value="Z" {% if region == "Z" %}selected{% endif %}>Day Ahead (Z)</option>
-    </select>
+    <div class="d-flex align-items-center gap-1">
+      <span class="text-body-secondary" style="font-size:.72rem;white-space:nowrap">Region</span>
+      <select class="form-select form-select-sm" style="width:auto;max-width:200px;background:#343a40;border-color:#495057;color:#dee2e6"
+        onchange="var p=new URLSearchParams(window.location.search);window.location='/v2/'+this.value+'/?' +p.toString()">
+        <option value="X" {% if region == "X" %}selected{% endif %}>National (X)</option>
+        {% for key, name in REGIONS.items %}{% if key != "X" and key != "Z" %}
+        <option value="{{ key }}" {% if region == key %}selected{% endif %}>{{ key }}: {{ name }}</option>
+        {% endif %}{% endfor %}
+        <option value="Z" {% if region == "Z" %}selected{% endif %}>Day Ahead (Z)</option>
+      </select>
+    </div>
 
     <div class="vr d-none d-sm-block" style="opacity:.3"></div>
 
     {# Day range #}
-    <div class="btn-group btn-group-sm" role="group" aria-label="Days to show">
-      {% for d in day_options %}
-      <a href="?days={{ d }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
-         class="btn {% if days == d %}btn-primary{% else %}btn-outline-secondary{% endif %}">{{ d }}d</a>
-      {% endfor %}
+    <div class="d-flex align-items-center gap-1">
+      <span class="text-body-secondary" style="font-size:.72rem;white-space:nowrap">Period</span>
+      <div class="btn-group btn-group-sm" role="group" aria-label="Days to show">
+        {% for d in day_options %}
+        <a href="?days={{ d }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+           class="btn {% if days == d %}btn-primary{% else %}btn-outline-secondary{% endif %}">{{ d }}d</a>
+        {% endfor %}
+      </div>
     </div>
 
     {# Filters toggle — only visible on mobile (hidden on lg+) #}
@@ -151,6 +178,9 @@
   {# Secondary row: toggles — always visible lg+, collapsible on mobile #}
   <div class="collapse d-lg-block mb-2" id="v2-filters">
     <div class="rounded p-2 d-flex flex-wrap align-items-center gap-2" style="background:#2a2d31">
+
+      <span class="text-body-secondary d-none d-lg-inline" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em">Filters</span>
+      <div class="vr d-none d-lg-block" style="opacity:.3"></div>
 
       {# Toggles #}
       {% if not is_raw_day_ahead_region %}
