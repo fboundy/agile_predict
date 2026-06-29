@@ -73,7 +73,7 @@ Key flags:
 
 Every 14 days the update run automatically evaluates all candidate feature sets defined in `prices/forecast_features.py` (`EXPERIMENT_FEATURE_SETS`) using walk-forward cross-validation (5 folds, 21-day train / 3-day test). Each set is scored on a weighted combination of MAE and RMSE, with short-horizon forecasts (<3 days) weighted 3× and medium-horizon (<7 days) weighted 2×. The winning set is persisted in the database and used for all subsequent runs until the next experiment.
 
-Current candidate sets: `generation`, `weather`, `fuel`, `weather_fuel`, `weather_fuel_fr`, `fr_weather`, `fr_weather_opmr`, `fr_weather_nuclear`, `weather_fuel_fr_weather`, `full`.
+Current candidate sets: `generation`, `weather`, `fuel`, `weather_fuel`, `weather_fuel_fr`, `fr_weather`, `fr_weather_opmr`, `fr_weather_nuclear`, `weather_fuel_fr_weather`, `full`, `generation_gas_opmr`, `fr_weather_gas_opmr`.
 
 To force a re-evaluation immediately:
 
