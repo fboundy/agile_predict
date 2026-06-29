@@ -160,6 +160,10 @@ class _MedianImputedModel:
     def predict(self, X):
         return self.model.predict(pd.DataFrame(X).fillna(self.fill_values))
 
+    @property
+    def feature_importances_(self):
+        return self.model.feature_importances_
+
 
 def fit_day_ahead_ensemble(train_X, train_y, sample_weights):
     cat = CatBoostRegressor(**CATBOOST_PARAMS)
