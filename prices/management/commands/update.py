@@ -49,7 +49,7 @@ MAX_TEST_X = 10000
 EXTRA_TREES_REGRESSOR_PARAMS = {
     "n_estimators": 700,
     "min_samples_leaf": 4,
-    "max_features": 1.0,
+    "max_features": "sqrt",
     "random_state": 42,
     "n_jobs": 1,
 }
@@ -207,7 +207,7 @@ def compute_horizon_quantiles(results, bins=(6, 12, 24, 36, 48)):
 
 _EXP_CB_PARAMS   = dict(iterations=150, learning_rate=0.05, depth=6, l2_leaf_reg=3, random_seed=42, verbose=0)
 _EXP_LGBM_PARAMS = dict(n_estimators=150, learning_rate=0.05, num_leaves=31, random_state=42, verbose=-1, n_jobs=1)
-_EXP_ET_PARAMS   = dict(n_estimators=200, min_samples_leaf=4, max_features=1.0, random_state=42, n_jobs=1)
+_EXP_ET_PARAMS   = dict(n_estimators=200, min_samples_leaf=4, max_features="sqrt", random_state=42, n_jobs=1)
 
 # Lead-time weights: first 3 days → 3×, first 7 days → 2×, beyond → 1×
 def _horizon_weights(dt_series):
@@ -418,7 +418,7 @@ class Command(BaseCommand):
 
         min_fd = int(options.get("min_fd", 600) or 600)
         min_ad = int(options.get("min_ad", 1500) or 1500)
-        max_days = int(options.get("max_days", 60) or 60)
+        max_days = int(options.get("max_days", 90) or 90)
 
         no_ranges = options.get("no_ranges", False)
         skip_kde_plot = options.get("skip_kde_plot", False)
@@ -637,7 +637,8 @@ class Command(BaseCommand):
                         train_X, train_y = build_training_data(df, ff_train, prices, features, max_days)
                         if debug:
                             logger.info(f"train_X:\n{train_X}")
-                        sample_weights = ((np.log10((train_y - train_y.mean()).abs() + 10) * 5) - 4).round(0)
+                        _z = (train_y - train_y.mean()) / train_y.std()
+                        sample_weights = np.maximum(1.0, _z.abs())
 
                         logger.info(
                             "Computing ensemble cross-validation score "

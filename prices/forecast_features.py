@@ -43,6 +43,14 @@ EXPERIMENT_FEATURE_SETS = {
         "temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear", "opmr_surplus",
         "fr_wind", "fr_rad",
     ],
+    "generation_gas_opmr": [
+        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
+        "gas_ttf", "opmr_surplus",
+    ],
+    "fr_weather_gas_opmr": [
+        "bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend",
+        "fr_wind", "fr_rad", "gas_ttf", "opmr_surplus",
+    ],
 }
 
 FEATURE_SETS = {
