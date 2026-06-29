@@ -84,8 +84,7 @@
         at 2×). The winning set —
         <span class="fw-semibold" style="color:#28a745">{{ feature_experiment.winner }}</span>
         — is highlighted in green and is used for all subsequent runs until the next
-        experiment (scheduled every 14 days, or force with
-        <code style="font-size:.78rem">manage.py update --force_experiment</code>).
+        experiment (scheduled every 14 days).
       </p>
       {{ feature_experiment.chart|safe }}
     </div>
