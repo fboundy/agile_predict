@@ -3099,6 +3099,7 @@ class StatsV2View(V2NavMixin, StatsView):
             paper_bgcolor="#343a40",
             height=max(300, 30 * len(labels) + 60),
             margin={"r": 10, "t": 30, "l": 170, "b": 50},
+            font={"size": 12, "color": "#dee2e6"},
             xaxis={"title": "Relative importance (ensemble average)"},
             yaxis={"title": ""},
         )
@@ -3145,7 +3146,7 @@ class StatsV2View(V2NavMixin, StatsView):
             paper_bgcolor="#343a40",
             height=max(300, 35 * len(labels) + 60),
             margin={"r": 10, "t": 30, "l": 210, "b": 50},
-            font={"size": 12},
+            font={"size": 12, "color": "#dee2e6"},
             xaxis={"title": "Mean |SHAP value| (p/kWh Agile, region X)"},
             yaxis={"title": ""},
         )
