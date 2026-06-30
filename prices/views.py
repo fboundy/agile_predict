@@ -60,8 +60,8 @@ _FEATURE_LABELS = {
     "wind_10m": "Wind speed (m/s)",
     "rad": "Radiation (W/m²)",
     "opmr_surplus": "OPMR surplus (MW)",
-    "fr_wind": "France wind speed (m/s)",
-    "fr_rad": "France solar radiation (W/m²)",
+    "fr_wind": "FR wind speed (m/s)",
+    "fr_rad": "FR solar rad. (W/m²)",
     "peak": "Peak hours (16–19)",
     "weekend": "Weekend",
     "days_ago": "Forecast age (days)",
@@ -69,6 +69,10 @@ _FEATURE_LABELS = {
     "time": "Time of day",
     "dow": "Day of week",
 }
+
+# Region X (national average) linear transform: agile_p_per_kwh ≈ day_ahead * _AF_M + _AF_A
+# Used to scale model-native SHAP values (£/MWh) to consumer-facing Agile p/kWh for display.
+_AF_M, _AF_A = GLOBAL_SETTINGS["REGIONS"]["X"]["factors"]
 
 
 def _is_raw_day_ahead_region(region):
@@ -2391,9 +2395,8 @@ class GraphV2View(V2NavMixin, TemplateView):
             ]
         )
 
-        # SHAP per-slot explanations for the primary (latest) forecast, keyed by epoch ms.
-        # Day-ahead price/contributions are region-independent (the model predicts the raw
-        # wholesale price; the region conversion is a fixed linear scale applied afterwards).
+        # SHAP per-slot explanations: values scaled from model-native £/MWh to Agile p/kWh
+        # using the region X (national average) linear factor for consistent display units.
         shap_data = {}
         if latest is not None:
             shap_rows = (
@@ -2410,9 +2413,10 @@ class GraphV2View(V2NavMixin, TemplateView):
                 ts_ms = int(pd.Timestamp(row.date_time).timestamp() * 1000)
                 shap_data[str(ts_ms)] = {
                     "time": pd.Timestamp(row.date_time).tz_convert("GB").strftime("%d %b %H:%M"),
-                    "price": round(row.day_ahead, 1) if row.day_ahead is not None else None,
+                    "price": round(row.day_ahead * _AF_M + _AF_A, 1) if row.day_ahead is not None else None,
                     "contributors": [
-                        {"label": _FEATURE_LABELS.get(item["feature"], item["feature"]), "value": item["value"]}
+                        {"label": _FEATURE_LABELS.get(item["feature"], item["feature"]),
+                         "value": round(item["value"] * _AF_M, 2)}
                         for item in (row.shap_top_features or [])
                     ],
                 }
@@ -3125,7 +3129,7 @@ class StatsV2View(V2NavMixin, StatsView):
 
         sorted_items = sorted(shap_imp.items(), key=lambda x: x[1])
         labels = [_FEATURE_LABELS.get(k, k) for k, _ in sorted_items]
-        values = [v for _, v in sorted_items]
+        values = [v * _AF_M for _, v in sorted_items]
 
         fig = go.Figure()
         fig.add_trace(go.Bar(
@@ -3133,24 +3137,25 @@ class StatsV2View(V2NavMixin, StatsView):
             y=labels,
             orientation="h",
             marker_color="#28a745",
-            hovertemplate="%{y}<br>Mean |SHAP|: £%{x:.2f}/MWh<extra></extra>",
+            hovertemplate="%{y}<br>Mean |SHAP|: %{x:.2f} p/kWh<extra></extra>",
         ))
         fig.update_layout(
             template="plotly_dark",
             plot_bgcolor="#212529",
             paper_bgcolor="#343a40",
-            height=max(300, 30 * len(labels) + 60),
-            margin={"r": 10, "t": 30, "l": 170, "b": 50},
-            xaxis={"title": "Mean |SHAP value| (£/MWh)"},
+            height=max(300, 35 * len(labels) + 60),
+            margin={"r": 10, "t": 30, "l": 210, "b": 50},
+            font={"size": 12},
+            xaxis={"title": "Mean |SHAP value| (p/kWh Agile, region X)"},
             yaxis={"title": ""},
         )
         return {
             "title": "SHAP Feature Importance",
             "description": (
-                "Mean absolute SHAP contribution per feature (LightGBM ensemble member, TreeExplainer), "
-                "computed on the holdout set. Unlike the relative importance above, this is in the same "
-                "units as the prediction (£/MWh) — it shows how much each feature typically moves the "
-                "forecast price up or down."
+                "Mean absolute SHAP contribution per feature averaged across all three ensemble models "
+                "(CatBoost, LightGBM, ExtraTrees), computed on the holdout set. Values are scaled to "
+                "Agile p/kWh (region X). The per-slot breakdown on the forecast page averages "
+                "CatBoost + LightGBM only — ExtraTrees is too slow for per-row use with 700 trees."
             ),
             "chart": fig.to_html(full_html=False, include_plotlyjs=False),
         }
@@ -3174,7 +3179,7 @@ class StatsV2View(V2NavMixin, StatsView):
             contributors = [
                 {
                     "label": _FEATURE_LABELS.get(item["feature"], item["feature"]),
-                    "value": item["value"],
+                    "value": round(item["value"] * _AF_M, 2),
                 }
                 for item in (row.shap_top_features or [])
             ]
@@ -3182,7 +3187,7 @@ class StatsV2View(V2NavMixin, StatsView):
                 continue
             explanations.append({
                 "time": row.date_time,
-                "price": round(row.day_ahead, 1) if row.day_ahead is not None else None,
+                "price": round(row.day_ahead * _AF_M + _AF_A, 1) if row.day_ahead is not None else None,
                 "contributors": contributors,
             })
         return explanations

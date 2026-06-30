@@ -89,9 +89,11 @@
             <li class="mb-0">Confidence bands are added using empirical residuals and weather ensemble spread.</li>
           </ol>
           <p class="mb-0 text-body-secondary mt-2" style="font-size:.78rem">
-            Each forecast is explained with SHAP (the LightGBM ensemble member, via TreeExplainer): a
-            global feature-importance chart is shown on the <a href="{% url 'stats_v2' %}" style="color:#adb5bd">Model stats</a> page,
-            and clicking any point on the forecast chart shows the top features driving that slot's price.
+            Each forecast is explained with SHAP (TreeExplainer): a global feature-importance chart
+            averaging all three models is shown on the <a href="{% url 'stats_v2' %}" style="color:#adb5bd">Model stats</a> page,
+            and clicking any point on the forecast chart shows the top features driving that slot's
+            price (CatBoost + LightGBM average; ExtraTrees is excluded per-row due to runtime cost
+            with 700 trees). All values are shown in p/kWh Agile (region X).
           </p>
         </div>
       </div>

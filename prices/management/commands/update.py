@@ -48,6 +48,7 @@ MIN_FORECAST_ROWS = 200  # ~4 days; fewer rows means upstream APIs have degraded
 MAX_HIST = 28
 MAX_TEST_X = 10000
 SHAP_IMPORTANCE_SAMPLE = 3000
+SHAP_ET_MAX_ROWS = 300   # ExtraTrees SHAP is O(n_rows) slow with 700 trees; cap for global stats
 SHAP_TOP_N = 4
 EXTRA_TREES_REGRESSOR_PARAMS = {
     "n_estimators": 700,
@@ -188,14 +189,37 @@ def predict_day_ahead_ensemble(models, features):
     return preds.mean(axis=1)
 
 
-def shap_top_features_by_row(lgbm_model, features, top_n=SHAP_TOP_N):
-    """Per-row top signed SHAP contributions (£/MWh) from the LightGBM ensemble member.
+def _ensemble_shap_values(ensemble_models, features):
+    """Average SHAP values across CatBoost and LightGBM (exact TreeExplainer, NaN-safe).
 
-    TreeExplainer is exact and fast for LightGBM, so it's used as a representative
-    explanation for the ensemble rather than blending all three models.
+    ExtraTrees is excluded here because shap.TreeExplainer on a 700-tree forest scales
+    O(n_rows) and is prohibitively slow for the full forecast range.  It is included in
+    the global stats-page importance via _global_mean_abs_shap() using a small sample.
     """
-    explainer = shap.TreeExplainer(lgbm_model)
-    shap_values = explainer.shap_values(features)
+    cat, lgbm, _ = ensemble_models
+    cat_shap  = shap.TreeExplainer(cat).shap_values(features)
+    lgbm_shap = shap.TreeExplainer(lgbm).shap_values(features)
+    return (np.array(cat_shap) + np.array(lgbm_shap)) / 2
+
+
+def _global_mean_abs_shap(ensemble_models, sample):
+    """Mean |SHAP| per feature averaged across all three ensemble models.
+
+    ExtraTrees uses a capped sample (SHAP_ET_MAX_ROWS) since it only needs
+    aggregate mean-abs values, not per-row contributions.
+    """
+    cat, lgbm, et_wrapper = ensemble_models
+    cat_mean  = np.abs(shap.TreeExplainer(cat).shap_values(sample)).mean(axis=0)
+    lgbm_mean = np.abs(shap.TreeExplainer(lgbm).shap_values(sample)).mean(axis=0)
+    et_sample = sample if len(sample) <= SHAP_ET_MAX_ROWS else sample.sample(SHAP_ET_MAX_ROWS, random_state=42)
+    et_X      = pd.DataFrame(et_sample).fillna(et_wrapper.fill_values)
+    et_mean   = np.abs(shap.TreeExplainer(et_wrapper.model).shap_values(et_X)).mean(axis=0)
+    return (cat_mean + lgbm_mean + et_mean) / 3
+
+
+def shap_top_features_by_row(ensemble_models, features, top_n=SHAP_TOP_N):
+    """Per-row top signed SHAP contributions (£/MWh) averaged across CatBoost and LightGBM."""
+    shap_values = _ensemble_shap_values(ensemble_models, features)
     result = {}
     for row_idx, ts in enumerate(features.index):
         row = pd.Series(shap_values[row_idx], index=features.columns)
@@ -921,19 +945,17 @@ class Command(BaseCommand):
                         except Exception:
                             pass
 
-                        # 6. SHAP Feature Importance (mean |SHAP| from the LightGBM ensemble member)
+                        # 6. SHAP Feature Importance (mean |SHAP| averaged across all three ensemble models)
                         try:
                             shap_sample = test_X[features]
                             if len(shap_sample) > SHAP_IMPORTANCE_SAMPLE:
                                 shap_sample = shap_sample.sample(SHAP_IMPORTANCE_SAMPLE, random_state=42)
-                            mean_abs_shap = np.abs(
-                                shap.TreeExplainer(ensemble_models[1]).shap_values(shap_sample)
-                            ).mean(axis=0)
+                            mean_abs_shap = _global_mean_abs_shap(ensemble_models, shap_sample)
 
                             fig, ax = plt.subplots(figsize=(8, 6))
-                            pd.Series(mean_abs_shap, index=features).sort_values().plot.barh(ax=ax, color="#4a90d9")
-                            ax.set_title("SHAP Feature Importance (LightGBM)")
-                            ax.set_xlabel("Mean |SHAP value| (£/MWh)")
+                            pd.Series(mean_abs_shap * factor, index=features).sort_values().plot.barh(ax=ax, color="#4a90d9")
+                            ax.set_title("SHAP Feature Importance (ensemble average)")
+                            ax.set_xlabel("Mean |SHAP value| (p/kWh Agile, region X)")
                             save_plot(fig, "6_shap_importance")
                             logger.info("Saved stats plot 6/6: SHAP feature importance (%d sample rows)", len(shap_sample))
 
@@ -970,7 +992,7 @@ class Command(BaseCommand):
                         logger.info("Finished latest forecast prediction")
 
                         try:
-                            shap_top_features = shap_top_features_by_row(ensemble_models[1], prediction_features)
+                            shap_top_features = shap_top_features_by_row(ensemble_models, prediction_features)
                             logger.info("Computed per-row SHAP top features (%d rows)", len(shap_top_features))
                         except Exception:
                             logger.exception("Per-row SHAP computation failed; skipping")

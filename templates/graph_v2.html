@@ -296,7 +296,7 @@
       </div>
       <div id="shap-explain-title" class="mb-1" style="font-size:.85rem;font-weight:600"></div>
       <p class="text-body-secondary mb-2" style="font-size:.78rem">
-        Top SHAP feature contributions (LightGBM, £/MWh) driving the day-ahead price prediction for this slot.
+        Top SHAP feature contributions (ensemble average, p/kWh Agile) driving the predicted price for this slot.
         Red bars push the price up, blue bars pull it down.
       </p>
       <div id="shap-explain-chart"></div>
@@ -321,7 +321,7 @@
       var entry = SHAP_DATA[String(nearestSlotMs(ms))];
       if (!entry || !entry.contributors.length) return;
 
-      titleEl.textContent = entry.time + (entry.price !== null ? '  —  predicted ' + entry.price + ' £/MWh (day-ahead)' : '');
+      titleEl.textContent = entry.time + (entry.price !== null ? '  —  est. ' + entry.price + ' p/kWh Agile (region X)' : '');
 
       var sorted = entry.contributors.slice().sort(function (a, b) { return a.value - b.value; });
       var labels = sorted.map(function (c) { return c.label; });
@@ -334,14 +334,15 @@
         x: values,
         y: labels,
         marker: { color: colors },
-        hovertemplate: '%{y}<br>%{x:.2f} £/MWh<extra></extra>',
+        hovertemplate: '%{y}<br>%{x:.2f} p/kWh<extra></extra>',
       }], {
         template: 'plotly_dark',
         plot_bgcolor: '#212529',
         paper_bgcolor: '#2a2d31',
-        margin: { l: 160, r: 20, t: 10, b: 35 },
-        height: Math.max(140, 34 * labels.length + 45),
-        xaxis: { title: 'SHAP contribution (£/MWh)', zeroline: true, zerolinecolor: '#888', zerolinewidth: 2 },
+        margin: { l: 210, r: 20, t: 10, b: 40 },
+        font: { size: 12 },
+        height: Math.max(150, 38 * labels.length + 50),
+        xaxis: { title: 'SHAP contribution (p/kWh Agile)', zeroline: true, zerolinecolor: '#888', zerolinewidth: 2 },
         yaxis: { title: '' },
       }, { displayModeBar: false, responsive: true });
 
