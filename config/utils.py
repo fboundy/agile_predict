@@ -784,8 +784,10 @@ def get_latest_forecast():
     # the systematic bias that arose from applying a peak-anchored value to overnight slots.
     opmr_daily = get_neso_opmr()
     if not opmr_daily.empty and "demand" in df.columns:
-        # Align daily components onto every 30-min slot by normalising the slot index to dates
-        slot_dates = df.index.normalize()
+        # Normalise slot index to UTC midnight to match the OPMR daily index.
+        # df.index may be GB-timezone (BST = UTC+1); normalize() without tz conversion
+        # would give midnight GB which is off by one hour from midnight UTC.
+        slot_dates = df.index.tz_convert("UTC").normalize()
         def _align(col):
             s = opmr_daily[col]
             s = s[~s.index.duplicated(keep="last")]
