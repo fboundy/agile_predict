@@ -2312,20 +2312,31 @@ class GraphV2View(V2NavMixin, TemplateView):
                 figure.update_yaxes(title_text="Power [GW]", fixedrange=True, row=_GEN_ROW, col=1)
 
             if show_opmr and fp:
-                opmr_rows = [(r.date_time, r.opmr_surplus) for r in fp if r.opmr_surplus is not None]
-                if opmr_rows:
-                    xs, ys = zip(*opmr_rows)
+                hh_rows  = [(r.date_time, r.opmr_surplus)          for r in fp if r.opmr_surplus          is not None]
+                day_rows = [(r.date_time, r.opmr_national_surplus)  for r in fp if r.opmr_national_surplus is not None]
+                if hh_rows:
+                    xs, ys = zip(*hh_rows)
                     add_opmr(go.Scatter(
                         x=list(xs),
                         y=list(ys),
                         mode="lines",
                         fill="tozeroy",
                         line={"color": "#fd7e14", "width": 2},
-                        fillcolor="rgba(253,126,20,0.25)",
-                        name="OPMR Surplus",
-                        hovertemplate="%{x|%d %b %H:%M}<br><b>%{y:.0f} MW</b><extra>OPMR Surplus</extra>",
+                        fillcolor="rgba(253,126,20,0.2)",
+                        name="HH surplus",
+                        hovertemplate="%{x|%d %b %H:%M}<br><b>%{y:.0f} MW</b><extra>HH surplus</extra>",
                     ))
-                figure.update_yaxes(title_text="OPMR Surplus [MW]", fixedrange=True, row=_OPMR_ROW, col=1)
+                if day_rows:
+                    xs, ys = zip(*day_rows)
+                    add_opmr(go.Scatter(
+                        x=list(xs),
+                        y=list(ys),
+                        mode="lines",
+                        line={"color": "rgba(255,255,255,0.7)", "width": 1.5, "dash": "dot", "shape": "hv"},
+                        name="Daily surplus",
+                        hovertemplate="%{x|%d %b}<br><b>%{y:.0f} MW</b><extra>Daily surplus</extra>",
+                    ))
+                figure.update_yaxes(title_text="Surplus [MW]", fixedrange=True, row=_OPMR_ROW, col=1)
 
         # Colour strip at bottom of price chart
         if not strip_s.empty:

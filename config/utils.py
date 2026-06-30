@@ -295,10 +295,11 @@ def get_neso_opmr(start=None, end=None):
         return pd.DataFrame()
 
     out = pd.DataFrame({
-        "gen_availability":  df["Generator Availability"],
-        "max_ic_import":     df["Maximum I/C Import"],
-        "opmr_total":        df["OPMR total"],
-        "constrained_plant": df["Constrained Plant"],
+        "gen_availability":   df["Generator Availability"],
+        "max_ic_import":      df["Maximum I/C Import"],
+        "opmr_total":         df["OPMR total"],
+        "constrained_plant":  df["Constrained Plant"],
+        "national_surplus":   df["National Surplus"],
     })
     out.index = out.index.normalize()
     return out
@@ -800,10 +801,12 @@ def get_latest_forecast():
             - _align("opmr_total")
             - _align("constrained_plant")
         )
+        df["opmr_national_surplus"] = _align("national_surplus")
         source_rows["neso_opmr"]   = int(df["opmr_surplus"].notna().sum())
         source_details["neso_opmr"] = {"label": "NESO OPMR", "rows": source_rows["neso_opmr"], "error": None, "fallback": False}
     else:
         df["opmr_surplus"] = None
+        df["opmr_national_surplus"] = None
         source_rows["neso_opmr"]   = 0
         source_details["neso_opmr"] = {"label": "NESO OPMR", "rows": 0, "error": "no data", "fallback": False}
 

@@ -62,20 +62,21 @@ def fetch_opmr_history(earliest_date, latest_publish):
     if not all_records:
         return pd.DataFrame(columns=[
             "target_date", "publish_date",
-            "gen_availability", "max_ic_import", "opmr_total", "constrained_plant",
+            "gen_availability", "max_ic_import", "opmr_total", "constrained_plant", "national_surplus",
         ])
 
     df = pd.DataFrame(all_records)
-    df["target_date"]       = pd.to_datetime(df["Date"], utc=True).dt.normalize()
-    df["publish_date"]      = pd.to_datetime(df["Publish Date"], utc=True).dt.normalize()
-    df["gen_availability"]  = pd.to_numeric(df["Generator Availability"], errors="coerce")
-    df["max_ic_import"]     = pd.to_numeric(df["Maximum I/C Import"], errors="coerce")
-    df["opmr_total"]        = pd.to_numeric(df["OPMR total"], errors="coerce")
-    df["constrained_plant"] = pd.to_numeric(df["Constrained Plant"], errors="coerce").fillna(0)
+    df["target_date"]         = pd.to_datetime(df["Date"], utc=True).dt.normalize()
+    df["publish_date"]        = pd.to_datetime(df["Publish Date"], utc=True).dt.normalize()
+    df["gen_availability"]    = pd.to_numeric(df["Generator Availability"], errors="coerce")
+    df["max_ic_import"]       = pd.to_numeric(df["Maximum I/C Import"], errors="coerce")
+    df["opmr_total"]          = pd.to_numeric(df["OPMR total"], errors="coerce")
+    df["constrained_plant"]   = pd.to_numeric(df["Constrained Plant"], errors="coerce").fillna(0)
+    df["national_surplus"]    = pd.to_numeric(df["National Surplus"], errors="coerce")
 
     return df[["target_date", "publish_date",
                "gen_availability", "max_ic_import",
-               "opmr_total", "constrained_plant"]].dropna(
+               "opmr_total", "constrained_plant", "national_surplus"]].dropna(
         subset=["gen_availability", "max_ic_import", "opmr_total"]
     )
 
@@ -136,7 +137,7 @@ class Command(BaseCommand):
 
             slot_filter = {"forecast": forecast} if force else {"forecast": forecast, "opmr_surplus__isnull": True}
             slot_qs = ForecastData.objects.filter(**slot_filter).only(
-                "pk", "date_time", "opmr_surplus", "demand"
+                "pk", "date_time", "opmr_surplus", "opmr_national_surplus", "demand"
             )
             rows = list(slot_qs)
 
@@ -157,10 +158,11 @@ class Command(BaseCommand):
                         - opmr_row["opmr_total"]
                         - opmr_row["constrained_plant"]
                     )
+                    row.opmr_national_surplus = float(opmr_row["national_surplus"])
                 batch.append(row)
 
             if len(batch) >= BATCH_SIZE:
-                ForecastData.objects.bulk_update(batch, ["opmr_surplus"])
+                ForecastData.objects.bulk_update(batch, ["opmr_surplus", "opmr_national_surplus"])
                 updated += len(batch)
                 batch = []
 
@@ -168,7 +170,7 @@ class Command(BaseCommand):
                 self.stdout.write(f"  {idx}/{n_forecasts} forecasts, {updated} rows updated")
 
         if batch:
-            ForecastData.objects.bulk_update(batch, ["opmr_surplus"])
+            ForecastData.objects.bulk_update(batch, ["opmr_surplus", "opmr_national_surplus"])
             updated += len(batch)
 
         self.stdout.write(self.style.SUCCESS(f"Done — updated {updated} rows."))
