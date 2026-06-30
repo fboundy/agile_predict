@@ -25,10 +25,18 @@ def _bank_holiday_series(idx) -> "pd.Series":
 # Keys are stored in UpdateJob.options["feature_experiment"]["feature_set"].
 # dispatchable_capacity is included in every set — it is a fixed base feature.
 # The experiment evaluates what optional features to add on top of it.
+# peak is a binary 16-19 flag; time is continuous (0-23.5h GB) letting the model
+# learn any time-of-day pattern. _BASE_TIME and _BASE_BOTH test which is better.
 _BASE = ["bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend", "bank_holiday", "dispatchable_capacity"]
+_BASE_TIME = ["bm_wind", "solar", "emb_wind", "demand", "time", "days_ago", "weekend", "bank_holiday", "dispatchable_capacity"]
+_BASE_BOTH = ["bm_wind", "solar", "emb_wind", "demand", "peak", "time", "days_ago", "weekend", "bank_holiday", "dispatchable_capacity"]
 EXPERIMENT_FEATURE_SETS = {
     "generation":           _BASE,
+    "generation_time":      _BASE_TIME,
+    "generation_both":      _BASE_BOTH,
     "fr_weather":           _BASE + ["fr_wind", "fr_rad"],
+    "fr_weather_time":      _BASE_TIME + ["fr_wind", "fr_rad"],
+    "fr_weather_both":      _BASE_BOTH + ["fr_wind", "fr_rad"],
     "weather":              _BASE + ["temp_2m", "wind_10m", "rad"],
     "fuel":                 _BASE + ["nuclear", "gas_ttf"],
     "fr_weather_nuclear":   _BASE + ["fr_wind", "fr_rad", "fr_nuclear"],
