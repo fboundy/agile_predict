@@ -114,28 +114,84 @@ def gas_ttf_at(created_at, gas_history=None):
     return float(gas.iloc[-1])
 
 
-def nuclear_availability_to_half_hourly(df, start=None, end=None):
-    if len(df) == 0:
-        return pd.Series(dtype=float, name="nuclear")
-
-    data = df.copy()
+def _availability_records_to_hh(records, col_name, start=None, end=None):
+    """Broadcast daily availability records (one aggregated row per forecastDate) to 30-min GB slots."""
+    if not records:
+        return pd.Series(dtype=float, name=col_name)
+    data = pd.DataFrame(records)
     data["forecastDate"] = pd.to_datetime(data["forecastDate"]).dt.tz_localize("GB")
     data = data.sort_values(["forecastDate", "publishTime"])
     data = data.drop_duplicates("forecastDate", keep="last")
-    series = data.set_index("forecastDate")["outputUsable"].astype(float).rename("nuclear")
+    series = data.set_index("forecastDate")["outputUsable"].astype(float)
 
-    def as_gb(value):
-        timestamp = pd.Timestamp(value)
-        if timestamp.tzinfo is None:
-            return timestamp.tz_localize("GB")
-        return timestamp.tz_convert("GB")
+    def _as_gb(v):
+        ts = pd.Timestamp(v)
+        return ts.tz_localize("GB") if ts.tzinfo is None else ts.tz_convert("GB")
 
-    start = as_gb(start or series.index.min())
-    end = as_gb(end or (series.index.max() + pd.Timedelta("1D") - pd.Timedelta("30min")))
-
+    s = _as_gb(start or series.index.min())
+    e = _as_gb(end or (series.index.max() + pd.Timedelta("1D") - pd.Timedelta("30min")))
     series = series.reindex(pd.date_range(series.index.min(), series.index.max(), freq="1D", tz="GB")).ffill()
-    half_hourly = series.reindex(pd.date_range(start.floor("D"), end.ceil("D"), freq="30min", tz="GB")).ffill()
-    return half_hourly.loc[start:end].rename("nuclear")
+    hh = series.reindex(pd.date_range(s.floor("D"), e.ceil("D"), freq="30min", tz="GB")).ffill()
+    return hh.loc[s:e].rename(col_name)
+
+
+def nuclear_availability_to_half_hourly(df, start=None, end=None):
+    return _availability_records_to_hh(df.to_dict("records") if len(df) else [], "nuclear", start, end)
+
+
+def get_gas_availability_forecast(start=None, end=None):
+    """
+    Fetch CCGT + OCGT available capacity (MW) from the BMRS daily availability forecast.
+    Same endpoint as nuclear, summed across both gas fuel types, 14 days ahead.
+    """
+    url = "https://data.elexon.co.uk/bmrs/api/v1/forecast/availability/daily"
+    all_records = []
+    for fuel in ("CCGT", "OCGT"):
+        try:
+            resp = requests.get(url, params={"fuelType": fuel, "format": "json"}, timeout=30)
+            resp.raise_for_status()
+            all_records.extend(resp.json().get("data", []))
+        except Exception:
+            logger.exception("Unable to download %s availability forecast", fuel)
+
+    if not all_records:
+        return pd.Series(dtype=float, name="gas_availability")
+
+    # Sum CCGT + OCGT per forecastDate (one aggregated row per fuel per day from API)
+    df = pd.DataFrame(all_records)
+    df["outputUsable"] = pd.to_numeric(df["outputUsable"], errors="coerce")
+    # Keep forecastDate as plain date string so _availability_records_to_hh can tz_localize it
+    df["forecastDate"] = pd.to_datetime(df["forecastDate"]).dt.date.astype(str)
+    combined = df.groupby("forecastDate")["outputUsable"].sum().reset_index()
+    combined["publishTime"] = combined["forecastDate"]
+    return _availability_records_to_hh(combined.to_dict("records"), "gas_availability", start, end)
+
+
+def get_gas_availability_at(forecast_date, created_at):
+    """Return the CCGT + OCGT available capacity (MW) that was published before created_at."""
+    ts = pd.Timestamp(forecast_date)
+    forecast_date = (ts.tz_localize("GB") if ts.tzinfo is None else ts.tz_convert("GB")).normalize()
+    created_at    = pd.Timestamp(created_at).tz_convert("UTC")
+    url = "https://data.elexon.co.uk/bmrs/api/v1/forecast/availability/daily/evolution"
+    total = 0.0
+    for fuel in ("CCGT", "OCGT"):
+        try:
+            resp = requests.get(
+                url,
+                params={"fuelType": fuel, "forecastDate": forecast_date.date().isoformat(), "format": "json"},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            records = resp.json().get("data", [])
+            if not records:
+                continue
+            known = [r for r in records if pd.Timestamp(r["publishTime"], tz="UTC") <= created_at]
+            src = known if known else records
+            src_sorted = sorted(src, key=lambda r: r["publishTime"])
+            total += float(src_sorted[-1]["outputUsable"])
+        except Exception:
+            logger.exception("Unable to fetch %s evolution for %s", fuel, forecast_date.date())
+    return total if total > 0 else None
 
 
 def get_open_meteo_fr_weather(start=None, end=None):
@@ -766,6 +822,12 @@ def get_latest_forecast():
         df["nuclear"] = nuclear.reindex(df.index, method="ffill").bfill()
     else:
         df["nuclear"] = 0
+
+    gas_av = get_gas_availability_forecast(start=df.index.min(), end=df.index.max())
+    if len(gas_av) > 0:
+        df["gas_availability"] = gas_av.reindex(df.index, method="ffill").bfill()
+    else:
+        df["gas_availability"] = None
 
     df["gas_ttf"] = gas_ttf_at(pd.Timestamp.now(tz="UTC"))
 

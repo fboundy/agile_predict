@@ -37,6 +37,11 @@ EXPERIMENT_FEATURE_SETS = {
     "weather_fuel_fr":      _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear"],
     "weather_fuel_fr_weather": _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_wind", "fr_rad"],
     "full":                 _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear", "fr_wind", "fr_rad"],
+    # gas_availability: BMRS CCGT+OCGT available capacity (MW), same endpoint as nuclear, 14 days.
+    # Tests whether thermal dispatchable capacity adds signal beyond gas price (gas_ttf).
+    "fr_weather_gas_av":    _BASE + ["fr_wind", "fr_rad", "gas_availability"],
+    "fuel_gas_av":          _BASE + ["nuclear", "gas_ttf", "gas_availability"],
+    "full_gas_av":          _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear", "fr_wind", "fr_rad", "gas_availability"],
     # melngc_margin: BMRS indicated day-ahead margin (~30h horizon, null beyond). Tests whether
     # the settlement-period dispatch forecast adds value over the 14-day opmr_surplus feature.
     "fr_weather_melngc":    _BASE + ["fr_wind", "fr_rad", "melngc_margin"],

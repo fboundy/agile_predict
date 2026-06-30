@@ -134,6 +134,7 @@ class ForecastData(models.Model):
     solar = models.FloatField()
     emb_wind = models.FloatField()
     nuclear = models.FloatField(default=0)
+    gas_availability = models.FloatField(null=True, blank=True)
     gas_ttf = models.FloatField(null=True, blank=True)
     temp_2m = models.FloatField()
     wind_10m = models.FloatField()
