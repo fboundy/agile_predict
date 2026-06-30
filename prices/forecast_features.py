@@ -23,9 +23,9 @@ def _bank_holiday_series(idx) -> "pd.Series":
 
 # Candidate feature sets evaluated by the periodic feature experiment.
 # Keys are stored in UpdateJob.options["feature_experiment"]["feature_set"].
-# opmr_surplus is included in every set — it is a fixed base feature.
+# dispatchable_capacity is included in every set — it is a fixed base feature.
 # The experiment evaluates what optional features to add on top of it.
-_BASE = ["bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend", "bank_holiday", "opmr_surplus"]
+_BASE = ["bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend", "bank_holiday", "dispatchable_capacity"]
 EXPERIMENT_FEATURE_SETS = {
     "generation":           _BASE,
     "fr_weather":           _BASE + ["fr_wind", "fr_rad"],
@@ -43,7 +43,7 @@ EXPERIMENT_FEATURE_SETS = {
     "fuel_gas_av":          _BASE + ["nuclear", "gas_ttf", "gas_availability"],
     "full_gas_av":          _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear", "fr_wind", "fr_rad", "gas_availability"],
     # melngc_margin: BMRS indicated day-ahead margin (~30h horizon, null beyond). Tests whether
-    # the settlement-period dispatch forecast adds value over the 14-day opmr_surplus feature.
+    # the settlement-period dispatch forecast adds value over the 14-day dispatchable_capacity feature.
     "fr_weather_melngc":    _BASE + ["fr_wind", "fr_rad", "melngc_margin"],
     "full_melngc":          _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear", "fr_wind", "fr_rad", "melngc_margin"],
 }

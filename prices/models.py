@@ -141,7 +141,7 @@ class ForecastData(models.Model):
     rad = models.FloatField()
     demand = models.FloatField()
     fr_nuclear = models.FloatField(null=True, blank=True)
-    opmr_surplus = models.FloatField(null=True, blank=True)
+    dispatchable_capacity = models.FloatField(null=True, blank=True)
     opmr_national_surplus = models.FloatField(null=True, blank=True)
     melngc_margin = models.FloatField(null=True, blank=True)
     fr_wind = models.FloatField(null=True, blank=True)

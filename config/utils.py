@@ -856,23 +856,23 @@ def get_latest_forecast():
             s = s[~s.index.duplicated(keep="last")]
             return s.reindex(slot_dates).values
 
-        df["opmr_surplus"] = (
+        df["dispatchable_capacity"] = (
             _align("gen_availability")
             + _align("max_ic_import")
             - _align("opmr_total")
             - _align("constrained_plant")
         )
         df["opmr_national_surplus"] = _align("national_surplus")
-        source_rows["neso_opmr"]   = int(df["opmr_surplus"].notna().sum())
+        source_rows["neso_opmr"]   = int(df["dispatchable_capacity"].notna().sum())
         source_details["neso_opmr"] = {"label": "NESO OPMR", "rows": source_rows["neso_opmr"], "error": None, "fallback": False}
     else:
-        df["opmr_surplus"] = None
+        df["dispatchable_capacity"] = None
         df["opmr_national_surplus"] = None
         source_rows["neso_opmr"]   = 0
         source_details["neso_opmr"] = {"label": "NESO OPMR", "rows": 0, "error": "no data", "fallback": False}
 
     # MELNGC — BMRS indicated day-ahead margin at settlement-period resolution (~30 h).
-    # Separate feature from opmr_surplus: uses actual dispatch forecasts so it's on a
+    # Separate feature from dispatchable_capacity: uses actual dispatch forecasts so it's on a
     # different (larger) absolute scale; stored as melngc_margin and tested via experiment.
     melngc = get_melngc_margin()
     if not melngc.empty:
@@ -912,7 +912,7 @@ def get_latest_forecast():
         df.index = pd.to_datetime(df.index).tz_convert("GB")
         df.drop(["date_time"], axis=1, inplace=True)
 
-        # dropna only on required columns; fr_nuclear and opmr_surplus are optional
+        # dropna only on required columns; fr_nuclear and dispatchable_capacity are optional
         return df.sort_index().dropna(subset=all_cols), missing_cols, source_rows, source_details
 
 

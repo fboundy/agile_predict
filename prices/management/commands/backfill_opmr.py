@@ -1,5 +1,5 @@
 """
-Backfill opmr_surplus on historical ForecastData using the NESO OPMR dataset.
+Backfill dispatchable_capacity on historical ForecastData using the NESO OPMR dataset.
 
 For each forecast slot, computes the per-slot surplus:
   gen_availability + max_ic_import - slot_demand - opmr_total - constrained_plant
@@ -82,14 +82,14 @@ def fetch_opmr_history(earliest_date, latest_publish):
 
 
 class Command(BaseCommand):
-    help = "Backfill opmr_surplus on ForecastData using per-slot gen_availability - slot_demand - opmr_total"
+    help = "Backfill dispatchable_capacity on ForecastData using per-slot gen_availability - slot_demand - opmr_total"
 
     def add_arguments(self, parser):
         parser.add_argument("--force", action="store_true", help="Overwrite existing values")
 
     def handle(self, *args, **options):
         force = options["force"]
-        qs = ForecastData.objects.all() if force else ForecastData.objects.filter(opmr_surplus__isnull=True)
+        qs = ForecastData.objects.all() if force else ForecastData.objects.filter(dispatchable_capacity__isnull=True)
         total_rows = qs.count()
         self.stdout.write(f"Rows to backfill: {total_rows}")
         if total_rows == 0:
@@ -135,9 +135,9 @@ class Command(BaseCommand):
                 .set_index("target_date")
             )
 
-            slot_filter = {"forecast": forecast} if force else {"forecast": forecast, "opmr_surplus__isnull": True}
+            slot_filter = {"forecast": forecast} if force else {"forecast": forecast, "dispatchable_capacity__isnull": True}
             slot_qs = ForecastData.objects.filter(**slot_filter).only(
-                "pk", "date_time", "opmr_surplus", "opmr_national_surplus"
+                "pk", "date_time", "dispatchable_capacity", "opmr_national_surplus"
             )
             rows = list(slot_qs)
 
@@ -151,7 +151,7 @@ class Command(BaseCommand):
                     opmr_row = available.iloc[-1]
 
                 if opmr_row is not None:
-                    row.opmr_surplus = float(
+                    row.dispatchable_capacity = float(
                         opmr_row["gen_availability"]
                         + opmr_row["max_ic_import"]
                         - opmr_row["opmr_total"]
@@ -161,7 +161,7 @@ class Command(BaseCommand):
                 batch.append(row)
 
             if len(batch) >= BATCH_SIZE:
-                ForecastData.objects.bulk_update(batch, ["opmr_surplus", "opmr_national_surplus"])
+                ForecastData.objects.bulk_update(batch, ["dispatchable_capacity", "opmr_national_surplus"])
                 updated += len(batch)
                 batch = []
 
@@ -169,7 +169,7 @@ class Command(BaseCommand):
                 self.stdout.write(f"  {idx}/{n_forecasts} forecasts, {updated} rows updated")
 
         if batch:
-            ForecastData.objects.bulk_update(batch, ["opmr_surplus", "opmr_national_surplus"])
+            ForecastData.objects.bulk_update(batch, ["dispatchable_capacity", "opmr_national_surplus"])
             updated += len(batch)
 
         self.stdout.write(self.style.SUCCESS(f"Done — updated {updated} rows."))

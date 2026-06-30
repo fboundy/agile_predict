@@ -59,7 +59,7 @@ _FEATURE_LABELS = {
     "temp_2m": "Temperature (°C)",
     "wind_10m": "Wind speed (m/s)",
     "rad": "Radiation (W/m²)",
-    "opmr_surplus": "OPMR surplus (MW)",
+    "dispatchable_capacity": "Dispatch capacity (MW)",
     "fr_wind": "FR wind speed (m/s)",
     "fr_rad": "FR solar rad. (W/m²)",
     "peak": "Peak hours (16–19)",
@@ -2008,7 +2008,7 @@ class GraphV2View(V2NavMixin, TemplateView):
 
         if _n_rows == 4:
             _row_heights     = [0.45, 0.03, 0.28, 0.24]
-            _subplot_titles  = ("", "", "Generation & Demand", "OPMR Surplus")
+            _subplot_titles  = ("", "", "Generation & Demand", "Dispatch Capacity")
             chart_height     = 820
         elif show_gen:
             _row_heights     = [0.55, 0.04, 0.41]
@@ -2016,7 +2016,7 @@ class GraphV2View(V2NavMixin, TemplateView):
             chart_height     = 660
         elif show_opmr:
             _row_heights     = [0.65, 0.04, 0.31]
-            _subplot_titles  = ("", "", "OPMR Surplus")
+            _subplot_titles  = ("", "", "Dispatch Capacity")
             chart_height     = 600
         else:
             _row_heights     = [0.94, 0.06]
@@ -2312,31 +2312,20 @@ class GraphV2View(V2NavMixin, TemplateView):
                 figure.update_yaxes(title_text="Power [GW]", fixedrange=True, row=_GEN_ROW, col=1)
 
             if show_opmr and fp:
-                hh_rows  = [(r.date_time, r.opmr_surplus)          for r in fp if r.opmr_surplus          is not None]
-                day_rows = [(r.date_time, r.opmr_national_surplus)  for r in fp if r.opmr_national_surplus is not None]
-                if hh_rows:
-                    xs, ys = zip(*hh_rows)
+                dc_rows = [(r.date_time, r.dispatchable_capacity) for r in fp if r.dispatchable_capacity is not None]
+                if dc_rows:
+                    xs, ys = zip(*dc_rows)
                     add_opmr(go.Scatter(
                         x=list(xs),
                         y=list(ys),
                         mode="lines",
                         fill="tozeroy",
-                        line={"color": "#fd7e14", "width": 2},
-                        fillcolor="rgba(253,126,20,0.2)",
-                        name="HH surplus",
-                        hovertemplate="%{x|%d %b %H:%M}<br><b>%{y:.0f} MW</b><extra>HH surplus</extra>",
+                        line={"color": "#fd7e14", "width": 2, "shape": "hv"},
+                        fillcolor="rgba(253,126,20,0.25)",
+                        name="Dispatch capacity",
+                        hovertemplate="%{x|%d %b}<br><b>%{y:.0f} MW</b><extra>Dispatch capacity</extra>",
                     ))
-                if day_rows:
-                    xs, ys = zip(*day_rows)
-                    add_opmr(go.Scatter(
-                        x=list(xs),
-                        y=list(ys),
-                        mode="lines",
-                        line={"color": "rgba(255,255,255,0.7)", "width": 1.5, "dash": "dot", "shape": "hv"},
-                        name="Daily surplus",
-                        hovertemplate="%{x|%d %b}<br><b>%{y:.0f} MW</b><extra>Daily surplus</extra>",
-                    ))
-                figure.update_yaxes(title_text="Surplus [MW]", fixedrange=True, row=_OPMR_ROW, col=1)
+                figure.update_yaxes(title_text="Dispatch capacity [MW]", fixedrange=True, row=_OPMR_ROW, col=1)
 
         # Colour strip at bottom of price chart
         if not strip_s.empty:
