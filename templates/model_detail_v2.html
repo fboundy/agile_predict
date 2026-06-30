@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-lg py-3">
+
+  <div class="mb-3 d-flex align-items-baseline gap-3">
+    <h5 class="mb-0">Model detail</h5>
+    <a href="{% url 'about_v2' %}" class="text-body-secondary" style="font-size:.8rem">&larr; Back to About</a>
+  </div>
+
+  <div class="row g-3">
+
+    {# ── Ensemble ── #}
+    <div class="col-12">
+      <div class="card border-0 shadow-sm" style="background:#2a2d31">
+        <div class="card-body py-3 px-4">
+          <h6 class="mb-3" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">Gradient boosting ensemble</h6>
+          <p style="font-size:.88rem" class="mb-2">
+            AgilePredict uses an equal-weight average of three gradient-boosted tree models.
+            Each model makes different kinds of errors on unseen data; averaging them cancels a
+            portion of those errors and produces a more stable forecast than any individual model.
+          </p>
+          <div class="row g-2 mt-1">
+            <div class="col-md-4">
+              <div class="rounded p-3 h-100" style="background:#212529">
+                <div class="fw-semibold mb-1" style="font-size:.85rem">CatBoost</div>
+                <p class="mb-0 text-body-secondary" style="font-size:.8rem">
+                  Gradient boosted trees with symmetric (oblivious) tree structure and native
+                  handling of missing values. Tends to be robust without extensive hyperparameter tuning.
+                </p>
+              </div>
+            </div>
+            <div class="col-md-4">
+              <div class="rounded p-3 h-100" style="background:#212529">
+                <div class="fw-semibold mb-1" style="font-size:.85rem">LightGBM</div>
+                <p class="mb-0 text-body-secondary" style="font-size:.8rem">
+                  Leaf-wise gradient boosted trees. Fast to train and accurate on tabular regression,
+                  with native support for missing values. Complements CatBoost with a different
+                  tree-growth strategy.
+                </p>
+              </div>
+            </div>
+            <div class="col-md-4">
+              <div class="rounded p-3 h-100" style="background:#212529">
+                <div class="fw-semibold mb-1" style="font-size:.85rem">Extra Trees</div>
+                <p class="mb-0 text-body-secondary" style="font-size:.8rem">
+                  Extremely Randomised Trees: at each split both the candidate feature and the
+                  split threshold are randomised, using a random
+                  &radic;n subset of features. This diversifies the ensemble and helps discover
+                  unusual feature combinations that drive extreme prices.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {# ── Training ── #}
+    <div class="col-lg-6">
+      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+        <div class="card-body py-3 px-4">
+          <h6 class="mb-3" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">Training</h6>
+          <p style="font-size:.88rem" class="mb-2">
+            The model is retrained each time an update runs (typically 4&times; daily). Each
+            training example pairs a set of input features at a specific half-hour slot with
+            the actual Agile price realised at that time.
+          </p>
+          <ul class="mb-2 ps-3" style="font-size:.85rem">
+            <li class="mb-1"><strong>Window:</strong> the most recent 90 days of historical forecasts.</li>
+            <li class="mb-1"><strong>Selection:</strong> one forecast per day (the run closest to 16:15) is used for training, matching the day-ahead auction publication schedule.</li>
+            <li class="mb-1"><strong>Sample weights:</strong> training examples where the actual price
+              was far from the period mean are up-weighted. The weight is
+              <code>max(1,&thinsp;|z|)</code> where <em>z</em> is the number of standard deviations
+              from the mean. This pushes the models to predict price spikes and negative prices
+              more accurately — errors on extreme slots are most consequential for Agile tariff users.</li>
+          </ul>
+          <p class="mb-0 text-body-secondary" style="font-size:.8rem">
+            Cross-validation RMSE (5-fold) is computed after training and shown on the
+            <a href="{% url 'stats_v2' %}" class="link-secondary">Stats page</a> trend chart.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    {# ── Feature selection ── #}
+    <div class="col-lg-6">
+      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+        <div class="card-body py-3 px-4">
+          <h6 class="mb-3" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">Feature selection</h6>
+          <p style="font-size:.88rem" class="mb-2">
+            Not all available inputs are equally useful. Every 14 days (or on demand) an
+            automated experiment evaluates the candidate feature sets using walk-forward
+            cross-validation:
+          </p>
+          <ul class="mb-2 ps-3" style="font-size:.85rem">
+            <li class="mb-1"><strong>Structure:</strong> 5 folds of 21-day train / 3-day test, working backwards from the most recent data.</li>
+            <li class="mb-1"><strong>Scoring:</strong> each fold computes weighted MAE and weighted RMSE, then averages them.</li>
+            <li class="mb-1"><strong>Horizon weights:</strong> slots &le;3 days ahead get 3&times;, &le;7 days get 2&times;, beyond get 1&times;.</li>
+            <li class="mb-1"><strong>Tail weights:</strong> slots where the actual price has a high z-score get an additional <code>max(1,&thinsp;|z|)</code> multiplier, so the experiment rewards sets that predict extreme prices &mdash; not just typical days.</li>
+          </ul>
+          <p class="mb-0 text-body-secondary" style="font-size:.8rem">
+            The winning set is stored in the database and applied to all subsequent runs until the next experiment.
+            Results are shown on the <a href="{% url 'stats_v2' %}" class="link-secondary">Stats page</a>.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    {# ── Fixed vs experimental features ── #}
+    <div class="col-12">
+      <div class="card border-0 shadow-sm" style="background:#2a2d31">
+        <div class="card-body py-3 px-4">
+          <h6 class="mb-3" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">Fixed and experimental features</h6>
+          <div class="row g-3">
+            <div class="col-md-6">
+              <div class="fw-semibold mb-2" style="font-size:.85rem">Fixed base — always included</div>
+              <div class="table-responsive">
+                <table class="table table-sm table-borderless mb-0" style="font-size:.82rem">
+                  <tbody>
+                    <tr style="border-bottom:1px solid #343a40">
+                      <td class="py-1 pe-3"><code>opmr_surplus</code></td>
+                      <td class="py-1 text-body-secondary">
+                        NESO operating margin reserve surplus (MW). When negative the grid is in
+                        deficit and prices spike. Included unconditionally: the signal is physically
+                        causal but rare enough that the CV experiment cannot score it reliably.
+                      </td>
+                    </tr>
+                    <tr style="border-bottom:1px solid #343a40"><td class="py-1 pe-3"><code>bm_wind</code></td><td class="py-1 text-body-secondary">Metered wind generation</td></tr>
+                    <tr style="border-bottom:1px solid #343a40"><td class="py-1 pe-3"><code>solar</code></td><td class="py-1 text-body-secondary">Embedded solar generation</td></tr>
+                    <tr style="border-bottom:1px solid #343a40"><td class="py-1 pe-3"><code>emb_wind</code></td><td class="py-1 text-body-secondary">Embedded wind generation</td></tr>
+                    <tr style="border-bottom:1px solid #343a40"><td class="py-1 pe-3"><code>demand</code></td><td class="py-1 text-body-secondary">National electricity demand</td></tr>
+                    <tr style="border-bottom:1px solid #343a40"><td class="py-1 pe-3"><code>peak</code></td><td class="py-1 text-body-secondary">Flag for 16:00–19:00 pricing window</td></tr>
+                    <tr style="border-bottom:1px solid #343a40"><td class="py-1 pe-3"><code>weekend</code></td><td class="py-1 text-body-secondary">Weekend flag</td></tr>
+                    <tr style="border-bottom:1px solid #343a40"><td class="py-1 pe-3"><code>bank_holiday</code></td><td class="py-1 text-body-secondary">England &amp; Wales public bank holiday (GOV.UK calendar)</td></tr>
+                    <tr><td class="py-1 pe-3"><code>days_ago</code></td><td class="py-1 text-body-secondary">Age of the forecast at prediction time</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <div class="fw-semibold mb-2" style="font-size:.85rem">Experimental — selected by CV</div>
+              <p class="text-body-secondary mb-2" style="font-size:.82rem">
+                The experiment evaluates which optional features to add on top of the fixed base.
+                The current candidate sets and their scores are shown on the
+                <a href="{% url 'stats_v2' %}" class="link-secondary">Stats page</a>.
+                Candidate optional features include:
+              </p>
+              <div class="table-responsive">
+                <table class="table table-sm table-borderless mb-0" style="font-size:.82rem">
+                  <tbody>
+                    <tr style="border-bottom:1px solid #343a40"><td class="py-1 pe-3"><code>fr_wind</code></td><td class="py-1 text-body-secondary">French 10 m wind speed (Open-Meteo)</td></tr>
+                    <tr style="border-bottom:1px solid #343a40"><td class="py-1 pe-3"><code>fr_rad</code></td><td class="py-1 text-body-secondary">French solar radiation (Open-Meteo)</td></tr>
+                    <tr style="border-bottom:1px solid #343a40"><td class="py-1 pe-3"><code>fr_nuclear</code></td><td class="py-1 text-body-secondary">French nuclear generation (ENTSO-E)</td></tr>
+                    <tr style="border-bottom:1px solid #343a40"><td class="py-1 pe-3"><code>wind_10m</code></td><td class="py-1 text-body-secondary">UK 10 m wind speed (Open-Meteo)</td></tr>
+                    <tr style="border-bottom:1px solid #343a40"><td class="py-1 pe-3"><code>temp_2m</code></td><td class="py-1 text-body-secondary">UK 2 m temperature (Open-Meteo)</td></tr>
+                    <tr style="border-bottom:1px solid #343a40"><td class="py-1 pe-3"><code>rad</code></td><td class="py-1 text-body-secondary">UK solar radiation (Open-Meteo)</td></tr>
+                    <tr style="border-bottom:1px solid #343a40"><td class="py-1 pe-3"><code>nuclear</code></td><td class="py-1 text-body-secondary">UK nuclear availability (BMRS)</td></tr>
+                    <tr><td class="py-1 pe-3"><code>gas_ttf</code></td><td class="py-1 text-body-secondary">TTF natural gas futures (Yahoo Finance)</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {# ── Confidence bands ── #}
+    <div class="col-12">
+      <div class="card border-0 shadow-sm" style="background:#2a2d31">
+        <div class="card-body py-3 px-4">
+          <h6 class="mb-3" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">Confidence bands (p10–p90)</h6>
+          <p style="font-size:.88rem" class="mb-2">
+            The shaded band represents a p10–p90 interval: roughly 80% of half-hour slots should
+            fall inside it. It is constructed from two independent components that are then combined.
+          </p>
+          <div class="row g-2 mt-1">
+            <div class="col-md-6">
+              <div class="rounded p-3 h-100" style="background:#212529">
+                <div class="fw-semibold mb-1" style="font-size:.85rem">Empirical residuals</div>
+                <p class="mb-0 text-body-secondary" style="font-size:.8rem">
+                  Held-out historical predictions are collected over the training window and their
+                  errors (actual &minus; predicted) are binned by forecast horizon: 6 h, 12 h, 24 h,
+                  36 h, 48 h, and beyond. The p10 and p90 of the residuals in each bin set a
+                  baseline interval that grows with look-ahead distance.
+                </p>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <div class="rounded p-3 h-100" style="background:#212529">
+                <div class="fw-semibold mb-1" style="font-size:.85rem">Weather ensemble</div>
+                <p class="mb-0 text-body-secondary" style="font-size:.8rem">
+                  The ICON seamless NWP ensemble provides 10 alternative wind, solar, and temperature
+                  scenarios. Each member is run through the price model; the p10 and p90 of the
+                  resulting price predictions widen the band on days where weather is uncertain.
+                </p>
+              </div>
+            </div>
+          </div>
+          <p class="mb-0 text-body-secondary mt-3" style="font-size:.8rem">
+            The two intervals are merged by taking the minimum of the lower bounds and maximum of the
+            upper bounds. The final band is smoothed with a 3-period rolling average and always
+            encloses the point forecast.
+          </p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+{% endblock content %}

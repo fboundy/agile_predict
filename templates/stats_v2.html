@@ -68,5 +68,28 @@
   </div>
   {% endif %}
 
+  {% if feature_experiment %}
+  <div class="card border-0 shadow-sm mt-3" style="background:#2a2d31">
+    <div class="card-body py-2 px-3">
+      <div class="d-flex justify-content-between align-items-baseline flex-wrap gap-2 mb-1">
+        <h6 class="text-body-secondary mb-0" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">
+          Feature set experiment
+        </h6>
+        <span class="text-body-secondary" style="font-size:.75rem">Last run: {{ feature_experiment.run_date }}</span>
+      </div>
+      <p class="text-body-secondary mb-2" style="font-size:.82rem">
+        Walk-forward cross-validation (5 folds, 21-day train / 3-day test) across
+        {{ feature_experiment.set_count }} candidate feature sets, scored on weighted
+        MAE&nbsp;+&nbsp;RMSE with near-term forecasts upweighted (≤3 days at 3×, ≤7 days
+        at 2×). The winning set —
+        <span class="fw-semibold" style="color:#28a745">{{ feature_experiment.winner }}</span>
+        — is highlighted in green and is used for all subsequent runs until the next
+        experiment (scheduled every 14 days).
+      </p>
+      {{ feature_experiment.chart|safe }}
+    </div>
+  </div>
+  {% endif %}
+
 </div>
 {% endblock content %}

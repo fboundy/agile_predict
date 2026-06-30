@@ -80,11 +80,6 @@
                                 <li class="nav-item">
                                     <a class="nav-link{% if current_page == 'about' %} active{% endif %}"{% if current_page == 'about' %} aria-current="page"{% endif %} href="{{ about_link|default:'/v2/about/' }}">About</a>
                                 </li>
-                                {% if request.user.is_staff %}
-                                <li class="nav-item">
-                                    <a class="nav-link" href="/metrics">Metrics</a>
-                                </li>
-                                {% endif %}
                                 <li class="nav-item">
                                     <script
                                         type="text/javascript"
@@ -140,9 +135,13 @@
                     accuracy, completeness, reliability, or fitness for any purpose of any data, forecast, chart, API
                     response, or other output provided by this service.
                 </p>
-                <p class="mb-0">
+                <p class="mb-2">
                     You should not rely on AgilePredict as the sole basis for financial, operational, or energy-use
                     decisions.
+                </p>
+                <p class="mb-0">
+                    This site uses essential session cookies and browser localStorage to remember your chart preferences.
+                    No tracking, analytics, or advertising cookies are used.
                 </p>
             </div>
         </footer>

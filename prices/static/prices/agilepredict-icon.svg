@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">AgilePredict icon</title>
+  <desc id="desc">A stylised AgilePredict chart showing price, demand, and generation forecast lines.</desc>
+  <defs>
+    <linearGradient id="panel" x1="8" y1="2" x2="58" y2="62" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#151d24"/>
+      <stop offset="1" stop-color="#26313a"/>
+    </linearGradient>
+    <linearGradient id="priceBand" x1="20" y1="13" x2="57" y2="29" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff2d3d" stop-opacity=".82"/>
+      <stop offset="1" stop-color="#d52f3e" stop-opacity=".46"/>
+    </linearGradient>
+    <linearGradient id="solar" x1="7" y1="41" x2="55" y2="28" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f4f26a" stop-opacity=".88"/>
+      <stop offset="1" stop-color="#d8d75a" stop-opacity=".5"/>
+    </linearGradient>
+    <linearGradient id="wind" x1="8" y1="53" x2="58" y2="39" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#49d66d" stop-opacity=".85"/>
+      <stop offset="1" stop-color="#37c66c" stop-opacity=".72"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="64" height="64" rx="13" fill="url(#panel)"/>
+
+  <g stroke="#31506a" stroke-opacity=".55" stroke-width="1">
+    <path d="M10 8v48M24 8v48M38 8v48M52 8v48"/>
+    <path d="M8 15h48M8 29h48M8 43h48"/>
+  </g>
+
+  <path d="M8 35c4-5 7-5 10-2 4 4 7 2 10-4 3-7 6-8 9-3 4 6 7 5 10-5 3-9 6-11 9-6v41H8z" fill="url(#solar)"/>
+  <path d="M8 53c5-2 10-1 15-1 5-1 9-4 14-6 6-2 11 1 19-4v14H8z" fill="url(#wind)"/>
+  <path d="M8 48c6 3 12 4 18 3 5-1 8-6 13-7 6-1 10 4 17 1" fill="none" stroke="#223cff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M8 39c5 3 9 7 13 8 4 0 7-9 11-11 5-4 8 7 13 5 4-2 5-14 11-16" fill="none" stroke="#e9e9e3" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M8 24c3 1 5 1 7-2 2-13 4-15 7-6 1 5 2 8 5 8 4-1 5-8 8-10 3-1 5 7 8 9 5 4 8-9 13-12" fill="none" stroke="#f4f6f8" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <path d="M21 25c5 2 10 2 15 0 4-1 7 8 12 7 4-1 5-11 8-18v20c-3-3-5 1-8 3-5 4-9-8-13-7-5 2-9 0-14-1z" fill="url(#priceBand)"/>
+  <path d="M21 25c5 2 10 2 15 0 4-1 7 8 12 7 4-1 5-11 8-18" fill="none" stroke="#ff1f35" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M21 27c5 1 9 2 14 1 4 0 7 6 12 5 4-1 5-8 8-12" fill="none" stroke="#ff9fc4" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M10 11c1 0 2 0 3 1 1 1 2 1 3-1 1-2 2-5 4-5" fill="none" stroke="#f4f6f8" stroke-width="2.4" stroke-linecap="round"/>
+</svg>

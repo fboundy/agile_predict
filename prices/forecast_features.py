@@ -1,5 +1,43 @@
+import functools
 import pandas as pd
 
+
+@functools.lru_cache(maxsize=1)
+def _uk_bank_holidays() -> frozenset:
+    """Return a frozenset of 'YYYY-MM-DD' strings for England & Wales bank holidays."""
+    try:
+        import requests as _req
+        r = _req.get("https://www.gov.uk/bank-holidays.json", timeout=10)
+        r.raise_for_status()
+        return frozenset(e["date"] for e in r.json()["england-and-wales"]["events"])
+    except Exception:
+        return frozenset()
+
+
+def _bank_holiday_series(idx) -> "pd.Series":
+    """Return an int Series (0/1) indicating England & Wales bank holidays for a DatetimeIndex."""
+    bh = _uk_bank_holidays()
+    gb_dates = idx.tz_convert("GB").normalize().strftime("%Y-%m-%d")
+    return pd.Series(gb_dates.isin(bh).astype(int), index=idx)
+
+
+# Candidate feature sets evaluated by the periodic feature experiment.
+# Keys are stored in UpdateJob.options["feature_experiment"]["feature_set"].
+# opmr_surplus is included in every set — it is a fixed base feature.
+# The experiment evaluates what optional features to add on top of it.
+_BASE = ["bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend", "bank_holiday", "opmr_surplus"]
+EXPERIMENT_FEATURE_SETS = {
+    "generation":           _BASE,
+    "fr_weather":           _BASE + ["fr_wind", "fr_rad"],
+    "weather":              _BASE + ["temp_2m", "wind_10m", "rad"],
+    "fuel":                 _BASE + ["nuclear", "gas_ttf"],
+    "fr_weather_nuclear":   _BASE + ["fr_wind", "fr_rad", "fr_nuclear"],
+    "fr_weather_gas":       _BASE + ["fr_wind", "fr_rad", "gas_ttf"],
+    "weather_fuel":         _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf"],
+    "weather_fuel_fr":      _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear"],
+    "weather_fuel_fr_weather": _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_wind", "fr_rad"],
+    "full":                 _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear", "fr_wind", "fr_rad"],
+}
 
 FEATURE_SETS = {
     "default": (
@@ -55,10 +93,11 @@ def resolve_feature_columns(feature_set="generation", explicit_features=None, dr
     if explicit_features:
         features = [feature.strip() for feature in explicit_features.split(",") if feature.strip()]
     else:
+        all_sets = {**FEATURE_SETS, **EXPERIMENT_FEATURE_SETS}
         try:
-            features = list(FEATURE_SETS[feature_set])
+            features = list(all_sets[feature_set])
         except KeyError as exc:
-            valid = ", ".join(sorted(FEATURE_SETS))
+            valid = ", ".join(sorted(all_sets))
             raise ValueError(f"Unknown feature set '{feature_set}'. Valid feature sets: {valid}") from exc
 
     if no_day_of_week:
@@ -81,6 +120,7 @@ def add_derived_features(df, now=None):
 
     df["dow"] = df.index.day_of_week
     df["weekend"] = (df.index.day_of_week >= 5).astype(int)
+    df["bank_holiday"] = _bank_holiday_series(df.index)
     df["time"] = df.index.tz_convert("GB").hour + df.index.minute / 60
     df["days_ago"] = (now - df["created_at"]).dt.total_seconds() / 3600 / 24
     df["dt"] = (df.index - df["created_at"]).dt.total_seconds() / 3600 / 24
@@ -96,6 +136,7 @@ def add_latest_forecast_features(fc, now=None):
 
     fc["dow"] = fc.index.day_of_week
     fc["weekend"] = (fc.index.day_of_week >= 5).astype(int)
+    fc["bank_holiday"] = _bank_holiday_series(fc.index)
     fc["days_ago"] = 0
     fc["time"] = fc.index.tz_convert("GB").hour + fc.index.minute / 60
     fc["dt"] = (fc.index - now).total_seconds() / 86400

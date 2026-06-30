@@ -13,7 +13,10 @@ __pycache__/
 .creds.txt
 logs/
 *.log
-static/
+
+# Collected static files (output of collectstatic — not source static files)
+/static/
+
 plots/
 
 # CatBoost training artifacts
@@ -28,3 +31,9 @@ catboost_info/
 *_results.csv
 /gp_*.csv
 /dl_results.csv
+
+.archive/
+
+# OS artefacts
+.DS_Store
+Thumbs.db

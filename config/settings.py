@@ -37,6 +37,7 @@ LOCAL_REALTIME_EXTERNAL_FORECASTS = DEBUG and ENV.lower() in {"development", "lo
 
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["agilepredict.com", ".agilepredict.com", ".fly.dev"])
 UPDATE_TOKEN = env("UPDATE_TOKEN", default="")
+ENTSOE_API_KEY = env("ENTSOE_API_KEY", default="")
 
 
 LOG_DIR = os.path.join(BASE_DIR, "logs")
@@ -124,7 +125,7 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
-    "prices.middleware.RequestMetricsMiddleware",
+
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 

@@ -27,6 +27,7 @@ from ...forecast_features import (
     build_forecast_frame,
     build_holdout_data,
     build_training_data,
+    EXPERIMENT_FEATURE_SETS,
     FEATURE_SETS,
     latest_prediction_features,
     add_latest_forecast_features,
@@ -48,7 +49,7 @@ MAX_TEST_X = 10000
 EXTRA_TREES_REGRESSOR_PARAMS = {
     "n_estimators": 700,
     "min_samples_leaf": 4,
-    "max_features": 1.0,
+    "max_features": "sqrt",
     "random_state": 42,
     "n_jobs": 1,
 }
@@ -150,6 +151,20 @@ def lighten_cmap(cmap_name="viridis", amount=0.5):
     )
 
 
+class _MedianImputedModel:
+    """Wraps a sklearn model that doesn't handle NaN, filling with training-set medians."""
+    def __init__(self, model, fill_values):
+        self.model = model
+        self.fill_values = fill_values
+
+    def predict(self, X):
+        return self.model.predict(pd.DataFrame(X).fillna(self.fill_values))
+
+    @property
+    def feature_importances_(self):
+        return self.model.feature_importances_
+
+
 def fit_day_ahead_ensemble(train_X, train_y, sample_weights):
     cat = CatBoostRegressor(**CATBOOST_PARAMS)
     cat.fit(train_X, train_y, sample_weight=sample_weights)
@@ -157,11 +172,12 @@ def fit_day_ahead_ensemble(train_X, train_y, sample_weights):
     lgbm = LGBMRegressor(**LGBM_PARAMS)
     lgbm.fit(train_X, train_y, sample_weight=sample_weights)
 
+    col_medians = train_X.median()
     et = ExtraTreesRegressor(**EXTRA_TREES_REGRESSOR_PARAMS)
-    et.fit(train_X, train_y, sample_weight=sample_weights)
+    et.fit(train_X.fillna(col_medians), train_y, sample_weight=sample_weights)
 
     logger.info("Fitted ensemble (CatBoost + LightGBM + ExtraTrees)")
-    return [cat, lgbm, et]
+    return [cat, lgbm, _MedianImputedModel(et, col_medians)]
 
 
 def predict_day_ahead_ensemble(models, features):
@@ -204,6 +220,136 @@ def compute_horizon_quantiles(results, bins=(6, 12, 24, 36, 48)):
     return horizon_q
 
 
+_EXP_CB_PARAMS   = dict(iterations=150, learning_rate=0.05, depth=6, l2_leaf_reg=3, random_seed=42, verbose=0)
+_EXP_LGBM_PARAMS = dict(n_estimators=150, learning_rate=0.05, num_leaves=31, random_state=42, verbose=-1, n_jobs=1)
+_EXP_ET_PARAMS   = dict(n_estimators=200, min_samples_leaf=4, max_features="sqrt", random_state=42, n_jobs=1)
+
+# Lead-time weights: first 3 days → 3×, first 7 days → 2×, beyond → 1×
+def _horizon_weights(dt_series):
+    return np.where(dt_series < 3, 3.0, np.where(dt_series < 7, 2.0, 1.0))
+
+
+def run_feature_experiment(df, ff_all, prices, _logger=None):
+    """
+    Walk-forward cross-validation across EXPERIMENT_FEATURE_SETS.
+    Scores each set on weighted MAE + weighted RMSE (equal weight), where
+    lead time < 3 days is weighted 3×, < 7 days 2×, else 1×.
+
+    Returns (winning_set_name: str, results: dict[name -> {score, wmae, wrmse}])
+    """
+    log = _logger.info if _logger else print
+
+    TRAIN_DAYS = 21
+    TEST_DAYS  = 3
+    N_FOLDS    = 5
+    MIN_TRAIN  = 40
+
+    ff_dates = ff_all.copy()
+    ff_dates["_date"] = pd.to_datetime(ff_dates["name"]).dt.tz_localize("GB").dt.normalize()
+    ff_dates = ff_dates.sort_values("_date").reset_index(drop=False)   # keeps 'id' col
+    total_days = len(ff_dates)
+
+    if total_days < TRAIN_DAYS + TEST_DAYS:
+        log("Feature experiment: not enough forecast history, skipping")
+        return "generation", {}
+
+    log(f"Feature experiment: {total_days} daily forecasts, {N_FOLDS} folds "
+        f"({TRAIN_DAYS}d train / {TEST_DAYS}d test each)")
+
+    results = {}
+    for set_name, candidate_features in EXPERIMENT_FEATURE_SETS.items():
+        fold_scores = []
+
+        for fold in range(N_FOLDS):
+            end_idx   = total_days - fold * TEST_DAYS
+            start_idx = max(0, end_idx - TRAIN_DAYS - TEST_DAYS)
+            if end_idx - TEST_DAYS - start_idx < 2:
+                continue
+
+            train_ids = set(ff_dates.iloc[start_idx : end_idx - TEST_DAYS]["id"])
+            test_ids  = set(ff_dates.iloc[end_idx - TEST_DAYS : end_idx]["id"])
+
+            train_df = df[df["forecast_id"].isin(train_ids)].copy()
+            test_df  = df[df["forecast_id"].isin(test_ids)].copy()
+
+            # Production window filter
+            train_df = train_df[
+                (train_df.index >= train_df["ag_start"]) & (train_df.index < train_df["ag_end"])
+            ]
+            test_df = test_df[test_df.index > test_df["ag_start"]]
+
+            # Merge actuals
+            train_df = train_df.join(prices[["day_ahead"]], how="inner").dropna(subset=["day_ahead"])
+            test_df  = test_df.join(prices[["day_ahead"]], how="inner").dropna(subset=["day_ahead"])
+
+            if len(train_df) < MIN_TRAIN or len(test_df) < 10:
+                continue
+
+            # Drop features missing from df or entirely null in training
+            avail = [f for f in candidate_features if f in df.columns
+                     and train_df[f].notna().any()]
+            if not avail:
+                continue
+
+            train_X = train_df[avail].copy()
+            train_y = train_df["day_ahead"]
+            test_X  = test_df[avail].copy()
+            test_y  = test_df["day_ahead"]
+            dt_vals = test_df["dt"].values
+
+            col_medians = train_X.median()
+            train_Xf = train_X.fillna(col_medians)
+            test_Xf  = test_X.fillna(col_medians)
+
+            preds = []
+            try:
+                cb = CatBoostRegressor(**_EXP_CB_PARAMS)
+                cb.fit(train_X, train_y)
+                preds.append(cb.predict(test_X))
+            except Exception:
+                pass
+            try:
+                lgbm = LGBMRegressor(**_EXP_LGBM_PARAMS)
+                lgbm.fit(train_Xf, train_y)
+                preds.append(lgbm.predict(test_Xf))
+            except Exception:
+                pass
+            try:
+                et = ExtraTreesRegressor(**_EXP_ET_PARAMS)
+                et.fit(train_Xf, train_y)
+                preds.append(et.predict(test_Xf))
+            except Exception:
+                pass
+
+            if not preds:
+                continue
+
+            ensemble = np.mean(preds, axis=0)
+            residuals = ensemble - np.array(test_y)
+            _z = (np.array(test_y) - float(train_y.mean())) / float(train_y.std())
+            weights = _horizon_weights(dt_vals) * np.maximum(1.0, np.abs(_z))
+            wmae  = float(np.average(np.abs(residuals), weights=weights))
+            wrmse = float(np.sqrt(np.average(residuals ** 2, weights=weights)))
+            fold_scores.append({"wmae": wmae, "wrmse": wrmse})
+
+        if not fold_scores:
+            continue
+
+        mean_wmae  = float(np.mean([s["wmae"]  for s in fold_scores]))
+        mean_wrmse = float(np.mean([s["wrmse"] for s in fold_scores]))
+        score = 0.5 * mean_wmae + 0.5 * mean_wrmse
+        results[set_name] = {"score": round(score, 4), "wmae": round(mean_wmae, 4), "wrmse": round(mean_wrmse, 4)}
+        log(f"  {set_name:<20s}  score={score:.3f}  wmae={mean_wmae:.3f}  wrmse={mean_wrmse:.3f}  ({len(fold_scores)} folds)")
+
+    if not results:
+        log("Feature experiment: no results, defaulting to 'generation'")
+        return "generation", {}
+
+    winner = min(results, key=lambda k: results[k]["score"])
+    log(f"Feature experiment winner: '{winner}'  score={results[winner]['score']:.3f}")
+    return winner, results
+
+
 class Command(BaseCommand):
     def add_arguments(self, parser):
         # Positional arguments
@@ -235,8 +381,8 @@ class Command(BaseCommand):
         parser.add_argument(
             "--feature_set",
             choices=sorted(FEATURE_SETS),
-            default="weather",
-            help="Named feature set to use for model training.",
+            default=None,
+            help="Named feature set to use for model training (overrides stored optimal set).",
         )
 
         parser.add_argument(
@@ -249,6 +395,12 @@ class Command(BaseCommand):
             action="append",
             default=[],
             help="Feature column to remove from the selected feature set. May be supplied multiple times.",
+        )
+
+        parser.add_argument(
+            "--force_experiment",
+            action="store_true",
+            help="Force the feature-set experiment to run regardless of the 14-day schedule.",
         )
 
         parser.add_argument(
@@ -282,13 +434,42 @@ class Command(BaseCommand):
 
         min_fd = int(options.get("min_fd", 600) or 600)
         min_ad = int(options.get("min_ad", 1500) or 1500)
-        max_days = int(options.get("max_days", 60) or 60)
+        max_days = int(options.get("max_days", 90) or 90)
 
         no_ranges = options.get("no_ranges", False)
         skip_kde_plot = options.get("skip_kde_plot", False)
 
+        # Load last experiment result; decide whether a new one is due
+        _optimal_fs = "generation"
+        _last_exp_date = None
+        try:
+            _exp_job = (
+                UpdateJob.objects.filter(job_type=UpdateJob.JOB_UPDATE)
+                .exclude(options__feature_experiment=None)
+                .order_by("-requested_at")
+                .first()
+            )
+            if _exp_job:
+                _exp_meta = _exp_job.options["feature_experiment"]
+                _optimal_fs = _exp_meta.get("feature_set", "generation")
+                _last_exp_date = pd.Timestamp(_exp_meta["date"], tz="UTC")
+        except Exception:
+            pass
+
+        _experiment_due = (
+            options.get("force_experiment")
+            or _last_exp_date is None
+            or (pd.Timestamp.now(tz="UTC") - _last_exp_date).days >= 14
+        )
+        if _experiment_due:
+            logger.info("Feature experiment is due (last run: %s)", _last_exp_date or "never")
+        else:
+            logger.info("Feature experiment not due (last run: %s, optimal set: %s)", _last_exp_date, _optimal_fs)
+
+        # CLI --feature_set overrides stored optimum; no CLI arg → use stored optimum
+        _cli_fs = options.get("feature_set")
         features = resolve_feature_columns(
-            feature_set=options.get("feature_set", "generation"),
+            feature_set=_cli_fs or _optimal_fs,
             explicit_features=options.get("features"),
             drop_features=options.get("drop_feature", []),
             no_day_of_week=options.get("no_day_of_week", False),
@@ -405,7 +586,7 @@ class Command(BaseCommand):
             }
             try:
                 running_job = UpdateJob.objects.filter(
-                    job_type=UpdateJob.JOB_UPDATE, status=UpdateJob.STATUS_RUNNING,
+                    job_type=UpdateJob.JOB_UPDATE,
                 ).order_by("-requested_at").first()
                 if running_job:
                     running_job.options["api_status"] = api_status_data
@@ -435,6 +616,36 @@ class Command(BaseCommand):
                         df, ff = build_forecast_frame(fd, ff)
                         ff_train = select_daily_training_forecasts(ff)
 
+                        # ── Periodic feature experiment ───────────────────────
+                        if _experiment_due and not _cli_fs and not options.get("features"):
+                            try:
+                                logger.info("Running feature set experiment…")
+                                _winner, _exp_results = run_feature_experiment(df, ff_train, prices, logger)
+                                # Update features for this run if the winner differs
+                                if _winner != _optimal_fs:
+                                    logger.info(
+                                        "Feature set changing: %s → %s", _optimal_fs, _winner
+                                    )
+                                    features = list(EXPERIMENT_FEATURE_SETS[_winner])
+                                else:
+                                    logger.info("Feature set unchanged: %s", _winner)
+                                # Persist result
+                                _exp_payload = {
+                                    "date": pd.Timestamp.now(tz="UTC").isoformat(),
+                                    "feature_set": _winner,
+                                    "results": _exp_results,
+                                }
+                                _save_job = UpdateJob.objects.filter(
+                                    job_type=UpdateJob.JOB_UPDATE,
+                                ).order_by("-requested_at").first()
+                                if _save_job:
+                                    _save_job.options["feature_experiment"] = _exp_payload
+                                    _save_job.save(update_fields=["options"])
+                                _experiment_due = False
+                            except Exception:
+                                logger.exception("Feature experiment failed; keeping existing feature set")
+                        # ─────────────────────────────────────────────────────
+
                         if debug:
                             logger.info(f"Forecasts Database:\n{ff.to_string()}")
 
@@ -442,7 +653,8 @@ class Command(BaseCommand):
                         train_X, train_y = build_training_data(df, ff_train, prices, features, max_days)
                         if debug:
                             logger.info(f"train_X:\n{train_X}")
-                        sample_weights = ((np.log10((train_y - train_y.mean()).abs() + 10) * 5) - 4).round(0)
+                        _z = (train_y - train_y.mean()) / train_y.std()
+                        sample_weights = np.maximum(1.0, _z.abs())
 
                         logger.info(
                             "Computing ensemble cross-validation score "
@@ -674,6 +886,22 @@ class Command(BaseCommand):
                         save_plot(fig, "5_feature_importance")
                         logger.info("Saved stats plot 5/5: feature importance")
 
+                        # Persist feature importances to the running UpdateJob so the v2 stats
+                        # page can render them as a Plotly chart without filesystem access.
+                        try:
+                            _fi_dict = {
+                                str(f): round(float(v), 6)
+                                for f, v in zip(features, avg_imp.tolist())
+                            }
+                            _fi_job = UpdateJob.objects.filter(
+                                job_type=UpdateJob.JOB_UPDATE,
+                            ).order_by("-requested_at").first()
+                            if _fi_job:
+                                _fi_job.options["feature_importance"] = _fi_dict
+                                _fi_job.save(update_fields=["options"])
+                        except Exception:
+                            pass
+
                         # fig, ax = plt.subplots(figsize=(8, 6))
                         # bins = [0, 1, 2, 3, 5, 10, 15]
                         # labels = [f"{i}-{j}" for i, j in zip(bins[:-1], bins[1:])]
@@ -879,6 +1107,7 @@ class Command(BaseCommand):
                             "day_ahead_classified",
                             "day_ahead_extra_trees",
                             "plunge_probability",
+                            *[c for c in ("fr_nuclear", "opmr_surplus", "fr_wind", "fr_rad") if c in fc.columns],
                         ]
                     ]
 

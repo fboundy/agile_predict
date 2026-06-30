@@ -104,7 +104,7 @@ def download_agileforecast_region_g():
 
 def fetch_agileforecast(region):
     url = f"https://agileforecast.co.uk/api/{region.upper()}/"
-    response = requests.get(url, timeout=15)
+    response = requests.get(url, timeout=5)
     response.raise_for_status()
     payload = response.json()
     if isinstance(payload, list):

@@ -1,5 +1,5 @@
-from django.contrib.admin.views.decorators import staff_member_required
 from django.urls import path
+from django.views.generic import RedirectView
 from .views import (
     AboutV2View,
     AboutView,
@@ -11,7 +11,7 @@ from .views import (
     GraphV2View,
     HistoryV2View,
     HistoryView,
-    MetricsView,
+    ModelDetailV2View,
     RegisterView,
     SiteLoginView,
     StatsV2View,
@@ -31,7 +31,6 @@ urlpatterns = [
     path("stats/plot/<path:filename>", stats_plot, name="stats_plot"),
     path("color", ColorView.as_view(), name="color"),
     path("stats", StatsView.as_view(), name="api_how_to"),
-    path("metrics", staff_member_required(MetricsView.as_view()), name="metrics"),
     path("api_how_to", ApiHowToView.as_view(), name="api_how_to"),
     path("glossary", GlossaryView.as_view(), name="glossary"),
     path("about", AboutView.as_view(), name="about"),
@@ -43,8 +42,9 @@ urlpatterns = [
     path("v2/history/<str:region>/", HistoryV2View.as_view(), name="history_v2_region"),
     path("v2/stats/", StatsV2View.as_view(), name="stats_v2"),
     path("v2/about/", AboutV2View.as_view(), name="about_v2"),
+    path("v2/model/", ModelDetailV2View.as_view(), name="model_detail_v2"),
     path("v2/api_how_to/", ApiHowToV2View.as_view(), name="api_how_to_v2"),
     path("v2/<str:region>/", GraphV2View.as_view(), name="graph_v2_region"),
     path("<str:region>/", GraphFormView.as_view(), name="graph"),
-    path("", GraphFormView.as_view(), name="graph"),
+    path("", RedirectView.as_view(url="/v2/X/", permanent=False)),
 ]

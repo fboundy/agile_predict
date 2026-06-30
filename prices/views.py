@@ -39,8 +39,6 @@ from .models import (
     History,
     PlotImage,
     PriceHistory,
-    RequestClientSeen,
-    RequestMetric,
     UpdateJob,
 )
 
@@ -511,56 +509,6 @@ class StatsView(TemplateView):
 
         return context
 
-
-class MetricsView(TemplateView):
-    template_name = "metrics.html"
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        days = 14
-        start_date = timezone.localdate() - timedelta(days=days - 1)
-
-        request_rows = (
-            RequestMetric.objects.filter(date__gte=start_date)
-            .values("date", "surface")
-            .annotate(requests=Sum("request_count"))
-            .order_by("-date", "surface")
-        )
-        unique_rows = {
-            (row["date"], row["surface"]): row["unique_clients"]
-            for row in RequestClientSeen.objects.filter(date__gte=start_date)
-            .values("date", "surface")
-            .annotate(unique_clients=Count("client_hash"))
-        }
-
-        daily_rows = []
-        for row in request_rows:
-            daily_rows.append(
-                {
-                    **row,
-                    "unique_clients": unique_rows.get((row["date"], row["surface"]), 0),
-                }
-            )
-
-        top_paths = (
-            RequestMetric.objects.filter(date__gte=start_date)
-            .values("surface", "path")
-            .annotate(requests=Sum("request_count"))
-            .order_by("-requests")[:25]
-        )
-
-        hourly_rows = (
-            RequestMetric.objects.filter(date=timezone.localdate())
-            .values("hour", "surface")
-            .annotate(requests=Sum("request_count"))
-            .order_by("hour", "surface")
-        )
-
-        context["daily_rows"] = daily_rows
-        context["top_paths"] = top_paths
-        context["hourly_rows"] = hourly_rows
-        context["days"] = days
-        return context
 
 
 class SiteLoginView(LoginView):
@@ -1058,6 +1006,7 @@ class HistoryView(TemplateView):
 
         context["graph"] = figure.to_html(
             full_html=False,
+            include_plotlyjs="cdn",
             config={
                 "modeBarButtonsToRemove": [
                     "zoom",
@@ -1487,6 +1436,8 @@ class GraphFormView(FormView):
         )
 
         context["graph"] = figure.to_html(
+            full_html=False,
+            include_plotlyjs="cdn",
             config={
                 "modeBarButtonsToRemove": [
                     "zoom",
@@ -1497,7 +1448,7 @@ class GraphFormView(FormView):
                     "autoScale",
                     "resetScale",
                 ]
-            }
+            },
         )
         context["live_external_forecasts_enabled"] = _can_use_admin_only_features(self.request)
         context["live_external_counts"] = live_external_counts
@@ -1546,7 +1497,7 @@ class V2NavMixin:
                 "about_link": "/v2/about/",
                 "home_link": "/v2/X/",
                 "is_v2": True,
-                "classic_url": "/",
+                "classic_url": "/X/",
                 "current_page": self._nav_page,
             }
         )
@@ -1562,6 +1513,34 @@ class ProductionLoginRequiredMixin:
 
             return redirect_to_login(request.get_full_path())
         return super().dispatch(request, *args, **kwargs)
+
+
+def _ext_db_fallback(source, region, start, end):
+    """Return the most recent stored ExternalForecast rows for a source/region, or None if absent."""
+    latest = (
+        ExternalForecast.objects
+        .filter(source=source, region=region)
+        .order_by("-source_created_at")
+        .first()
+    )
+    if latest is None:
+        return None
+    age_hours = (timezone.now() - latest.downloaded_at).total_seconds() / 3600
+    rows = [
+        {"date_time": r.date_time, "agile_pred": float(r.agile_pred)}
+        for r in ExternalForecast.objects.filter(
+            source=source,
+            region=region,
+            source_created_at=latest.source_created_at,
+            date_time__gte=start,
+            date_time__lte=end,
+        ).order_by("date_time")
+    ]
+    return {
+        "rows": rows,
+        "source_created_at": latest.source_created_at,
+        "is_fresh": age_hours <= 36,
+    }
 
 
 class GraphV2View(V2NavMixin, TemplateView):
@@ -1587,6 +1566,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         show_band = self.request.GET.get("band", "1") != "0"
         show_export = self.request.GET.get("export", "0") == "1" and not raw
         show_gen = self.request.GET.get("gen", "1") == "1"
+        show_fc_gen = show_gen and self.request.GET.get("fg", "0") == "1"
         show_af = _truthy(self.request.GET.get("af", "")) and not raw
         show_x2r = _truthy(self.request.GET.get("x2r", "")) and not raw
         color_fn = _export_price_color if show_export else _price_color
@@ -1773,6 +1753,9 @@ class GraphV2View(V2NavMixin, TemplateView):
         _stored_forecast_rows = job_api_status.get("forecast_rows", -1)
         _bmrs_rows = source_rows.get("bmrs", -1)
         _om_rows = source_rows.get("openmeteo", -1)
+        _rte_rows = source_rows.get("rte_nuclear", -1)
+        _opmr_rows = source_rows.get("neso_opmr", -1)
+        _om_fr_rows = source_rows.get("openmeteo_fr", -1)
 
         def _bin_health(rows, threshold):
             if rows < 0:
@@ -1799,6 +1782,9 @@ class GraphV2View(V2NavMixin, TemplateView):
 
         _bmrs_health = _bin_health(_bmrs_rows, _BMRS_THRESHOLD)
         _om_health = _bin_health(_om_rows, _NESO_THRESHOLD)
+        _rte_health = _bin_health(_rte_rows, 24)      # ≥24 rows = at least 12h of 30-min data
+        _opmr_health = _bin_health(_opmr_rows, 14)   # ≥14 rows = at least 7 days broadcast
+        _om_fr_health = _bin_health(_om_fr_rows, 336)  # ≥336 rows = at least 7 days of 30-min data
 
         # Octopus: check freshness of PriceHistory (binary: ok if ≤ 26 h old)
         latest_price = PriceHistory.objects.order_by("-date_time").first()
@@ -1850,15 +1836,50 @@ class GraphV2View(V2NavMixin, TemplateView):
                 return f"forecast: {_stored_forecast_rows} rows"
             return "insufficient data"
 
+        _rank = {"fail": 0, "unknown": 1, "warn": 2, "ok": 3}
+        _worst_health = lambda a, b: min([a, b], key=lambda h: _rank.get(h, 1))
+
+        # NESO consolidated: forecast data + OPMR
+        _neso_combined_health = _worst_health(_neso_health, _opmr_health)
+        if _neso_combined_health == "ok":
+            _neso_combined_detail = "OK"
+        elif _neso_health != "ok":
+            _neso_combined_detail = _neso_detail()
+        else:
+            _neso_combined_detail = f"OPMR: {_opmr_rows} rows" if _opmr_rows > 0 else _src_detail("neso_opmr")
+
+        # Open-Meteo consolidated: UK + France
+        # Only include FR in the combined health if it has been fetched at least once.
+        # A never-fetched source (rows=-1, "unknown") should not degrade the UK result.
+        if _om_fr_rows >= 0:
+            _om_combined_health = _worst_health(_om_health, _om_fr_health)
+        else:
+            _om_combined_health = _om_health
+        if _om_combined_health == "ok":
+            _om_combined_detail = "OK"
+        elif _om_health != "ok":
+            _om_combined_detail = _src_detail("openmeteo")
+        elif _om_fr_rows >= 0:
+            _om_combined_detail = f"FR: {_om_fr_rows} rows" if _om_fr_rows > 0 else _src_detail("openmeteo_fr")
+        else:
+            _om_combined_detail = "OK"
+
         api_sources = [
-            {"name": "NESO", "health": _neso_health, "detail": _neso_detail()},
+            {"name": "NESO", "health": _neso_combined_health, "detail": _neso_combined_detail},
             {"name": "BMRS", "health": _bmrs_health, "detail": "OK" if _bmrs_health == "ok" else _src_detail("bmrs")},
-            {"name": "Open-Meteo", "health": _om_health, "detail": "OK" if _om_health == "ok" else _src_detail("openmeteo")},
+            {"name": "Open-Meteo", "health": _om_combined_health, "detail": _om_combined_detail},
             {
                 "name": "Octopus",
                 "health": _octopus_health,
                 "detail": "OK" if _octopus_health == "ok" else (
                     f"stale: {int(_octopus_hours_old)}h old" if _octopus_hours_old is not None else "no data"
+                ),
+            },
+            {
+                "name": "FR nuclear",
+                "health": _rte_health,
+                "detail": "OK" if _rte_health == "ok" else (
+                    f"{_rte_rows} rows" if _rte_rows > 0 else _src_detail("rte_nuclear")
                 ),
             },
         ]
@@ -2094,42 +2115,70 @@ class GraphV2View(V2NavMixin, TemplateView):
 
         # External forecasts (AgileForecast / X2R)
         _EXT_COLORS = {"AgileForecast": "#D55E00", "X2R": "#009E73"}
-        _ext_sources = []
+        _EXT_SOURCES = {
+            "AgileForecast": (fetch_agileforecast, ExternalForecast.SOURCE_AGILEFORECAST),
+            "X2R": (fetch_x2r, ExternalForecast.SOURCE_X2R),
+        }
+        _ext_labels = []
         if show_af:
-            _ext_sources.append(("AgileForecast", fetch_agileforecast))
+            _ext_labels.append("AgileForecast")
         if show_x2r:
-            _ext_sources.append(("X2R", fetch_x2r))
-        for ext_label, ext_fetcher in _ext_sources:
+            _ext_labels.append("X2R")
+
+        ext_statuses = []
+        for ext_label in _ext_labels:
+            ext_fetcher, ext_source_const = _EXT_SOURCES[ext_label]
+            ext_data = None
+            ext_health = "ok"
+            ext_detail = "Live"
+
             try:
                 ext_data = ext_fetcher(region)
-                ext_rows = ext_data.get("rows", [])
-                if not ext_rows:
-                    continue
-                ext_s = pd.Series(
-                    index=pd.to_datetime([r["date_time"] for r in ext_rows]),
-                    data=[float(r["agile_pred"]) for r in ext_rows],
-                ).sort_index()
-                try:
-                    ext_s.index = ext_s.index.tz_convert("GB")
-                except TypeError:
-                    ext_s.index = ext_s.index.tz_localize("GB")
-                ext_s = ext_s[(ext_s.index >= prior_gb) & (ext_s.index <= end_gb)]
-                if show_export:
-                    ext_s = import_agile_to_export_agile(ext_s, region=region)
-                if ext_s.empty:
-                    continue
-                created_at = pd.Timestamp(ext_data["source_created_at"]).tz_convert("GB")
-                ext_color = _EXT_COLORS[ext_label]
-                add_price(go.Scatter(
-                    x=ext_s.index,
-                    y=ext_s.values,
-                    mode="lines",
-                    line=dict(shape="hv", color=ext_color, width=1.5),
-                    name=f"{ext_label} ({created_at.strftime('%d %b %H:%M')})",
-                    hovertemplate=f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>{ext_label}</extra>",
-                ))
             except Exception as exc:
-                logger.warning("GraphV2: external forecast %s failed: %s", ext_label, exc)
+                logger.warning("GraphV2: %s live call failed: %s", ext_label, exc)
+                fallback = _ext_db_fallback(ext_source_const, region, prior_gb, end_gb)
+                if fallback is not None:
+                    ext_data = fallback
+                    ext_health = "warn" if fallback["is_fresh"] else "fail"
+                    ext_detail = "Stored data (live unavailable)" if fallback["is_fresh"] else "Stale data (download failed)"
+                else:
+                    ext_statuses.append({"name": ext_label, "health": "fail", "detail": "No data available"})
+                    continue
+
+            ext_rows = ext_data.get("rows", [])
+            if not ext_rows:
+                ext_statuses.append({"name": ext_label, "health": "fail", "detail": "No data"})
+                continue
+
+            ext_s = pd.Series(
+                index=pd.to_datetime([r["date_time"] for r in ext_rows]),
+                data=[float(r["agile_pred"]) for r in ext_rows],
+            ).sort_index()
+            try:
+                ext_s.index = ext_s.index.tz_convert("GB")
+            except TypeError:
+                ext_s.index = ext_s.index.tz_localize("GB")
+            ext_s = ext_s[(ext_s.index >= prior_gb) & (ext_s.index <= end_gb)]
+            if show_export:
+                ext_s = import_agile_to_export_agile(ext_s, region=region)
+            if ext_s.empty:
+                ext_statuses.append({"name": ext_label, "health": "warn", "detail": "No data in range"})
+                continue
+
+            created_at = pd.Timestamp(ext_data["source_created_at"]).tz_convert("GB")
+            if ext_health == "ok":
+                ext_detail = f"Live ({created_at.strftime('%d %b %H:%M')})"
+            ext_statuses.append({"name": ext_label, "health": ext_health, "detail": ext_detail})
+
+            ext_color = _EXT_COLORS[ext_label]
+            add_price(go.Scatter(
+                x=ext_s.index,
+                y=ext_s.values,
+                mode="lines",
+                line=dict(shape="hv", color=ext_color, width=1.5),
+                name=f"{ext_label} ({created_at.strftime('%d %b %H:%M')})",
+                hovertemplate=f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>{ext_label}</extra>",
+            ))
 
         # Now vline — appears across all subplots
         figure.add_vline(
@@ -2193,7 +2242,36 @@ class GraphV2View(V2NavMixin, TemplateView):
                     y=[(r.demand + r.solar + (r.total_wind - r.bm_wind)) / 1000 for r in h_rows],
                     line={"color": "#aaaa77", "width": 2}, name="Historic demand",
                 ))
-            figure.update_yaxes(title_text="Power [GW]", row=3, col=1)
+            if show_fc_gen and older:
+                for i, fc_obj in enumerate(older[:3]):
+                    fc_gen_rows = list(
+                        ForecastData.objects.filter(
+                            forecast=fc_obj,
+                            date_time__gte=prior_gb.tz_convert("UTC"),
+                            date_time__lte=end_gb.tz_convert("UTC"),
+                        ).order_by("date_time")
+                    )
+                    if not fc_gen_rows:
+                        continue
+                    color = self._OLDER_COLORS[i % len(self._OLDER_COLORS)]
+                    fc_label = pd.Timestamp(fc_obj.created_at).tz_convert("GB").strftime("%d %b %H:%M")
+                    add_gen(go.Scatter(
+                        x=[r.date_time for r in fc_gen_rows],
+                        y=[(r.nuclear + r.bm_wind + r.emb_wind + r.solar) / 1000 for r in fc_gen_rows],
+                        mode="lines",
+                        line=dict(color=color, width=1.5, dash="dot"),
+                        name=f"Gen ({fc_label})",
+                        hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} GW<extra>Gen {fc_label}</extra>",
+                    ))
+                    add_gen(go.Scatter(
+                        x=[r.date_time for r in fc_gen_rows],
+                        y=[(r.demand + r.solar + r.emb_wind) / 1000 for r in fc_gen_rows],
+                        mode="lines",
+                        line=dict(color=color, width=1.5, dash="dot"),
+                        name=f"Demand ({fc_label})",
+                        hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} GW<extra>Demand {fc_label}</extra>",
+                    ))
+            figure.update_yaxes(title_text="Power [GW]", fixedrange=True, row=3, col=1)
 
         # Colour strip at bottom of price chart
         if not strip_s.empty:
@@ -2240,6 +2318,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 zeroline=True,
                 zerolinecolor="#888",
                 zerolinewidth=2,
+                fixedrange=True,
                 row=1,
                 col=1,
             )
@@ -2251,6 +2330,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                     zeroline=True,
                     zerolinecolor="#888",
                     zerolinewidth=2,
+                    fixedrange=True,
                 ),
             )
 
@@ -2281,6 +2361,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 "show_band": show_band,
                 "show_export": show_export,
                 "show_gen": show_gen,
+                "show_fc_gen": show_fc_gen,
                 "show_af": show_af,
                 "show_x2r": show_x2r,
                 "summary": summary,
@@ -2294,8 +2375,10 @@ class GraphV2View(V2NavMixin, TemplateView):
                 "day_options": self._DAY_OPTIONS,
                 "forecast_list": forecast_list,
                 "selected_ids": selected_ids,
+                "ext_statuses": ext_statuses,
                 "graph": figure.to_html(
                     full_html=False,
+                    include_plotlyjs="cdn",
                     config={"displayModeBar": False, "responsive": True},
                 ),
                 "classic_url": f"/{region}/",
@@ -2431,6 +2514,7 @@ class HistoryV2View(V2NavMixin, HistoryView):
         fig.update_yaxes(
             title_text=price_unit,
             range=[0, shared_max],
+            fixedrange=True,
             row=1,
             col=1,
         )
@@ -2440,12 +2524,14 @@ class HistoryV2View(V2NavMixin, HistoryView):
             zeroline=True,
             zerolinecolor="#888",
             zerolinewidth=2,
+            fixedrange=True,
             row=2,
             col=1,
         )
 
         return fig.to_html(
             full_html=False,
+            include_plotlyjs=False,
             config={"displayModeBar": False, "responsive": True},
         )
 
@@ -2606,6 +2692,7 @@ class StatsV2View(V2NavMixin, StatsView):
             "diagnostic_unique_slots": diag["unique_slots"],
             "diagnostic_date_from": diag["date_from"],
             "diagnostic_date_to": diag["date_to"],
+            "feature_experiment": self._build_feature_experiment_section(),
         }
         cache.set(cache_key, v2_extra, timeout=60 * 60 * 24)
         context.update(v2_extra)
@@ -2877,12 +2964,148 @@ class StatsV2View(V2NavMixin, StatsView):
             "chart": fig4.to_html(full_html=False, include_plotlyjs=False),
         })
 
+        # Chart 5: Feature Importance
+        fi_chart = StatsV2View._build_feature_importance_chart()
+        if fi_chart:
+            charts.append(fi_chart)
+
         return {
             "charts": charts,
             "sample_count": sample_count,
             "unique_slots": unique_slots,
             "date_from": date_from,
             "date_to": date_to,
+        }
+
+
+    @staticmethod
+    def _build_feature_importance_chart():
+        """Read feature importances from the most recent UpdateJob and return a chart dict."""
+        fi_job = (
+            UpdateJob.objects
+            .exclude(options__feature_importance=None)
+            .order_by("-requested_at")
+            .first()
+        )
+        if fi_job is None:
+            return None
+        fi = fi_job.options.get("feature_importance", {})
+        if not fi:
+            return None
+
+        _FEATURE_LABELS = {
+            "bm_wind": "BM wind (MW)",
+            "solar": "Solar (MW)",
+            "emb_wind": "Embedded wind (MW)",
+            "nuclear": "UK nuclear (MW)",
+            "fr_nuclear": "FR nuclear (MW)",
+            "gas_ttf": "Gas TTF (€/MWh)",
+            "demand": "Demand (MW)",
+            "temp_2m": "Temperature (°C)",
+            "wind_10m": "Wind speed (m/s)",
+            "rad": "Radiation (W/m²)",
+            "opmr_surplus": "OPMR surplus (MW)",
+            "fr_wind": "France wind speed (m/s)",
+            "fr_rad": "France solar radiation (W/m²)",
+            "peak": "Peak hours (16–19)",
+            "weekend": "Weekend",
+            "days_ago": "Forecast age (days)",
+            "dt": "Lead time (days)",
+            "time": "Time of day",
+            "dow": "Day of week",
+        }
+
+        sorted_items = sorted(fi.items(), key=lambda x: x[1])
+        labels = [_FEATURE_LABELS.get(k, k) for k, _ in sorted_items]
+        values = [v for _, v in sorted_items]
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=values,
+            y=labels,
+            orientation="h",
+            marker_color="#4a90d9",
+            hovertemplate="%{y}<br>Importance: %{x:.4f}<extra></extra>",
+        ))
+        fig.update_layout(
+            template="plotly_dark",
+            plot_bgcolor="#212529",
+            paper_bgcolor="#343a40",
+            height=max(300, 30 * len(labels) + 60),
+            margin={"r": 10, "t": 30, "l": 170, "b": 50},
+            xaxis={"title": "Relative importance (ensemble average)"},
+            yaxis={"title": ""},
+        )
+        return {
+            "title": "Feature Importance",
+            "description": (
+                "Average normalised feature importance across the three ensemble models (CatBoost, LightGBM, ExtraTrees). "
+                "Higher bars indicate features that most strongly drive the predicted price. "
+                "Updated each time the model retrains."
+            ),
+            "chart": fig.to_html(full_html=False, include_plotlyjs=False),
+        }
+
+    @staticmethod
+    def _build_feature_experiment_section():
+        """Build a feature-experiment results chart from the most recent UpdateJob."""
+        exp_job = (
+            UpdateJob.objects
+            .exclude(options__feature_experiment=None)
+            .order_by("-requested_at")
+            .first()
+        )
+        if exp_job is None:
+            return None
+        exp = exp_job.options.get("feature_experiment", {})
+        results = exp.get("results", {})
+        winner = exp.get("feature_set", "")
+        date_str = exp.get("date", "")
+        if not results:
+            return None
+
+        sorted_items = sorted(results.items(), key=lambda x: x[1]["score"])
+        names = [name for name, _ in sorted_items]
+        scores = [data["score"] for _, data in sorted_items]
+        wmae_vals = [data["wmae"] for _, data in sorted_items]
+        wrmse_vals = [data["wrmse"] for _, data in sorted_items]
+        colors = ["#28a745" if name == winner else "#4a90d9" for name in names]
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=scores,
+            y=names,
+            orientation="h",
+            marker_color=colors,
+            customdata=list(zip(wmae_vals, wrmse_vals)),
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "Score: %{x:.4f}<br>"
+                "wMAE: %{customdata[0]:.4f}<br>"
+                "wRMSE: %{customdata[1]:.4f}"
+                "<extra></extra>"
+            ),
+        ))
+        fig.update_layout(
+            template="plotly_dark",
+            plot_bgcolor="#212529",
+            paper_bgcolor="#343a40",
+            height=max(280, 32 * len(names) + 80),
+            margin={"r": 10, "t": 20, "l": 200, "b": 50},
+            xaxis={"title": "Combined score (lower is better)"},
+            yaxis={"title": ""},
+        )
+
+        try:
+            run_date = pd.Timestamp(date_str).strftime("%d %b %Y %H:%M UTC")
+        except Exception:
+            run_date = date_str
+
+        return {
+            "winner": winner,
+            "run_date": run_date,
+            "chart": fig.to_html(full_html=False, include_plotlyjs=False),
+            "set_count": len(results),
         }
 
 
@@ -2894,6 +3117,11 @@ class AboutV2View(V2NavMixin, AboutView):
         context = super().get_context_data(**kwargs)
         context["classic_url"] = "/about"
         return context
+
+
+class ModelDetailV2View(V2NavMixin, TemplateView):
+    template_name = "model_detail_v2.html"
+    _nav_page = "about"
 
 
 class ApiHowToV2View(V2NavMixin, ApiHowToView):
