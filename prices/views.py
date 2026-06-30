@@ -2395,8 +2395,9 @@ class GraphV2View(V2NavMixin, TemplateView):
             ]
         )
 
-        # SHAP per-slot explanations: values scaled from model-native £/MWh to Agile p/kWh
-        # using the region X (national average) linear factor for consistent display units.
+        # SHAP per-slot explanations: scale model-native £/MWh values using the selected
+        # region's own linear factor so contributors are in the same units as the price chart.
+        _shap_m, _shap_a = regions.get(region, regions["X"])["factors"]
         shap_data = {}
         if latest is not None:
             shap_rows = (
@@ -2413,10 +2414,10 @@ class GraphV2View(V2NavMixin, TemplateView):
                 ts_ms = int(pd.Timestamp(row.date_time).timestamp() * 1000)
                 shap_data[str(ts_ms)] = {
                     "time": pd.Timestamp(row.date_time).tz_convert("GB").strftime("%d %b %H:%M"),
-                    "price": round(row.day_ahead * _AF_M + _AF_A, 1) if row.day_ahead is not None else None,
+                    "price": round(row.day_ahead * _shap_m + _shap_a, 1) if row.day_ahead is not None else None,
                     "contributors": [
                         {"label": _FEATURE_LABELS.get(item["feature"], item["feature"]),
-                         "value": round(item["value"] * _AF_M, 2)}
+                         "value": round(item["value"] * _shap_m, 2)}
                         for item in (row.shap_top_features or [])
                     ],
                 }
@@ -2454,6 +2455,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 ) if not raw else "[]",
                 "now_ms": int(now_gb.timestamp() * 1000),
                 "shap_data_json": json.dumps(shap_data),
+                "shap_unit": price_display["unit"],
                 "day_options": self._DAY_OPTIONS,
                 "forecast_list": forecast_list,
                 "selected_ids": selected_ids,

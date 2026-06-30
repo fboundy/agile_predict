@@ -296,7 +296,7 @@
       </div>
       <div id="shap-explain-title" class="mb-1" style="font-size:.85rem;font-weight:600"></div>
       <p class="text-body-secondary mb-2" style="font-size:.78rem">
-        Top SHAP feature contributions (ensemble average, p/kWh Agile) driving the predicted price for this slot.
+        Top SHAP feature contributions (ensemble average, {{ shap_unit }}) driving the predicted price for this slot.
         Red bars push the price up, blue bars pull it down.
       </p>
       <div id="shap-explain-chart"></div>
@@ -305,6 +305,7 @@
   <script>
   (function () {
     var SHAP_DATA = {{ shap_data_json|safe }};
+    var SHAP_UNIT = '{{ shap_unit }}';
     if (!SHAP_DATA || !Object.keys(SHAP_DATA).length) return;
 
     var plotDiv = document.querySelector('.plotly-graph-div');
@@ -321,7 +322,7 @@
       var entry = SHAP_DATA[String(nearestSlotMs(ms))];
       if (!entry || !entry.contributors.length) return;
 
-      titleEl.textContent = entry.time + (entry.price !== null ? '  —  est. ' + entry.price + ' p/kWh Agile (region X)' : '');
+      titleEl.textContent = entry.time + (entry.price !== null ? '  —  est. ' + entry.price + ' ' + SHAP_UNIT : '');
 
       var sorted = entry.contributors.slice().sort(function (a, b) { return a.value - b.value; });
       var labels = sorted.map(function (c) { return c.label; });
@@ -334,7 +335,7 @@
         x: values,
         y: labels,
         marker: { color: colors },
-        hovertemplate: '%{y}<br>%{x:.2f} p/kWh<extra></extra>',
+        hovertemplate: '%{y}<br>%{x:.2f} ' + SHAP_UNIT + '<extra></extra>',
       }], {
         template: 'plotly_dark',
         plot_bgcolor: '#212529',
@@ -342,7 +343,7 @@
         margin: { l: 210, r: 20, t: 10, b: 40 },
         font: { size: 12, color: '#dee2e6' },
         height: Math.max(150, 38 * labels.length + 50),
-        xaxis: { title: 'SHAP contribution (p/kWh Agile)', zeroline: true, zerolinecolor: '#888', zerolinewidth: 2 },
+        xaxis: { title: 'SHAP contribution (' + SHAP_UNIT + ')', zeroline: true, zerolinecolor: '#888', zerolinewidth: 2 },
         yaxis: { title: '' },
       }, { displayModeBar: false, responsive: true });
 
