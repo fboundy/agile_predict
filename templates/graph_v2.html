@@ -207,7 +207,7 @@
       </a>
       <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}&opmr={% if show_opmr %}0{% else %}1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
          class="btn btn-sm {% if show_opmr %}btn-outline-warning active{% else %}btn-outline-secondary{% endif %}">
-        OPMR surplus
+        Dispatch capacity
       </a>
       {% if show_gen and selected_ids %}
       <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}&gen=1&fg={% if show_fc_gen %}0{% else %}1{% endif %}{% if show_opmr %}&opmr=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
