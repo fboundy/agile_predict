@@ -267,16 +267,16 @@ _EXP_CB_PARAMS   = dict(iterations=150, learning_rate=0.05, depth=6, l2_leaf_reg
 _EXP_LGBM_PARAMS = dict(n_estimators=150, learning_rate=0.05, num_leaves=31, random_state=42, verbose=-1, n_jobs=1)
 _EXP_ET_PARAMS   = dict(n_estimators=200, min_samples_leaf=4, max_features="sqrt", random_state=42, n_jobs=1)
 
-# Lead-time weights: first 3 days → 3×, first 7 days → 2×, beyond → 1×
-def _horizon_weights(dt_series):
-    return np.where(dt_series < 3, 3.0, np.where(dt_series < 7, 2.0, 1.0))
 
 
 def run_feature_experiment(df, ff_all, prices, _logger=None):
     """
     Walk-forward cross-validation across EXPERIMENT_FEATURE_SETS.
-    Scores each set on weighted MAE + weighted RMSE (equal weight), where
-    lead time < 3 days is weighted 3×, < 7 days 2×, else 1×.
+    Scores each set on MAE + RMSE (equal weight) evaluated only on the
+    1–3 day forecast horizon, where model signal dominates over weather
+    uncertainty. Sub-1d predictions may be blended with GB60 actuals;
+    beyond 3d the weather forecast error swamps feature differences.
+    Price-extreme slots are upweighted by linear z-score.
 
     Returns (winning_set_name: str, results: dict[name -> {score, wmae, wrmse}])
     """
@@ -368,9 +368,17 @@ def run_feature_experiment(df, ff_all, prices, _logger=None):
                 continue
 
             ensemble = np.mean(preds, axis=0)
-            residuals = ensemble - np.array(test_y)
-            _z = (np.array(test_y) - float(train_y.mean())) / float(train_y.std())
-            weights = _horizon_weights(dt_vals) * np.maximum(1.0, np.abs(_z))
+
+            # Evaluate only on 1–3 day horizon: sub-1d may be blended with GB60
+            # actuals; beyond 3d weather uncertainty swamps feature differences.
+            eval_mask = (dt_vals >= 1) & (dt_vals <= 3)
+            if eval_mask.sum() < 5:
+                continue
+
+            residuals = (ensemble - np.array(test_y))[eval_mask]
+            eval_y    = np.array(test_y)[eval_mask]
+            _z        = (eval_y - float(train_y.mean())) / float(train_y.std())
+            weights   = np.maximum(1.0, np.abs(_z))
             wmae  = float(np.average(np.abs(residuals), weights=weights))
             wrmse = float(np.sqrt(np.average(residuals ** 2, weights=weights)))
             fold_scores.append({"wmae": wmae, "wrmse": wrmse})
