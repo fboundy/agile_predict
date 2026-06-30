@@ -48,6 +48,28 @@ logger = logging.getLogger("prices.web")
 USER_GROUP_NAME = "Users"
 PRIVILEGED_GROUP_NAME = "Privileged Users"
 
+_FEATURE_LABELS = {
+    "bm_wind": "BM wind (MW)",
+    "solar": "Solar (MW)",
+    "emb_wind": "Embedded wind (MW)",
+    "nuclear": "UK nuclear (MW)",
+    "fr_nuclear": "FR nuclear (MW)",
+    "gas_ttf": "Gas TTF (€/MWh)",
+    "demand": "Demand (MW)",
+    "temp_2m": "Temperature (°C)",
+    "wind_10m": "Wind speed (m/s)",
+    "rad": "Radiation (W/m²)",
+    "opmr_surplus": "OPMR surplus (MW)",
+    "fr_wind": "France wind speed (m/s)",
+    "fr_rad": "France solar radiation (W/m²)",
+    "peak": "Peak hours (16–19)",
+    "weekend": "Weekend",
+    "days_ago": "Forecast age (days)",
+    "dt": "Lead time (days)",
+    "time": "Time of day",
+    "dow": "Day of week",
+}
+
 
 def _is_raw_day_ahead_region(region):
     return regions.get(region, {}).get("raw_day_ahead", False)
@@ -2341,6 +2363,32 @@ class GraphV2View(V2NavMixin, TemplateView):
             ]
         )
 
+        # SHAP per-slot explanations for the primary (latest) forecast, keyed by epoch ms.
+        # Day-ahead price/contributions are region-independent (the model predicts the raw
+        # wholesale price; the region conversion is a fixed linear scale applied afterwards).
+        shap_data = {}
+        if latest is not None:
+            shap_rows = (
+                ForecastData.objects
+                .filter(
+                    forecast=latest,
+                    date_time__gte=prior_gb.tz_convert("UTC"),
+                    date_time__lte=end_gb.tz_convert("UTC"),
+                )
+                .exclude(shap_top_features__isnull=True)
+                .order_by("date_time")
+            )
+            for row in shap_rows:
+                ts_ms = int(pd.Timestamp(row.date_time).timestamp() * 1000)
+                shap_data[str(ts_ms)] = {
+                    "time": pd.Timestamp(row.date_time).tz_convert("GB").strftime("%d %b %H:%M"),
+                    "price": round(row.day_ahead, 1) if row.day_ahead is not None else None,
+                    "contributors": [
+                        {"label": _FEATURE_LABELS.get(item["feature"], item["feature"]), "value": item["value"]}
+                        for item in (row.shap_top_features or [])
+                    ],
+                }
+
         # Forecast list for template checkboxes
         forecast_list = [
             {
@@ -2372,6 +2420,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                      for ts, p in strip_s.items() if pd.notna(p)]
                 ) if not raw else "[]",
                 "now_ms": int(now_gb.timestamp() * 1000),
+                "shap_data_json": json.dumps(shap_data),
                 "day_options": self._DAY_OPTIONS,
                 "forecast_list": forecast_list,
                 "selected_ids": selected_ids,
@@ -2984,28 +3033,6 @@ class StatsV2View(V2NavMixin, StatsView):
         }
 
 
-    _FEATURE_LABELS = {
-        "bm_wind": "BM wind (MW)",
-        "solar": "Solar (MW)",
-        "emb_wind": "Embedded wind (MW)",
-        "nuclear": "UK nuclear (MW)",
-        "fr_nuclear": "FR nuclear (MW)",
-        "gas_ttf": "Gas TTF (€/MWh)",
-        "demand": "Demand (MW)",
-        "temp_2m": "Temperature (°C)",
-        "wind_10m": "Wind speed (m/s)",
-        "rad": "Radiation (W/m²)",
-        "opmr_surplus": "OPMR surplus (MW)",
-        "fr_wind": "France wind speed (m/s)",
-        "fr_rad": "France solar radiation (W/m²)",
-        "peak": "Peak hours (16–19)",
-        "weekend": "Weekend",
-        "days_ago": "Forecast age (days)",
-        "dt": "Lead time (days)",
-        "time": "Time of day",
-        "dow": "Day of week",
-    }
-
     @staticmethod
     def _build_feature_importance_chart():
         """Read feature importances from the most recent UpdateJob and return a chart dict."""
@@ -3022,7 +3049,7 @@ class StatsV2View(V2NavMixin, StatsView):
             return None
 
         sorted_items = sorted(fi.items(), key=lambda x: x[1])
-        labels = [StatsV2View._FEATURE_LABELS.get(k, k) for k, _ in sorted_items]
+        labels = [_FEATURE_LABELS.get(k, k) for k, _ in sorted_items]
         values = [v for _, v in sorted_items]
 
         fig = go.Figure()
@@ -3068,7 +3095,7 @@ class StatsV2View(V2NavMixin, StatsView):
             return None
 
         sorted_items = sorted(shap_imp.items(), key=lambda x: x[1])
-        labels = [StatsV2View._FEATURE_LABELS.get(k, k) for k, _ in sorted_items]
+        labels = [_FEATURE_LABELS.get(k, k) for k, _ in sorted_items]
         values = [v for _, v in sorted_items]
 
         fig = go.Figure()
@@ -3117,7 +3144,7 @@ class StatsV2View(V2NavMixin, StatsView):
         for row in rows:
             contributors = [
                 {
-                    "label": StatsV2View._FEATURE_LABELS.get(item["feature"], item["feature"]),
+                    "label": _FEATURE_LABELS.get(item["feature"], item["feature"]),
                     "value": item["value"],
                 }
                 for item in (row.shap_top_features or [])

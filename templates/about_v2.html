@@ -90,8 +90,8 @@
           </ol>
           <p class="mb-0 text-body-secondary mt-2" style="font-size:.78rem">
             Each forecast is explained with SHAP (the LightGBM ensemble member, via TreeExplainer): a
-            global feature-importance chart and per-slot top contributing features are shown on the
-            <a href="{% url 'stats_v2' %}" style="color:#adb5bd">Model stats</a> page.
+            global feature-importance chart is shown on the <a href="{% url 'stats_v2' %}" style="color:#adb5bd">Model stats</a> page,
+            and clicking any point on the forecast chart shows the top features driving that slot's price.
           </p>
         </div>
       </div>

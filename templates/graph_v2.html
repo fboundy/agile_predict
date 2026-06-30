@@ -280,6 +280,84 @@
   })();
   </script>
 
+  {# ======== Why this price? (SHAP explanation) ======== #}
+  <div class="card border-0 shadow-sm mb-3 d-none" style="background:#2a2d31" id="shap-explain-panel">
+    <div class="card-body py-2 px-3">
+      <div class="d-flex align-items-baseline justify-content-between flex-wrap gap-2 mb-1">
+        <h6 class="text-body-secondary mb-0" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">
+          Why this price?
+        </h6>
+        <span class="text-body-secondary" style="font-size:.72rem">Click a point on the chart to inspect another slot</span>
+      </div>
+      <div id="shap-explain-title" class="mb-1" style="font-size:.85rem;font-weight:600"></div>
+      <p class="text-body-secondary mb-2" style="font-size:.78rem">
+        Top SHAP feature contributions (LightGBM, £/MWh) driving the day-ahead price prediction for this slot.
+        Red bars push the price up, blue bars pull it down.
+      </p>
+      <div id="shap-explain-chart"></div>
+    </div>
+  </div>
+  <script>
+  (function () {
+    var SHAP_DATA = {{ shap_data_json|safe }};
+    if (!SHAP_DATA || !Object.keys(SHAP_DATA).length) return;
+
+    var plotDiv = document.querySelector('.plotly-graph-div');
+    var panel   = document.getElementById('shap-explain-panel');
+    var chartEl = document.getElementById('shap-explain-chart');
+    var titleEl = document.getElementById('shap-explain-title');
+    if (!plotDiv || !panel || !chartEl) return;
+
+    function nearestSlotMs(ms) {
+      return Math.round(ms / 1800000) * 1800000;
+    }
+
+    function showSlot(ms) {
+      var entry = SHAP_DATA[String(nearestSlotMs(ms))];
+      if (!entry || !entry.contributors.length) return;
+
+      titleEl.textContent = entry.time + (entry.price !== null ? '  —  predicted ' + entry.price + ' £/MWh (day-ahead)' : '');
+
+      var sorted = entry.contributors.slice().sort(function (a, b) { return a.value - b.value; });
+      var labels = sorted.map(function (c) { return c.label; });
+      var values = sorted.map(function (c) { return c.value; });
+      var colors = values.map(function (v) { return v >= 0 ? '#dc3545' : '#4a9eff'; });
+
+      Plotly.react(chartEl, [{
+        type: 'bar',
+        orientation: 'h',
+        x: values,
+        y: labels,
+        marker: { color: colors },
+        hovertemplate: '%{y}<br>%{x:.2f} £/MWh<extra></extra>',
+      }], {
+        template: 'plotly_dark',
+        plot_bgcolor: '#212529',
+        paper_bgcolor: '#2a2d31',
+        margin: { l: 160, r: 20, t: 10, b: 35 },
+        height: Math.max(140, 34 * labels.length + 45),
+        xaxis: { title: 'SHAP contribution (£/MWh)', zeroline: true, zerolinecolor: '#888', zerolinewidth: 2 },
+        yaxis: { title: '' },
+      }, { displayModeBar: false, responsive: true });
+
+      panel.classList.remove('d-none');
+    }
+
+    plotDiv.on('plotly_click', function (data) {
+      if (!data.points || !data.points.length) return;
+      var x = data.points[0].x;
+      var ms = (x instanceof Date) ? x.getTime() : new Date(x).getTime();
+      if (!isNaN(ms)) showSlot(ms);
+    });
+
+    // Pre-select the next upcoming slot so the panel isn't empty on load.
+    var nowMs = {{ now_ms }};
+    var keys = Object.keys(SHAP_DATA).map(Number).sort(function (a, b) { return a - b; });
+    var upcoming = keys.find(function (k) { return k >= nowMs; });
+    if (upcoming !== undefined) showSlot(upcoming);
+  })();
+  </script>
+
   {# ======== Cheap / best windows ======== #}
   {% if not is_raw_day_ahead_region %}
   <div class="card border-0 shadow-sm" style="background:#2a2d31" id="cw-card">
