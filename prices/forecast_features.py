@@ -54,6 +54,9 @@ EXPERIMENT_FEATURE_SETS = {
     # the settlement-period dispatch forecast adds value over the 14-day dispatchable_capacity feature.
     "fr_weather_melngc":    _BASE + ["fr_wind", "fr_rad", "melngc_margin"],
     "full_melngc":          _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear", "fr_wind", "fr_rad", "melngc_margin"],
+    # bm_wind vs emb_wind: r=0.924 in training data — test whether both are needed.
+    "gen_both_bm_only":     [f for f in _BASE_BOTH if f != "emb_wind"],
+    "gen_both_emb_only":    [f for f in _BASE_BOTH if f != "bm_wind"],
 }
 
 FEATURE_SETS = {
