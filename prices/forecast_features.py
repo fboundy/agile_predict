@@ -37,6 +37,10 @@ EXPERIMENT_FEATURE_SETS = {
     "weather_fuel_fr":      _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear"],
     "weather_fuel_fr_weather": _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_wind", "fr_rad"],
     "full":                 _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear", "fr_wind", "fr_rad"],
+    # melngc_margin: BMRS indicated day-ahead margin (~30h horizon, null beyond). Tests whether
+    # the settlement-period dispatch forecast adds value over the 14-day opmr_surplus feature.
+    "fr_weather_melngc":    _BASE + ["fr_wind", "fr_rad", "melngc_margin"],
+    "full_melngc":          _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear", "fr_wind", "fr_rad", "melngc_margin"],
 }
 
 FEATURE_SETS = {

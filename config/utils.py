@@ -256,14 +256,16 @@ def get_rte_french_nuclear(start=None, end=None):
 
 def get_neso_opmr(start=None, end=None):
     """
-    Fetch NESO Daily Operational Planning Margin Requirement.
-    Returns a Series of National Surplus (MW) indexed by UTC timestamps (30-min),
-    broadcast from daily values across the forecast window.
+    Fetch NESO OPMR component fields for each target date.
+
+    Returns a DataFrame indexed by UTC-normalised date with columns:
+      gen_availability, max_ic_import, opmr_total, constrained_plant
+
+    Callers compute the per-slot surplus themselves as:
+      gen_availability + max_ic_import - slot_demand - opmr_total - constrained_plant
+    This avoids the old bias of anchoring to peak demand for every half-hourly slot.
     """
     try:
-        # Sort by _id desc (insertion order) so the most recently published batch comes first.
-        # NESO publishes ~14 records per day (one per forecast date). Taking 100 gives ~7 days
-        # of the most recent publication plus overlap from yesterday's.
         url = "https://api.neso.energy/api/3/action/datastore_search"
         params = {
             "resource_id": "0eede912-8820-4c66-a58a-f7436d36b95f",
@@ -274,41 +276,58 @@ def get_neso_opmr(start=None, end=None):
         response.raise_for_status()
         records = response.json().get("result", {}).get("records", [])
         if not records:
-            return pd.Series(dtype=float, name="opmr_surplus")
+            return pd.DataFrame()
         df = pd.DataFrame(records)
-        df["Date"] = pd.to_datetime(df["Date"], utc=True)
+        df["Date"]         = pd.to_datetime(df["Date"], utc=True)
         df["Publish Date"] = pd.to_datetime(df["Publish Date"], utc=True)
-        df["National Surplus"] = pd.to_numeric(df["National Surplus"], errors="coerce")
-        # Take the most recently published forecast for each target date
+        for col in ["Generator Availability", "Maximum I/C Import", "OPMR total", "Constrained Plant"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df["Constrained Plant"] = df["Constrained Plant"].fillna(0)
         df = df.sort_values("Publish Date").drop_duplicates(subset="Date", keep="last")
         df = df.set_index("Date").sort_index()
-        # Keep only future/current dates
         today = pd.Timestamp.now(tz="UTC").normalize()
         df = df[df.index >= today - pd.Timedelta("1d")]
     except Exception:
         logger.exception("Unable to download NESO OPMR data")
-        return pd.Series(dtype=float, name="opmr_surplus")
+        return pd.DataFrame()
 
     if len(df) == 0:
-        return pd.Series(dtype=float, name="opmr_surplus")
+        return pd.DataFrame()
 
-    # Broadcast daily values to 30-min slots across the forecast window
-    if start is not None and end is not None:
-        idx = pd.date_range(
-            start=pd.Timestamp(start).tz_convert("UTC"),
-            end=pd.Timestamp(end).tz_convert("UTC"),
-            freq="30min",
+    out = pd.DataFrame({
+        "gen_availability":  df["Generator Availability"],
+        "max_ic_import":     df["Maximum I/C Import"],
+        "opmr_total":        df["OPMR total"],
+        "constrained_plant": df["Constrained Plant"],
+    })
+    out.index = out.index.normalize()
+    return out
+
+
+def get_melngc_margin():
+    """
+    Fetch BMRS Indicated Day-Ahead margin (boundary N) at settlement-period resolution.
+
+    Returns a Series of indicatedMargin (MW) indexed by UTC startTime for ~30 hours.
+    This uses actual dispatch forecasts rather than available capacity, so it's on a
+    larger absolute scale than OPMR-derived surplus — stored as a SEPARATE feature.
+    """
+    try:
+        resp = requests.get(
+            "https://data.elexon.co.uk/bmrs/api/v1/forecast/indicated/day-ahead",
+            params={"format": "json"},
+            timeout=15,
         )
-    else:
-        idx = pd.date_range(start=df.index[0], periods=48 * len(df), freq="30min")
-
-    # Reindex daily series onto 30-min slots then forward-fill within each day
-    day_series = df["National Surplus"].copy()
-    day_series.index = day_series.index.normalize()
-    day_series = day_series[~day_series.index.duplicated(keep="last")]
-    result = day_series.reindex(idx, method="ffill")
-    result.name = "opmr_surplus"
-    return result
+        resp.raise_for_status()
+        records = [r for r in resp.json().get("data", []) if r.get("boundary") == "N"]
+        if not records:
+            return pd.Series(dtype=float, name="melngc_margin")
+        df = pd.DataFrame(records)
+        df.index = pd.to_datetime(df["startTime"], utc=True)
+        return df["indicatedMargin"].rename("melngc_margin").sort_index()
+    except Exception:
+        logger.exception("Unable to download BMRS MELNGC data")
+        return pd.Series(dtype=float, name="melngc_margin")
 
 
 def get_latest_nuclear_forecast(start=None, end=None):
@@ -760,16 +779,44 @@ def get_latest_forecast():
         source_rows["rte_nuclear"] = 0
         source_details["rte_nuclear"] = {"label": "ENTSO-E FR nuclear", "rows": 0, "error": "no data", "fallback": False}
 
-    # NESO OPMR (daily operating margin) — optional, nullable
-    opmr = get_neso_opmr(start=df.index.min(), end=df.index.max())
-    if len(opmr) > 0:
-        df["opmr_surplus"] = opmr.reindex(df.index, method="ffill")
-        source_rows["neso_opmr"] = int(opmr.notna().sum())
+    # NESO OPMR — per-slot surplus: gen_availability + max_ic - slot_demand - opmr_total
+    # Uses each slot's own demand forecast rather than the daily peak demand, which removes
+    # the systematic bias that arose from applying a peak-anchored value to overnight slots.
+    opmr_daily = get_neso_opmr()
+    if not opmr_daily.empty and "demand" in df.columns:
+        # Align daily components onto every 30-min slot by normalising the slot index to dates
+        slot_dates = df.index.normalize()
+        def _align(col):
+            s = opmr_daily[col]
+            s = s[~s.index.duplicated(keep="last")]
+            return s.reindex(slot_dates).values
+
+        df["opmr_surplus"] = (
+            _align("gen_availability")
+            + _align("max_ic_import")
+            - df["demand"].values
+            - _align("opmr_total")
+            - _align("constrained_plant")
+        )
+        source_rows["neso_opmr"]   = int(df["opmr_surplus"].notna().sum())
         source_details["neso_opmr"] = {"label": "NESO OPMR", "rows": source_rows["neso_opmr"], "error": None, "fallback": False}
     else:
         df["opmr_surplus"] = None
-        source_rows["neso_opmr"] = 0
+        source_rows["neso_opmr"]   = 0
         source_details["neso_opmr"] = {"label": "NESO OPMR", "rows": 0, "error": "no data", "fallback": False}
+
+    # MELNGC — BMRS indicated day-ahead margin at settlement-period resolution (~30 h).
+    # Separate feature from opmr_surplus: uses actual dispatch forecasts so it's on a
+    # different (larger) absolute scale; stored as melngc_margin and tested via experiment.
+    melngc = get_melngc_margin()
+    if not melngc.empty:
+        df["melngc_margin"] = melngc.reindex(df.index)
+        source_rows["melngc"]   = int(df["melngc_margin"].notna().sum())
+        source_details["melngc"] = {"label": "BMRS MELNGC", "rows": source_rows["melngc"], "error": None, "fallback": False}
+    else:
+        df["melngc_margin"] = None
+        source_rows["melngc"]   = 0
+        source_details["melngc"] = {"label": "BMRS MELNGC", "rows": 0, "error": "no data", "fallback": False}
 
     # Open-Meteo France weather (wind+rad) — continental supply proxy, 16-day forecast
     fr_wx = get_open_meteo_fr_weather(start=df.index.min(), end=df.index.max())

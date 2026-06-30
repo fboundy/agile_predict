@@ -1186,7 +1186,7 @@ class Command(BaseCommand):
                             "day_ahead_extra_trees",
                             "plunge_probability",
                             "shap_top_features",
-                            *[c for c in ("fr_nuclear", "opmr_surplus", "fr_wind", "fr_rad") if c in fc.columns],
+                            *[c for c in ("fr_nuclear", "opmr_surplus", "melngc_margin", "fr_wind", "fr_rad") if c in fc.columns],
                         ]
                     ]
 
