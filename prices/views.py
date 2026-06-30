@@ -1589,6 +1589,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         show_export = self.request.GET.get("export", "0") == "1" and not raw
         show_gen = self.request.GET.get("gen", "1") == "1"
         show_fc_gen = show_gen and self.request.GET.get("fg", "0") == "1"
+        show_opmr = self.request.GET.get("opmr", "0") == "1"
         show_af = _truthy(self.request.GET.get("af", "")) and not raw
         show_x2r = _truthy(self.request.GET.get("x2r", "")) and not raw
         color_fn = _export_price_color if show_export else _price_color
@@ -1997,36 +1998,46 @@ class GraphV2View(V2NavMixin, TemplateView):
 
         # --- Build chart ---
         _STRIP_ROW = 2
-        if show_gen:
-            figure = make_subplots(
-                rows=3,
-                cols=1,
-                subplot_titles=("", "", "Generation & Demand"),
-                shared_xaxes=True,
-                vertical_spacing=0.04,
-                row_heights=[0.55, 0.04, 0.41],
-            )
+        _n_rows = 2 + int(show_gen) + int(show_opmr)
+        _GEN_ROW  = 3 if show_gen else None
+        _OPMR_ROW = (4 if show_gen else 3) if show_opmr else None
 
-            def add_price(trace):
-                figure.add_trace(trace, row=1, col=1)
-
-            def add_gen(trace):
-                figure.add_trace(trace, row=3, col=1)
-
-            chart_height = 660
+        if _n_rows == 4:
+            _row_heights     = [0.45, 0.03, 0.28, 0.24]
+            _subplot_titles  = ("", "", "Generation & Demand", "OPMR Surplus")
+            chart_height     = 820
+        elif show_gen:
+            _row_heights     = [0.55, 0.04, 0.41]
+            _subplot_titles  = ("", "", "Generation & Demand")
+            chart_height     = 660
+        elif show_opmr:
+            _row_heights     = [0.65, 0.04, 0.31]
+            _subplot_titles  = ("", "", "OPMR Surplus")
+            chart_height     = 600
         else:
-            figure = make_subplots(
-                rows=2,
-                cols=1,
-                shared_xaxes=True,
-                vertical_spacing=0,
-                row_heights=[0.94, 0.06],
-            )
+            _row_heights     = [0.94, 0.06]
+            _subplot_titles  = ("", "")
+            chart_height     = 440
 
-            def add_price(trace):
-                figure.add_trace(trace, row=1, col=1)
+        figure = make_subplots(
+            rows=_n_rows,
+            cols=1,
+            subplot_titles=_subplot_titles,
+            shared_xaxes=True,
+            vertical_spacing=0.04 if _n_rows > 2 else 0,
+            row_heights=_row_heights,
+        )
 
-            chart_height = 440
+        def add_price(trace):
+            figure.add_trace(trace, row=1, col=1)
+
+        def add_gen(trace):
+            if _GEN_ROW:
+                figure.add_trace(trace, row=_GEN_ROW, col=1)
+
+        def add_opmr(trace):
+            if _OPMR_ROW:
+                figure.add_trace(trace, row=_OPMR_ROW, col=1)
 
         # Uncertainty band — shaded fill drawn first so lines sit on top
         if show_band and not low_s.empty and not high_s.empty and not primary_s.empty:
@@ -2215,7 +2226,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         )
 
         # Generation & demand subplot
-        if show_gen and latest is not None:
+        if (show_gen or show_opmr) and latest is not None:
             fp = list(
                 ForecastData.objects.filter(
                     forecast=latest,
@@ -2228,72 +2239,89 @@ class GraphV2View(V2NavMixin, TemplateView):
                     date_time__gte=prior_gb.tz_convert("UTC"),
                     date_time__lte=now_gb.tz_convert("UTC"),
                 )
-            )
-            if fp:
-                add_gen(go.Scatter(
-                    x=[r.date_time for r in fp],
-                    y=[(r.demand + r.solar + r.emb_wind) / 1000 for r in fp],
-                    line={"color": "cyan", "width": 2}, name="Forecast demand",
-                ))
-                add_gen(go.Scatter(
-                    x=[r.date_time for r in fp], y=[r.nuclear / 1000 for r in fp],
-                    fill="tozeroy", line={"color": "rgba(160,160,160,1)"},
-                    fillcolor="rgba(180,180,180,0.8)", name="Nuclear",
-                ))
-                add_gen(go.Scatter(
-                    x=[r.date_time for r in fp],
-                    y=[(r.nuclear + r.bm_wind) / 1000 for r in fp],
-                    fill="tonexty", line={"color": "rgba(63,127,63)"},
-                    fillcolor="rgba(127,255,127,0.8)", name="Metered wind",
-                ))
-                add_gen(go.Scatter(
-                    x=[r.date_time for r in fp],
-                    y=[(r.nuclear + r.bm_wind + r.emb_wind) / 1000 for r in fp],
-                    fill="tonexty", line={"color": "rgba(50,150,220)"},
-                    fillcolor="rgba(100,200,255,0.7)", name="Embedded wind",
-                ))
-                add_gen(go.Scatter(
-                    x=[r.date_time for r in fp],
-                    y=[(r.nuclear + r.bm_wind + r.emb_wind + r.solar) / 1000 for r in fp],
-                    fill="tonexty", line={"color": "lightgray", "width": 2},
-                    fillcolor="rgba(255,255,127,0.8)", name="Solar",
-                ))
-            if h_rows:
-                add_gen(go.Scatter(
-                    x=[r.date_time for r in h_rows],
-                    y=[(r.demand + r.solar + (r.total_wind - r.bm_wind)) / 1000 for r in h_rows],
-                    line={"color": "#aaaa77", "width": 2}, name="Historic demand",
-                ))
-            if show_fc_gen and older:
-                for i, fc_obj in enumerate(older[:3]):
-                    fc_gen_rows = list(
-                        ForecastData.objects.filter(
-                            forecast=fc_obj,
-                            date_time__gte=prior_gb.tz_convert("UTC"),
-                            date_time__lte=end_gb.tz_convert("UTC"),
-                        ).order_by("date_time")
-                    )
-                    if not fc_gen_rows:
-                        continue
-                    color = self._OLDER_COLORS[i % len(self._OLDER_COLORS)]
-                    fc_label = pd.Timestamp(fc_obj.created_at).tz_convert("GB").strftime("%d %b %H:%M")
+            ) if show_gen else []
+            if show_gen:
+                if fp:
                     add_gen(go.Scatter(
-                        x=[r.date_time for r in fc_gen_rows],
-                        y=[(r.nuclear + r.bm_wind + r.emb_wind + r.solar) / 1000 for r in fc_gen_rows],
-                        mode="lines",
-                        line=dict(color=color, width=1.5, dash="dot"),
-                        name=f"Gen ({fc_label})",
-                        hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} GW<extra>Gen {fc_label}</extra>",
+                        x=[r.date_time for r in fp],
+                        y=[(r.demand + r.solar + r.emb_wind) / 1000 for r in fp],
+                        line={"color": "cyan", "width": 2}, name="Forecast demand",
                     ))
                     add_gen(go.Scatter(
-                        x=[r.date_time for r in fc_gen_rows],
-                        y=[(r.demand + r.solar + r.emb_wind) / 1000 for r in fc_gen_rows],
-                        mode="lines",
-                        line=dict(color=color, width=1.5, dash="dot"),
-                        name=f"Demand ({fc_label})",
-                        hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} GW<extra>Demand {fc_label}</extra>",
+                        x=[r.date_time for r in fp], y=[r.nuclear / 1000 for r in fp],
+                        fill="tozeroy", line={"color": "rgba(160,160,160,1)"},
+                        fillcolor="rgba(180,180,180,0.8)", name="Nuclear",
                     ))
-            figure.update_yaxes(title_text="Power [GW]", fixedrange=True, row=3, col=1)
+                    add_gen(go.Scatter(
+                        x=[r.date_time for r in fp],
+                        y=[(r.nuclear + r.bm_wind) / 1000 for r in fp],
+                        fill="tonexty", line={"color": "rgba(63,127,63)"},
+                        fillcolor="rgba(127,255,127,0.8)", name="Metered wind",
+                    ))
+                    add_gen(go.Scatter(
+                        x=[r.date_time for r in fp],
+                        y=[(r.nuclear + r.bm_wind + r.emb_wind) / 1000 for r in fp],
+                        fill="tonexty", line={"color": "rgba(50,150,220)"},
+                        fillcolor="rgba(100,200,255,0.7)", name="Embedded wind",
+                    ))
+                    add_gen(go.Scatter(
+                        x=[r.date_time for r in fp],
+                        y=[(r.nuclear + r.bm_wind + r.emb_wind + r.solar) / 1000 for r in fp],
+                        fill="tonexty", line={"color": "lightgray", "width": 2},
+                        fillcolor="rgba(255,255,127,0.8)", name="Solar",
+                    ))
+                if h_rows:
+                    add_gen(go.Scatter(
+                        x=[r.date_time for r in h_rows],
+                        y=[(r.demand + r.solar + (r.total_wind - r.bm_wind)) / 1000 for r in h_rows],
+                        line={"color": "#aaaa77", "width": 2}, name="Historic demand",
+                    ))
+                if show_fc_gen and older:
+                    for i, fc_obj in enumerate(older[:3]):
+                        fc_gen_rows = list(
+                            ForecastData.objects.filter(
+                                forecast=fc_obj,
+                                date_time__gte=prior_gb.tz_convert("UTC"),
+                                date_time__lte=end_gb.tz_convert("UTC"),
+                            ).order_by("date_time")
+                        )
+                        if not fc_gen_rows:
+                            continue
+                        color = self._OLDER_COLORS[i % len(self._OLDER_COLORS)]
+                        fc_label = pd.Timestamp(fc_obj.created_at).tz_convert("GB").strftime("%d %b %H:%M")
+                        add_gen(go.Scatter(
+                            x=[r.date_time for r in fc_gen_rows],
+                            y=[(r.nuclear + r.bm_wind + r.emb_wind + r.solar) / 1000 for r in fc_gen_rows],
+                            mode="lines",
+                            line=dict(color=color, width=1.5, dash="dot"),
+                            name=f"Gen ({fc_label})",
+                            hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} GW<extra>Gen {fc_label}</extra>",
+                        ))
+                        add_gen(go.Scatter(
+                            x=[r.date_time for r in fc_gen_rows],
+                            y=[(r.demand + r.solar + r.emb_wind) / 1000 for r in fc_gen_rows],
+                            mode="lines",
+                            line=dict(color=color, width=1.5, dash="dot"),
+                            name=f"Demand ({fc_label})",
+                            hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} GW<extra>Demand {fc_label}</extra>",
+                        ))
+                figure.update_yaxes(title_text="Power [GW]", fixedrange=True, row=_GEN_ROW, col=1)
+
+            if show_opmr and fp:
+                opmr_rows = [(r.date_time, r.opmr_surplus) for r in fp if r.opmr_surplus is not None]
+                if opmr_rows:
+                    xs, ys = zip(*opmr_rows)
+                    add_opmr(go.Scatter(
+                        x=list(xs),
+                        y=list(ys),
+                        mode="lines",
+                        fill="tozeroy",
+                        line={"color": "#fd7e14", "width": 2},
+                        fillcolor="rgba(253,126,20,0.25)",
+                        name="OPMR Surplus",
+                        hovertemplate="%{x|%d %b %H:%M}<br><b>%{y:.0f} MW</b><extra>OPMR Surplus</extra>",
+                    ))
+                figure.update_yaxes(title_text="OPMR Surplus [MW]", fixedrange=True, row=_OPMR_ROW, col=1)
 
         # Colour strip at bottom of price chart
         if not strip_s.empty:
@@ -2333,7 +2361,7 @@ class GraphV2View(V2NavMixin, TemplateView):
             paper_bgcolor="#1a1d21",
             bargap=0,
         )
-        if show_gen:
+        if show_gen or show_opmr:
             figure.update_layout(**common_layout)
             figure.update_yaxes(
                 title_text=price_display["axis_title"],
@@ -2410,6 +2438,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 "show_export": show_export,
                 "show_gen": show_gen,
                 "show_fc_gen": show_fc_gen,
+                "show_opmr": show_opmr,
                 "show_af": show_af,
                 "show_x2r": show_x2r,
                 "summary": summary,
