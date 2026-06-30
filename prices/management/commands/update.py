@@ -1,5 +1,6 @@
 from catboost import CatBoostRegressor
 from lightgbm import LGBMRegressor
+import shap
 from pathlib import Path
 from sklearn.metrics import mean_squared_error as MSE
 from sklearn.model_selection import KFold, train_test_split
@@ -46,6 +47,8 @@ MIN_HIST = 7
 MIN_FORECAST_ROWS = 200  # ~4 days; fewer rows means upstream APIs have degraded
 MAX_HIST = 28
 MAX_TEST_X = 10000
+SHAP_IMPORTANCE_SAMPLE = 3000
+SHAP_TOP_N = 4
 EXTRA_TREES_REGRESSOR_PARAMS = {
     "n_estimators": 700,
     "min_samples_leaf": 4,
@@ -183,6 +186,22 @@ def fit_day_ahead_ensemble(train_X, train_y, sample_weights):
 def predict_day_ahead_ensemble(models, features):
     preds = np.column_stack([m.predict(features) for m in models])
     return preds.mean(axis=1)
+
+
+def shap_top_features_by_row(lgbm_model, features, top_n=SHAP_TOP_N):
+    """Per-row top signed SHAP contributions (£/MWh) from the LightGBM ensemble member.
+
+    TreeExplainer is exact and fast for LightGBM, so it's used as a representative
+    explanation for the ensemble rather than blending all three models.
+    """
+    explainer = shap.TreeExplainer(lgbm_model)
+    shap_values = explainer.shap_values(features)
+    result = {}
+    for row_idx, ts in enumerate(features.index):
+        row = pd.Series(shap_values[row_idx], index=features.columns)
+        top = row.reindex(row.abs().sort_values(ascending=False).index[:top_n])
+        result[ts] = [{"feature": f, "value": round(float(v), 2)} for f, v in top.items()]
+    return result
 
 
 def cross_val_ensemble_rmse(train_X, train_y, sample_weights, n_splits=5):
@@ -902,6 +921,35 @@ class Command(BaseCommand):
                         except Exception:
                             pass
 
+                        # 6. SHAP Feature Importance (mean |SHAP| from the LightGBM ensemble member)
+                        try:
+                            shap_sample = test_X[features]
+                            if len(shap_sample) > SHAP_IMPORTANCE_SAMPLE:
+                                shap_sample = shap_sample.sample(SHAP_IMPORTANCE_SAMPLE, random_state=42)
+                            mean_abs_shap = np.abs(
+                                shap.TreeExplainer(ensemble_models[1]).shap_values(shap_sample)
+                            ).mean(axis=0)
+
+                            fig, ax = plt.subplots(figsize=(8, 6))
+                            pd.Series(mean_abs_shap, index=features).sort_values().plot.barh(ax=ax, color="#4a90d9")
+                            ax.set_title("SHAP Feature Importance (LightGBM)")
+                            ax.set_xlabel("Mean |SHAP value| (£/MWh)")
+                            save_plot(fig, "6_shap_importance")
+                            logger.info("Saved stats plot 6/6: SHAP feature importance (%d sample rows)", len(shap_sample))
+
+                            _shap_dict = {
+                                str(f): round(float(v), 4)
+                                for f, v in zip(features, mean_abs_shap.tolist())
+                            }
+                            _shap_job = UpdateJob.objects.filter(
+                                job_type=UpdateJob.JOB_UPDATE,
+                            ).order_by("-requested_at").first()
+                            if _shap_job:
+                                _shap_job.options["shap_importance"] = _shap_dict
+                                _shap_job.save(update_fields=["options"])
+                        except Exception:
+                            logger.exception("SHAP importance computation failed; skipping")
+
                         # fig, ax = plt.subplots(figsize=(8, 6))
                         # bins = [0, 1, 2, 3, 5, 10, 15]
                         # labels = [f"{i}-{j}" for i, j in zip(bins[:-1], bins[1:])]
@@ -914,11 +962,18 @@ class Command(BaseCommand):
                         # save_plot(fig, "6_binned_error_v_time")
 
                     fc = add_latest_forecast_features(fc)
+                    shap_top_features = {}
                     if len(ff) > 0:
                         logger.info(f"Predicting latest forecast ({len(fc)} rows)")
                         prediction_features = latest_prediction_features(fc, train_X.columns)
                         fc["day_ahead"] = predict_day_ahead_ensemble(ensemble_models, prediction_features)
                         logger.info("Finished latest forecast prediction")
+
+                        try:
+                            shap_top_features = shap_top_features_by_row(ensemble_models[1], prediction_features)
+                            logger.info("Computed per-row SHAP top features (%d rows)", len(shap_top_features))
+                        except Exception:
+                            logger.exception("Per-row SHAP computation failed; skipping")
 
                         fc["day_ahead_classified"] = np.nan
                         fc["day_ahead_extra_trees"] = np.nan
@@ -1027,6 +1082,7 @@ class Command(BaseCommand):
                         sfs.append(pd.DataFrame(index=fc.index.difference(sfs[0].index), data={"mult": 1, "shift": 0}))
 
                     fc = fc.astype(float)
+                    fc["shap_top_features"] = [shap_top_features.get(ts) for ts in fc.index]
                     scale_factors = pd.concat(sfs)
 
                     if debug:
@@ -1107,6 +1163,7 @@ class Command(BaseCommand):
                             "day_ahead_classified",
                             "day_ahead_extra_trees",
                             "plunge_probability",
+                            "shap_top_features",
                             *[c for c in ("fr_nuclear", "opmr_surplus", "fr_wind", "fr_rad") if c in fc.columns],
                         ]
                     ]

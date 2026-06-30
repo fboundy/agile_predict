@@ -143,6 +143,7 @@ class ForecastData(models.Model):
     opmr_surplus = models.FloatField(null=True, blank=True)
     fr_wind = models.FloatField(null=True, blank=True)
     fr_rad = models.FloatField(null=True, blank=True)
+    shap_top_features = models.JSONField(null=True, blank=True)
 
     # def __str__(self):
     #     return f"{self.date_time.strftime('%Y-%m-%dT%H:%M%Z') {self.agile:5.2f}}"

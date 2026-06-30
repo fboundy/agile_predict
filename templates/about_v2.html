@@ -88,6 +88,11 @@
             <li class="mb-1">Regional Agile prices are derived from the day-ahead forecast using the configured region scale and shift factors.</li>
             <li class="mb-0">Confidence bands are added using empirical residuals and weather ensemble spread.</li>
           </ol>
+          <p class="mb-0 text-body-secondary mt-2" style="font-size:.78rem">
+            Each forecast is explained with SHAP (the LightGBM ensemble member, via TreeExplainer): a
+            global feature-importance chart and per-slot top contributing features are shown on the
+            <a href="{% url 'stats_v2' %}" style="color:#adb5bd">Model stats</a> page.
+          </p>
         </div>
       </div>
     </div>

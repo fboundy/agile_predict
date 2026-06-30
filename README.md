@@ -18,6 +18,8 @@ Forecasts Octopus Agile electricity import and export prices up to 14 days ahead
 
 Three-model ensemble (CatBoost, LightGBM, ExtraTrees) trained on a rolling 90-day window of half-hourly forecasts. Training samples are weighted by linear z-score so extreme prices (spikes, negative) are prioritised. Features include a fixed base (UK generation mix, demand, NESO operating margin reserve surplus, calendar flags) plus an experimentally selected optional set (currently French weather: fr_wind, fr_rad). Forecast intervals are derived empirically from holdout residuals binned by horizon and from Open-Meteo ensemble weather perturbations.
 
+Each retrain also computes [SHAP](https://github.com/shap/shap) explanations from the LightGBM ensemble member (`shap.TreeExplainer`): a global mean-|SHAP| feature-importance chart (holdout set) and, per forecast slot, the top signed feature contributions in £/MWh. Both are shown on the `/v2/stats/` page.
+
 ## Development setup
 
 The project runs on Python with Django 4.2. Dependencies are managed with conda.

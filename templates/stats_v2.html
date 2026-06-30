@@ -68,6 +68,46 @@
   </div>
   {% endif %}
 
+  {% if shap_explanations %}
+  <div class="card border-0 shadow-sm mt-3" style="background:#2a2d31">
+    <div class="card-body py-2 px-3">
+      <h6 class="text-body-secondary mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">
+        Why this forecast? — upcoming slots
+      </h6>
+      <p class="text-body-secondary mb-2" style="font-size:.82rem">
+        Top SHAP feature contributions (LightGBM, £/MWh) for the next few half-hourly forecasts. Positive
+        values push the predicted price up; negative values push it down.
+      </p>
+      <div class="table-responsive">
+        <table class="table table-sm table-borderless mb-0" style="font-size:.78rem">
+          <thead class="text-body-secondary" style="text-transform:uppercase;font-size:.7rem;letter-spacing:.05em">
+            <tr>
+              <th>Time</th>
+              <th>Predicted (£/MWh)</th>
+              <th>Top contributors</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in shap_explanations %}
+            <tr class="border-top" style="border-color:#3a3d41!important">
+              <td class="text-nowrap">{{ row.time|date:"d M H:i" }}</td>
+              <td class="text-nowrap">{{ row.price }}</td>
+              <td>
+                {% for c in row.contributors %}
+                <span class="badge {% if c.value >= 0 %}bg-danger{% else %}bg-primary{% endif %} bg-opacity-25 text-body me-1 mb-1" style="font-weight:400">
+                  {{ c.label }} {% if c.value >= 0 %}+{% endif %}{{ c.value }}
+                </span>
+                {% endfor %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   {% if feature_experiment %}
   <div class="card border-0 shadow-sm mt-3" style="background:#2a2d31">
     <div class="card-body py-2 px-3">

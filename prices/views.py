@@ -2693,6 +2693,7 @@ class StatsV2View(V2NavMixin, StatsView):
             "diagnostic_date_from": diag["date_from"],
             "diagnostic_date_to": diag["date_to"],
             "feature_experiment": self._build_feature_experiment_section(),
+            "shap_explanations": self._build_shap_explanations(),
         }
         cache.set(cache_key, v2_extra, timeout=60 * 60 * 24)
         context.update(v2_extra)
@@ -2969,6 +2970,11 @@ class StatsV2View(V2NavMixin, StatsView):
         if fi_chart:
             charts.append(fi_chart)
 
+        # Chart 6: SHAP Feature Importance
+        shap_chart = StatsV2View._build_shap_importance_chart()
+        if shap_chart:
+            charts.append(shap_chart)
+
         return {
             "charts": charts,
             "sample_count": sample_count,
@@ -2977,6 +2983,28 @@ class StatsV2View(V2NavMixin, StatsView):
             "date_to": date_to,
         }
 
+
+    _FEATURE_LABELS = {
+        "bm_wind": "BM wind (MW)",
+        "solar": "Solar (MW)",
+        "emb_wind": "Embedded wind (MW)",
+        "nuclear": "UK nuclear (MW)",
+        "fr_nuclear": "FR nuclear (MW)",
+        "gas_ttf": "Gas TTF (€/MWh)",
+        "demand": "Demand (MW)",
+        "temp_2m": "Temperature (°C)",
+        "wind_10m": "Wind speed (m/s)",
+        "rad": "Radiation (W/m²)",
+        "opmr_surplus": "OPMR surplus (MW)",
+        "fr_wind": "France wind speed (m/s)",
+        "fr_rad": "France solar radiation (W/m²)",
+        "peak": "Peak hours (16–19)",
+        "weekend": "Weekend",
+        "days_ago": "Forecast age (days)",
+        "dt": "Lead time (days)",
+        "time": "Time of day",
+        "dow": "Day of week",
+    }
 
     @staticmethod
     def _build_feature_importance_chart():
@@ -2993,30 +3021,8 @@ class StatsV2View(V2NavMixin, StatsView):
         if not fi:
             return None
 
-        _FEATURE_LABELS = {
-            "bm_wind": "BM wind (MW)",
-            "solar": "Solar (MW)",
-            "emb_wind": "Embedded wind (MW)",
-            "nuclear": "UK nuclear (MW)",
-            "fr_nuclear": "FR nuclear (MW)",
-            "gas_ttf": "Gas TTF (€/MWh)",
-            "demand": "Demand (MW)",
-            "temp_2m": "Temperature (°C)",
-            "wind_10m": "Wind speed (m/s)",
-            "rad": "Radiation (W/m²)",
-            "opmr_surplus": "OPMR surplus (MW)",
-            "fr_wind": "France wind speed (m/s)",
-            "fr_rad": "France solar radiation (W/m²)",
-            "peak": "Peak hours (16–19)",
-            "weekend": "Weekend",
-            "days_ago": "Forecast age (days)",
-            "dt": "Lead time (days)",
-            "time": "Time of day",
-            "dow": "Day of week",
-        }
-
         sorted_items = sorted(fi.items(), key=lambda x: x[1])
-        labels = [_FEATURE_LABELS.get(k, k) for k, _ in sorted_items]
+        labels = [StatsV2View._FEATURE_LABELS.get(k, k) for k, _ in sorted_items]
         values = [v for _, v in sorted_items]
 
         fig = go.Figure()
@@ -3045,6 +3051,85 @@ class StatsV2View(V2NavMixin, StatsView):
             ),
             "chart": fig.to_html(full_html=False, include_plotlyjs=False),
         }
+
+    @staticmethod
+    def _build_shap_importance_chart():
+        """Read SHAP feature importance (mean |SHAP|, LightGBM) from the most recent UpdateJob."""
+        shap_job = (
+            UpdateJob.objects
+            .exclude(options__shap_importance=None)
+            .order_by("-requested_at")
+            .first()
+        )
+        if shap_job is None:
+            return None
+        shap_imp = shap_job.options.get("shap_importance", {})
+        if not shap_imp:
+            return None
+
+        sorted_items = sorted(shap_imp.items(), key=lambda x: x[1])
+        labels = [StatsV2View._FEATURE_LABELS.get(k, k) for k, _ in sorted_items]
+        values = [v for _, v in sorted_items]
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=values,
+            y=labels,
+            orientation="h",
+            marker_color="#28a745",
+            hovertemplate="%{y}<br>Mean |SHAP|: £%{x:.2f}/MWh<extra></extra>",
+        ))
+        fig.update_layout(
+            template="plotly_dark",
+            plot_bgcolor="#212529",
+            paper_bgcolor="#343a40",
+            height=max(300, 30 * len(labels) + 60),
+            margin={"r": 10, "t": 30, "l": 170, "b": 50},
+            xaxis={"title": "Mean |SHAP value| (£/MWh)"},
+            yaxis={"title": ""},
+        )
+        return {
+            "title": "SHAP Feature Importance",
+            "description": (
+                "Mean absolute SHAP contribution per feature (LightGBM ensemble member, TreeExplainer), "
+                "computed on the holdout set. Unlike the relative importance above, this is in the same "
+                "units as the prediction (£/MWh) — it shows how much each feature typically moves the "
+                "forecast price up or down."
+            ),
+            "chart": fig.to_html(full_html=False, include_plotlyjs=False),
+        }
+
+    @staticmethod
+    def _build_shap_explanations(limit=8):
+        """Top SHAP feature contributions for the next few upcoming forecast slots."""
+        latest_forecast = Forecasts.objects.order_by("-created_at").first()
+        if latest_forecast is None:
+            return []
+
+        rows = (
+            ForecastData.objects
+            .filter(forecast=latest_forecast, date_time__gte=pd.Timestamp.now(tz="UTC"))
+            .exclude(shap_top_features__isnull=True)
+            .order_by("date_time")[:limit]
+        )
+
+        explanations = []
+        for row in rows:
+            contributors = [
+                {
+                    "label": StatsV2View._FEATURE_LABELS.get(item["feature"], item["feature"]),
+                    "value": item["value"],
+                }
+                for item in (row.shap_top_features or [])
+            ]
+            if not contributors:
+                continue
+            explanations.append({
+                "time": row.date_time,
+                "price": round(row.day_ahead, 1) if row.day_ahead is not None else None,
+                "contributors": contributors,
+            })
+        return explanations
 
     @staticmethod
     def _build_feature_experiment_section():
