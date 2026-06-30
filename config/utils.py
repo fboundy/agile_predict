@@ -863,13 +863,13 @@ def get_latest_forecast():
             - _align("constrained_plant")
         )
         df["opmr_national_surplus"] = _align("national_surplus")
-        source_rows["neso_opmr"]   = int(df["dispatchable_capacity"].notna().sum())
-        source_details["neso_opmr"] = {"label": "NESO OPMR", "rows": source_rows["neso_opmr"], "error": None, "fallback": False}
+        source_rows["neso_dc"]   = int(df["dispatchable_capacity"].notna().sum())
+        source_details["neso_dc"] = {"label": "NESO Dispatch Cap.", "rows": source_rows["neso_dc"], "error": None, "fallback": False}
     else:
         df["dispatchable_capacity"] = None
         df["opmr_national_surplus"] = None
-        source_rows["neso_opmr"]   = 0
-        source_details["neso_opmr"] = {"label": "NESO OPMR", "rows": 0, "error": "no data", "fallback": False}
+        source_rows["neso_dc"]   = 0
+        source_details["neso_dc"] = {"label": "NESO Dispatch Cap.", "rows": 0, "error": "no data", "fallback": False}
 
     # MELNGC — BMRS indicated day-ahead margin at settlement-period resolution (~30 h).
     # Separate feature from dispatchable_capacity: uses actual dispatch forecasts so it's on a

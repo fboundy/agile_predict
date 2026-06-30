@@ -1593,7 +1593,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         show_export = self.request.GET.get("export", "0") == "1" and not raw
         show_gen = self.request.GET.get("gen", "1") == "1"
         show_fc_gen = show_gen and self.request.GET.get("fg", "0") == "1"
-        show_opmr = self.request.GET.get("opmr", "0") == "1"
+        show_dc = self.request.GET.get("dc", "0") == "1"
         show_af = _truthy(self.request.GET.get("af", "")) and not raw
         show_x2r = _truthy(self.request.GET.get("x2r", "")) and not raw
         color_fn = _export_price_color if show_export else _price_color
@@ -1781,7 +1781,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         _bmrs_rows = source_rows.get("bmrs", -1)
         _om_rows = source_rows.get("openmeteo", -1)
         _rte_rows = source_rows.get("rte_nuclear", -1)
-        _opmr_rows = source_rows.get("neso_opmr", -1)
+        _dc_rows = source_rows.get("neso_dc", -1)
         _om_fr_rows = source_rows.get("openmeteo_fr", -1)
 
         def _bin_health(rows, threshold):
@@ -1810,7 +1810,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         _bmrs_health = _bin_health(_bmrs_rows, _BMRS_THRESHOLD)
         _om_health = _bin_health(_om_rows, _NESO_THRESHOLD)
         _rte_health = _bin_health(_rte_rows, 24)      # ≥24 rows = at least 12h of 30-min data
-        _opmr_health = _bin_health(_opmr_rows, 14)   # ≥14 rows = at least 7 days broadcast
+        _dc_health = _bin_health(_dc_rows, 14)   # ≥14 rows = at least 7 days broadcast
         _om_fr_health = _bin_health(_om_fr_rows, 336)  # ≥336 rows = at least 7 days of 30-min data
 
         # Octopus: check freshness of PriceHistory (binary: ok if ≤ 26 h old)
@@ -1867,13 +1867,13 @@ class GraphV2View(V2NavMixin, TemplateView):
         _worst_health = lambda a, b: min([a, b], key=lambda h: _rank.get(h, 1))
 
         # NESO consolidated: forecast data + OPMR
-        _neso_combined_health = _worst_health(_neso_health, _opmr_health)
+        _neso_combined_health = _worst_health(_neso_health, _dc_health)
         if _neso_combined_health == "ok":
             _neso_combined_detail = "OK"
         elif _neso_health != "ok":
             _neso_combined_detail = _neso_detail()
         else:
-            _neso_combined_detail = f"OPMR: {_opmr_rows} rows" if _opmr_rows > 0 else _src_detail("neso_opmr")
+            _neso_combined_detail = f"Dispatch cap: {_dc_rows} rows" if _dc_rows > 0 else _src_detail("neso_dc")
 
         # Open-Meteo consolidated: UK + France
         # Only include FR in the combined health if it has been fetched at least once.
@@ -2002,9 +2002,9 @@ class GraphV2View(V2NavMixin, TemplateView):
 
         # --- Build chart ---
         _STRIP_ROW = 2
-        _n_rows = 2 + int(show_gen) + int(show_opmr)
+        _n_rows = 2 + int(show_gen) + int(show_dc)
         _GEN_ROW  = 3 if show_gen else None
-        _OPMR_ROW = (4 if show_gen else 3) if show_opmr else None
+        _DC_ROW = (4 if show_gen else 3) if show_dc else None
 
         if _n_rows == 4:
             _row_heights     = [0.45, 0.03, 0.28, 0.24]
@@ -2014,7 +2014,7 @@ class GraphV2View(V2NavMixin, TemplateView):
             _row_heights     = [0.55, 0.04, 0.41]
             _subplot_titles  = ("", "", "Generation & Demand")
             chart_height     = 660
-        elif show_opmr:
+        elif show_dc:
             _row_heights     = [0.65, 0.04, 0.31]
             _subplot_titles  = ("", "", "Dispatch Capacity")
             chart_height     = 600
@@ -2039,9 +2039,9 @@ class GraphV2View(V2NavMixin, TemplateView):
             if _GEN_ROW:
                 figure.add_trace(trace, row=_GEN_ROW, col=1)
 
-        def add_opmr(trace):
-            if _OPMR_ROW:
-                figure.add_trace(trace, row=_OPMR_ROW, col=1)
+        def add_dc(trace):
+            if _DC_ROW:
+                figure.add_trace(trace, row=_DC_ROW, col=1)
 
         # Uncertainty band — shaded fill drawn first so lines sit on top
         if show_band and not low_s.empty and not high_s.empty and not primary_s.empty:
@@ -2230,7 +2230,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         )
 
         # Generation & demand subplot
-        if (show_gen or show_opmr) and latest is not None:
+        if (show_gen or show_dc) and latest is not None:
             fp = list(
                 ForecastData.objects.filter(
                     forecast=latest,
@@ -2311,11 +2311,11 @@ class GraphV2View(V2NavMixin, TemplateView):
                         ))
                 figure.update_yaxes(title_text="Power [GW]", fixedrange=True, row=_GEN_ROW, col=1)
 
-            if show_opmr and fp:
+            if show_dc and fp:
                 dc_rows = [(r.date_time, r.dispatchable_capacity) for r in fp if r.dispatchable_capacity is not None]
                 if dc_rows:
                     xs, ys = zip(*dc_rows)
-                    add_opmr(go.Scatter(
+                    add_dc(go.Scatter(
                         x=list(xs),
                         y=list(ys),
                         mode="lines",
@@ -2325,7 +2325,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                         name="Dispatch capacity",
                         hovertemplate="%{x|%d %b}<br><b>%{y:.0f} MW</b><extra>Dispatch capacity</extra>",
                     ))
-                figure.update_yaxes(title_text="Dispatch capacity [MW]", fixedrange=True, row=_OPMR_ROW, col=1)
+                figure.update_yaxes(title_text="Dispatch capacity [MW]", fixedrange=True, row=_DC_ROW, col=1)
 
         # Colour strip at bottom of price chart
         if not strip_s.empty:
@@ -2365,7 +2365,7 @@ class GraphV2View(V2NavMixin, TemplateView):
             paper_bgcolor="#1a1d21",
             bargap=0,
         )
-        if show_gen or show_opmr:
+        if show_gen or show_dc:
             figure.update_layout(**common_layout)
             figure.update_yaxes(
                 title_text=price_display["axis_title"],
@@ -2443,7 +2443,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 "show_export": show_export,
                 "show_gen": show_gen,
                 "show_fc_gen": show_fc_gen,
-                "show_opmr": show_opmr,
+                "show_dc": show_dc,
                 "show_af": show_af,
                 "show_x2r": show_x2r,
                 "summary": summary,
