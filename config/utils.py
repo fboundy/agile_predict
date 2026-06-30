@@ -859,7 +859,6 @@ def get_latest_forecast():
         df["opmr_surplus"] = (
             _align("gen_availability")
             + _align("max_ic_import")
-            - df["demand"].values
             - _align("opmr_total")
             - _align("constrained_plant")
         )

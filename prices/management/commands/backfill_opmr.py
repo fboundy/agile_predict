@@ -137,7 +137,7 @@ class Command(BaseCommand):
 
             slot_filter = {"forecast": forecast} if force else {"forecast": forecast, "opmr_surplus__isnull": True}
             slot_qs = ForecastData.objects.filter(**slot_filter).only(
-                "pk", "date_time", "opmr_surplus", "opmr_national_surplus", "demand"
+                "pk", "date_time", "opmr_surplus", "opmr_national_surplus"
             )
             rows = list(slot_qs)
 
@@ -150,11 +150,10 @@ class Command(BaseCommand):
                 else:
                     opmr_row = available.iloc[-1]
 
-                if opmr_row is not None and row.demand is not None:
+                if opmr_row is not None:
                     row.opmr_surplus = float(
                         opmr_row["gen_availability"]
                         + opmr_row["max_ic_import"]
-                        - row.demand
                         - opmr_row["opmr_total"]
                         - opmr_row["constrained_plant"]
                     )
