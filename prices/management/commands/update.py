@@ -661,6 +661,7 @@ class Command(BaseCommand):
                     refresh_db_connection("before loading training data")
                     fd = pd.DataFrame(list(ForecastData.objects.exclude(forecast_id__in=ignore_forecast).values()))
                     ff = pd.DataFrame(list(Forecasts.objects.exclude(id__in=ignore_forecast).values()))
+                    scores = None
 
                     if len(ff) > 0:
                         logger.info(ff)
@@ -1204,7 +1205,11 @@ class Command(BaseCommand):
 
                     refresh_db_connection("before saving forecast rows")
                     with transaction.atomic():
-                        this_forecast = Forecasts(name=new_name, mean=np.mean(scores), stdev=np.std(scores))
+                        if scores is not None:
+                            this_forecast = Forecasts(name=new_name, mean=np.mean(scores), stdev=np.std(scores))
+                        else:
+                            logger.info("No cross-validation scores available (no trained model yet); saving forecast without mean/stdev")
+                            this_forecast = Forecasts(name=new_name)
                         logger.info(f"Saving forecast record: {new_name}")
                         this_forecast.save()
                         fc["forecast"] = this_forecast
@@ -1221,5 +1226,7 @@ class Command(BaseCommand):
         else:
             try:
                 logger.info(f"\n\nAdded Forecast: {this_forecast.id:>4d}: {this_forecast.name}")
-            except:
-                logger.info("No forecast added")
+            except NameError:
+                logger.info("No forecast added (new_name already existed for this run)")
+            except Exception:
+                logger.exception("No forecast added due to an unexpected error")
