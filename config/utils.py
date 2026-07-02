@@ -1161,11 +1161,18 @@ def get_agile(start=pd.Timestamp("2023-07-01"), tz="GB", region="G"):
         }
 
         r = requests.get(url, params=params)
-        if "results" in r.json():
-            if not r.json()["results"]:
-                break
-            x = x + r.json()["results"]
+        try:
+            payload = r.json()
+        except ValueError:
+            break
+        results = payload.get("results") or []
+        if not results:
+            break
+        x = x + results
         end = pd.Timestamp(x[-1]["valid_from"]).ceil("24h")
+
+    if not x:
+        return pd.Series(dtype=float, name="agile")
 
     df = pd.DataFrame(x).set_index("valid_from")[["value_inc_vat"]]
     df.index = pd.to_datetime(df.index)
