@@ -1666,7 +1666,10 @@ class GraphV2View(V2NavMixin, TemplateView):
             summary["current_badge"] = _price_badge(p if not raw else None)
 
         # Upcoming forecast for next-slot and window calculations
-        upcoming_fc = primary_s[primary_s.index >= current_slot].iloc[:48]
+        if not primary_s.empty:
+            upcoming_fc = primary_s[primary_s.index >= current_slot].iloc[:48]
+        else:
+            upcoming_fc = pd.Series(dtype=float)
 
         if not upcoming_fc.empty:
             if show_export:
@@ -1914,7 +1917,11 @@ class GraphV2View(V2NavMixin, TemplateView):
             today_gb = now_gb.normalize()
             tomorrow_gb = today_gb + pd.Timedelta("1D")
             # Best available prices: actual (Octopus-confirmed) where available, else forecast
-            future_prices = primary_s[primary_s.index > now_gb].copy()
+            if not primary_s.empty:
+                future_prices = primary_s[primary_s.index > now_gb].copy()
+            else:
+                future_prices = pd.Series(dtype=float)
+
             if not actual.empty:
                 future_actual = actual[actual.index > now_gb]
                 future_prices.update(future_actual)
