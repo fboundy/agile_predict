@@ -285,8 +285,10 @@
   })();
   </script>
 
-  {# ======== Why this price? (SHAP explanation) ======== #}
-  <div class="card border-0 shadow-sm mb-3 d-none" style="background:#2a2d31" id="shap-explain-panel">
+  {# ======== Why this price? (SHAP explanation) + Cheapest windows ======== #}
+  <div class="row g-3 mb-3">
+  <div class="col-12 col-lg-6">
+  <div class="card border-0 shadow-sm d-none h-100" style="background:#2a2d31" id="shap-explain-panel">
     <div class="card-body py-2 px-3">
       <div class="d-flex align-items-baseline justify-content-between flex-wrap gap-2 mb-1">
         <h6 class="text-body-secondary mb-0" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">
@@ -301,6 +303,7 @@
       </p>
       <div id="shap-explain-chart"></div>
     </div>
+  </div>
   </div>
   <script>
   (function () {
@@ -365,9 +368,9 @@
   })();
   </script>
 
-  {# ======== Cheap / best windows ======== #}
   {% if not is_raw_day_ahead_region %}
-  <div class="card border-0 shadow-sm" style="background:#2a2d31" id="cw-card">
+  <div class="col-12 col-lg-6">
+  <div class="card border-0 shadow-sm h-100" style="background:#2a2d31" id="cw-card">
     <div class="card-body py-2 px-3">
 
       {# Header + sort #}
@@ -410,6 +413,7 @@
 
       <div id="cw-results"></div>
     </div>
+  </div>
   </div>
 
   <script>
@@ -539,6 +543,7 @@
   })();
   </script>
   {% endif %}
+  </div>
 
   {# Auto-refresh at the next half-hour boundary #}
   <script>
