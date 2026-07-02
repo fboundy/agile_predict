@@ -1,5 +1,6 @@
 from catboost import CatBoostRegressor
 from lightgbm import LGBMRegressor
+import shap
 from pathlib import Path
 from sklearn.metrics import mean_squared_error as MSE
 from sklearn.model_selection import KFold, train_test_split
@@ -46,6 +47,9 @@ MIN_HIST = 7
 MIN_FORECAST_ROWS = 200  # ~4 days; fewer rows means upstream APIs have degraded
 MAX_HIST = 28
 MAX_TEST_X = 10000
+SHAP_IMPORTANCE_SAMPLE = 3000
+SHAP_ET_MAX_ROWS = 300   # ExtraTrees SHAP is O(n_rows) slow with 700 trees; cap for global stats
+SHAP_TOP_N = 4
 EXTRA_TREES_REGRESSOR_PARAMS = {
     "n_estimators": 700,
     "min_samples_leaf": 4,
@@ -185,6 +189,45 @@ def predict_day_ahead_ensemble(models, features):
     return preds.mean(axis=1)
 
 
+def _ensemble_shap_values(ensemble_models, features):
+    """Average SHAP values across CatBoost and LightGBM (exact TreeExplainer, NaN-safe).
+
+    ExtraTrees is excluded here because shap.TreeExplainer on a 700-tree forest scales
+    O(n_rows) and is prohibitively slow for the full forecast range.  It is included in
+    the global stats-page importance via _global_mean_abs_shap() using a small sample.
+    """
+    cat, lgbm, _ = ensemble_models
+    cat_shap  = shap.TreeExplainer(cat).shap_values(features)
+    lgbm_shap = shap.TreeExplainer(lgbm).shap_values(features)
+    return (np.array(cat_shap) + np.array(lgbm_shap)) / 2
+
+
+def _global_mean_abs_shap(ensemble_models, sample):
+    """Mean |SHAP| per feature averaged across all three ensemble models.
+
+    ExtraTrees uses a capped sample (SHAP_ET_MAX_ROWS) since it only needs
+    aggregate mean-abs values, not per-row contributions.
+    """
+    cat, lgbm, et_wrapper = ensemble_models
+    cat_mean  = np.abs(shap.TreeExplainer(cat).shap_values(sample)).mean(axis=0)
+    lgbm_mean = np.abs(shap.TreeExplainer(lgbm).shap_values(sample)).mean(axis=0)
+    et_sample = sample if len(sample) <= SHAP_ET_MAX_ROWS else sample.sample(SHAP_ET_MAX_ROWS, random_state=42)
+    et_X      = pd.DataFrame(et_sample).fillna(et_wrapper.fill_values)
+    et_mean   = np.abs(shap.TreeExplainer(et_wrapper.model).shap_values(et_X)).mean(axis=0)
+    return (cat_mean + lgbm_mean + et_mean) / 3
+
+
+def shap_top_features_by_row(ensemble_models, features, top_n=SHAP_TOP_N):
+    """Per-row top signed SHAP contributions (£/MWh) averaged across CatBoost and LightGBM."""
+    shap_values = _ensemble_shap_values(ensemble_models, features)
+    result = {}
+    for row_idx, ts in enumerate(features.index):
+        row = pd.Series(shap_values[row_idx], index=features.columns)
+        top = row.reindex(row.abs().sort_values(ascending=False).index[:top_n])
+        result[ts] = [{"feature": f, "value": round(float(v), 2)} for f, v in top.items()]
+    return result
+
+
 def cross_val_ensemble_rmse(train_X, train_y, sample_weights, n_splits=5):
     kf = KFold(n_splits=n_splits, shuffle=False)
     scores = []
@@ -224,16 +267,16 @@ _EXP_CB_PARAMS   = dict(iterations=150, learning_rate=0.05, depth=6, l2_leaf_reg
 _EXP_LGBM_PARAMS = dict(n_estimators=150, learning_rate=0.05, num_leaves=31, random_state=42, verbose=-1, n_jobs=1)
 _EXP_ET_PARAMS   = dict(n_estimators=200, min_samples_leaf=4, max_features="sqrt", random_state=42, n_jobs=1)
 
-# Lead-time weights: first 3 days → 3×, first 7 days → 2×, beyond → 1×
-def _horizon_weights(dt_series):
-    return np.where(dt_series < 3, 3.0, np.where(dt_series < 7, 2.0, 1.0))
 
 
 def run_feature_experiment(df, ff_all, prices, _logger=None):
     """
     Walk-forward cross-validation across EXPERIMENT_FEATURE_SETS.
-    Scores each set on weighted MAE + weighted RMSE (equal weight), where
-    lead time < 3 days is weighted 3×, < 7 days 2×, else 1×.
+    Scores each set on MAE + RMSE (equal weight) evaluated only on the
+    1–3 day forecast horizon, where model signal dominates over weather
+    uncertainty. Sub-1d predictions may be blended with GB60 actuals;
+    beyond 3d the weather forecast error swamps feature differences.
+    Price-extreme slots are upweighted by linear z-score.
 
     Returns (winning_set_name: str, results: dict[name -> {score, wmae, wrmse}])
     """
@@ -325,9 +368,17 @@ def run_feature_experiment(df, ff_all, prices, _logger=None):
                 continue
 
             ensemble = np.mean(preds, axis=0)
-            residuals = ensemble - np.array(test_y)
-            _z = (np.array(test_y) - float(train_y.mean())) / float(train_y.std())
-            weights = _horizon_weights(dt_vals) * np.maximum(1.0, np.abs(_z))
+
+            # Evaluate only on 1–3 day horizon: sub-1d may be blended with GB60
+            # actuals; beyond 3d weather uncertainty swamps feature differences.
+            eval_mask = (dt_vals >= 1) & (dt_vals <= 3)
+            if eval_mask.sum() < 5:
+                continue
+
+            residuals = (ensemble - np.array(test_y))[eval_mask]
+            eval_y    = np.array(test_y)[eval_mask]
+            _z        = (eval_y - float(train_y.mean())) / float(train_y.std())
+            weights   = np.maximum(1.0, np.abs(_z))
             wmae  = float(np.average(np.abs(residuals), weights=weights))
             wrmse = float(np.sqrt(np.average(residuals ** 2, weights=weights)))
             fold_scores.append({"wmae": wmae, "wrmse": wrmse})
@@ -902,6 +953,33 @@ class Command(BaseCommand):
                         except Exception:
                             pass
 
+                        # 6. SHAP Feature Importance (mean |SHAP| averaged across all three ensemble models)
+                        try:
+                            shap_sample = test_X[features]
+                            if len(shap_sample) > SHAP_IMPORTANCE_SAMPLE:
+                                shap_sample = shap_sample.sample(SHAP_IMPORTANCE_SAMPLE, random_state=42)
+                            mean_abs_shap = _global_mean_abs_shap(ensemble_models, shap_sample)
+
+                            fig, ax = plt.subplots(figsize=(8, 6))
+                            pd.Series(mean_abs_shap * factor, index=features).sort_values().plot.barh(ax=ax, color="#4a90d9")
+                            ax.set_title("SHAP Feature Importance (ensemble average)")
+                            ax.set_xlabel("Mean |SHAP value| (p/kWh Agile, region X)")
+                            save_plot(fig, "6_shap_importance")
+                            logger.info("Saved stats plot 6/6: SHAP feature importance (%d sample rows)", len(shap_sample))
+
+                            _shap_dict = {
+                                str(f): round(float(v), 4)
+                                for f, v in zip(features, mean_abs_shap.tolist())
+                            }
+                            _shap_job = UpdateJob.objects.filter(
+                                job_type=UpdateJob.JOB_UPDATE,
+                            ).order_by("-requested_at").first()
+                            if _shap_job:
+                                _shap_job.options["shap_importance"] = _shap_dict
+                                _shap_job.save(update_fields=["options"])
+                        except Exception:
+                            logger.exception("SHAP importance computation failed; skipping")
+
                         # fig, ax = plt.subplots(figsize=(8, 6))
                         # bins = [0, 1, 2, 3, 5, 10, 15]
                         # labels = [f"{i}-{j}" for i, j in zip(bins[:-1], bins[1:])]
@@ -914,11 +992,18 @@ class Command(BaseCommand):
                         # save_plot(fig, "6_binned_error_v_time")
 
                     fc = add_latest_forecast_features(fc)
+                    shap_top_features = {}
                     if len(ff) > 0:
                         logger.info(f"Predicting latest forecast ({len(fc)} rows)")
                         prediction_features = latest_prediction_features(fc, train_X.columns)
                         fc["day_ahead"] = predict_day_ahead_ensemble(ensemble_models, prediction_features)
                         logger.info("Finished latest forecast prediction")
+
+                        try:
+                            shap_top_features = shap_top_features_by_row(ensemble_models, prediction_features)
+                            logger.info("Computed per-row SHAP top features (%d rows)", len(shap_top_features))
+                        except Exception:
+                            logger.exception("Per-row SHAP computation failed; skipping")
 
                         fc["day_ahead_classified"] = np.nan
                         fc["day_ahead_extra_trees"] = np.nan
@@ -1027,6 +1112,7 @@ class Command(BaseCommand):
                         sfs.append(pd.DataFrame(index=fc.index.difference(sfs[0].index), data={"mult": 1, "shift": 0}))
 
                     fc = fc.astype(float)
+                    fc["shap_top_features"] = [shap_top_features.get(ts) for ts in fc.index]
                     scale_factors = pd.concat(sfs)
 
                     if debug:
@@ -1107,7 +1193,8 @@ class Command(BaseCommand):
                             "day_ahead_classified",
                             "day_ahead_extra_trees",
                             "plunge_probability",
-                            *[c for c in ("fr_nuclear", "opmr_surplus", "fr_wind", "fr_rad") if c in fc.columns],
+                            "shap_top_features",
+                            *[c for c in ("gas_availability", "fr_nuclear", "dispatchable_capacity", "opmr_national_surplus", "melngc_margin", "fr_wind", "fr_rad") if c in fc.columns],
                         ]
                     ]
 

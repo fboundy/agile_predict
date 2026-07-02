@@ -134,15 +134,19 @@ class ForecastData(models.Model):
     solar = models.FloatField()
     emb_wind = models.FloatField()
     nuclear = models.FloatField(default=0)
+    gas_availability = models.FloatField(null=True, blank=True)
     gas_ttf = models.FloatField(null=True, blank=True)
     temp_2m = models.FloatField()
     wind_10m = models.FloatField()
     rad = models.FloatField()
     demand = models.FloatField()
     fr_nuclear = models.FloatField(null=True, blank=True)
-    opmr_surplus = models.FloatField(null=True, blank=True)
+    dispatchable_capacity = models.FloatField(null=True, blank=True)
+    opmr_national_surplus = models.FloatField(null=True, blank=True)
+    melngc_margin = models.FloatField(null=True, blank=True)
     fr_wind = models.FloatField(null=True, blank=True)
     fr_rad = models.FloatField(null=True, blank=True)
+    shap_top_features = models.JSONField(null=True, blank=True)
 
     # def __str__(self):
     #     return f"{self.date_time.strftime('%Y-%m-%dT%H:%M%Z') {self.agile:5.2f}}"
