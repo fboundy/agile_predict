@@ -119,11 +119,9 @@
                 <table class="table table-sm table-borderless mb-0" style="font-size:.82rem">
                   <tbody>
                     <tr style="border-bottom:1px solid #343a40">
-                      <td class="py-1 pe-3"><code>opmr_surplus</code></td>
+                      <td class="py-1 pe-3"><code>dispatchable_capacity</code></td>
                       <td class="py-1 text-body-secondary">
-                        NESO operating margin reserve surplus (MW). When negative the grid is in
-                        deficit and prices spike. Included unconditionally: the signal is physically
-                        causal but rare enough that the CV experiment cannot score it reliably.
+                        Net dispatchable capacity (MW): gen_availability + max_ic_import - opmr_total. A pure supply-side signal, orthogonal to demand, capturing thermal plant availability and interconnector headroom after reserve requirements are deducted.
                       </td>
                     </tr>
                     <tr style="border-bottom:1px solid #343a40"><td class="py-1 pe-3"><code>bm_wind</code></td><td class="py-1 text-body-secondary">Metered wind generation</td></tr>

@@ -21,22 +21,49 @@ def _bank_holiday_series(idx) -> "pd.Series":
     return pd.Series(gb_dates.isin(bh).astype(int), index=idx)
 
 
-# Candidate feature sets evaluated by the periodic feature experiment.
-# Keys are stored in UpdateJob.options["feature_experiment"]["feature_set"].
-# opmr_surplus is included in every set — it is a fixed base feature.
-# The experiment evaluates what optional features to add on top of it.
-_BASE = ["bm_wind", "solar", "emb_wind", "demand", "peak", "days_ago", "weekend", "bank_holiday", "opmr_surplus"]
+# Confirmed base features (findings from systematic experiments):
+#   emb_wind beats bm_wind alone (r=0.924); both peak + time beat either alone.
+#   bm_wind demoted to experimental add-on.
+_BASE = [
+    "solar", "emb_wind", "demand",
+    "peak", "time",
+    "days_ago", "weekend", "bank_holiday",
+    "dispatchable_capacity",
+]
+
+# Optional add-on pools
+_FR_WEATHER  = ["fr_wind", "fr_rad"]
+_UK_WEATHER  = ["temp_2m", "wind_10m", "rad"]
+_FUEL        = ["nuclear", "gas_ttf"]
+
 EXPERIMENT_FEATURE_SETS = {
+    # ── Baseline ──────────────────────────────────────────────────────────
     "generation":           _BASE,
-    "fr_weather":           _BASE + ["fr_wind", "fr_rad"],
-    "weather":              _BASE + ["temp_2m", "wind_10m", "rad"],
-    "fuel":                 _BASE + ["nuclear", "gas_ttf"],
-    "fr_weather_nuclear":   _BASE + ["fr_wind", "fr_rad", "fr_nuclear"],
-    "fr_weather_gas":       _BASE + ["fr_wind", "fr_rad", "gas_ttf"],
-    "weather_fuel":         _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf"],
-    "weather_fuel_fr":      _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear"],
-    "weather_fuel_fr_weather": _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_wind", "fr_rad"],
-    "full":                 _BASE + ["temp_2m", "wind_10m", "rad", "nuclear", "gas_ttf", "fr_nuclear", "fr_wind", "fr_rad"],
+
+    # ── Single add-ons (one category at a time) ───────────────────────────
+    "bm_wind":              _BASE + ["bm_wind"],        # demoted — does it add back?
+    "fr_weather":           _BASE + _FR_WEATHER,
+    "uk_weather":           _BASE + _UK_WEATHER,
+    "nuclear":              _BASE + ["nuclear"],
+    "gas_ttf":              _BASE + ["gas_ttf"],
+    "gas_av":               _BASE + ["gas_availability"],
+    "fr_nuclear":           _BASE + ["fr_nuclear"],
+
+    # ── Two-category combinations ─────────────────────────────────────────
+    "fr_weather_gas":       _BASE + _FR_WEATHER + ["gas_ttf"],
+    "fr_weather_nuclear":   _BASE + _FR_WEATHER + ["fr_nuclear"],
+    "fuel":                 _BASE + _FUEL,
+    "fr_weather_fuel":      _BASE + _FR_WEATHER + _FUEL,
+    "uk_weather_fuel":      _BASE + _UK_WEATHER + _FUEL,
+
+    # ── Full combinations ─────────────────────────────────────────────────
+    "full_fr":              _BASE + _FR_WEATHER + _FUEL + ["fr_nuclear"],
+    "full":                 _BASE + _FR_WEATHER + _UK_WEATHER + _FUEL + ["fr_nuclear"],
+
+    # ── Accumulating (insufficient history to evaluate yet) ───────────────
+    "melngc":               _BASE + ["melngc_margin"],
+    "gas_av_fr":            _BASE + _FR_WEATHER + ["gas_availability"],
+    "nuclear_gas_av":       _BASE + ["nuclear", "gas_availability"],
 }
 
 FEATURE_SETS = {
@@ -94,11 +121,18 @@ def resolve_feature_columns(feature_set="generation", explicit_features=None, dr
         features = [feature.strip() for feature in explicit_features.split(",") if feature.strip()]
     else:
         all_sets = {**FEATURE_SETS, **EXPERIMENT_FEATURE_SETS}
-        try:
+        if feature_set in all_sets:
             features = list(all_sets[feature_set])
-        except KeyError as exc:
+        elif feature_set not in ("", None):
+            # Stored name from a previous experiment no longer exists — fall back gracefully.
+            import logging as _log
+            _log.getLogger("prices.update").warning(
+                "Feature set %r not found; falling back to 'generation'", feature_set
+            )
+            features = list(all_sets["generation"])
+        else:
             valid = ", ".join(sorted(all_sets))
-            raise ValueError(f"Unknown feature set '{feature_set}'. Valid feature sets: {valid}") from exc
+            raise ValueError(f"Unknown feature set '{feature_set}'. Valid feature sets: {valid}")
 
     if no_day_of_week:
         features = [feature for feature in features if feature not in {"day_of_week", "dow"}]

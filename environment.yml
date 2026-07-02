@@ -28,3 +28,4 @@ dependencies:
     - whitenoise
     - python-dotenv
     - black
+    - shap
