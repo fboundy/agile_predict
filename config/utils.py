@@ -1049,6 +1049,8 @@ def get_agile(start=pd.Timestamp("2023-07-01"), tz="GB", region="G"):
 
         r = requests.get(url, params=params)
         if "results" in r.json():
+            if not r.json()["results"]:
+                break
             x = x + r.json()["results"]
         end = pd.Timestamp(x[-1]["valid_from"]).ceil("24h")
 
