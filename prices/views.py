@@ -279,6 +279,14 @@ def _scheduled_duplicate_response(request, job_type):
 
 
 @require_GET
+def healthz(request):
+    """Minimal liveness check for the fly.io health monitor: touches the DB but does
+    no heavy computation, so a genuinely wedged worker/DB still fails this fast."""
+    Forecasts.objects.exists()
+    return HttpResponse("OK")
+
+
+@require_GET
 def update_status(request):
     forbidden = _forbidden_if_update_token_invalid(request)
     if forbidden:

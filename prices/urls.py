@@ -16,6 +16,7 @@ from .views import (
     SiteLoginView,
     StatsV2View,
     StatsView,
+    healthz,
     run_latest_agile,
     run_update,
     stats_plot,
@@ -23,6 +24,7 @@ from .views import (
 )
 
 urlpatterns = [
+    path("healthz", healthz, name="healthz"),
     path("accounts/login/", SiteLoginView.as_view(), name="login"),
     path("accounts/register/", RegisterView.as_view(), name="register"),
     path("update", run_update, name="run_update"),
