@@ -118,6 +118,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "prices.middleware.HealthCheckMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
