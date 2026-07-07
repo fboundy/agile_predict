@@ -1596,7 +1596,7 @@ class GraphV2View(V2NavMixin, TemplateView):
             region = "X"
         raw = _is_raw_day_ahead_region(region)
 
-        days = min(max(int(self.request.GET.get("days", 5)), 1), 14)
+        days = min(max(int(self.request.GET.get("days", 5)), 1), 7)
         show_band = self.request.GET.get("band", "1") != "0"
         show_export = self.request.GET.get("export", "0") == "1" and not raw
         show_gen = self.request.GET.get("gen", "1") == "1"
