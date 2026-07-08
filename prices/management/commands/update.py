@@ -485,7 +485,7 @@ class Command(BaseCommand):
 
         min_fd = int(options.get("min_fd", 600) or 600)
         min_ad = int(options.get("min_ad", 1500) or 1500)
-        max_days = int(options.get("max_days", 90) or 90)
+        max_days = int(options.get("max_days", 60) or 60)
 
         no_ranges = options.get("no_ranges", False)
         skip_kde_plot = options.get("skip_kde_plot", False)
