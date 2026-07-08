@@ -551,7 +551,7 @@ class Command(BaseCommand):
                 fail = " <- Fail"
             else:
                 fail = " <- Manual"
-                if days < max_days * 2:
+                if days < max_days:
                     for hour in [4, 6, 10, 11, 16, 22]:
                         if f"{hour:02d}:15" in f.name:
                             keep.append(f.id)
