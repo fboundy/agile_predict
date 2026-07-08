@@ -104,6 +104,11 @@ class AgileData(models.Model):
     agile_high = models.FloatField()
     date_time = models.DateTimeField()
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["region", "date_time"]),
+        ]
+
     def get_absolute_url(self):
         return reverse("graph", kwargs={"region": self.region})
 
@@ -147,6 +152,11 @@ class ForecastData(models.Model):
     fr_wind = models.FloatField(null=True, blank=True)
     fr_rad = models.FloatField(null=True, blank=True)
     shap_top_features = models.JSONField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["date_time"]),
+        ]
 
     # def __str__(self):
     #     return f"{self.date_time.strftime('%Y-%m-%dT%H:%M%Z') {self.agile:5.2f}}"
