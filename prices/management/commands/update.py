@@ -47,8 +47,6 @@ MIN_HIST = 7
 MIN_FORECAST_ROWS = 200  # ~4 days; fewer rows means upstream APIs have degraded
 MAX_HIST = 28
 MAX_TEST_X = 10000
-SHAP_IMPORTANCE_SAMPLE = 3000
-SHAP_ET_MAX_ROWS = 300   # ExtraTrees SHAP is O(n_rows) slow with 700 trees; cap for global stats
 SHAP_TOP_N = 4
 EXTRA_TREES_REGRESSOR_PARAMS = {
     "n_estimators": 700,
@@ -193,28 +191,12 @@ def _ensemble_shap_values(ensemble_models, features):
     """Average SHAP values across CatBoost and LightGBM (exact TreeExplainer, NaN-safe).
 
     ExtraTrees is excluded here because shap.TreeExplainer on a 700-tree forest scales
-    O(n_rows) and is prohibitively slow for the full forecast range.  It is included in
-    the global stats-page importance via _global_mean_abs_shap() using a small sample.
+    O(n_rows) and is prohibitively slow for the full forecast range.
     """
     cat, lgbm, _ = ensemble_models
     cat_shap  = shap.TreeExplainer(cat).shap_values(features)
     lgbm_shap = shap.TreeExplainer(lgbm).shap_values(features)
     return (np.array(cat_shap) + np.array(lgbm_shap)) / 2
-
-
-def _global_mean_abs_shap(ensemble_models, sample):
-    """Mean |SHAP| per feature averaged across all three ensemble models.
-
-    ExtraTrees uses a capped sample (SHAP_ET_MAX_ROWS) since it only needs
-    aggregate mean-abs values, not per-row contributions.
-    """
-    cat, lgbm, et_wrapper = ensemble_models
-    cat_mean  = np.abs(shap.TreeExplainer(cat).shap_values(sample)).mean(axis=0)
-    lgbm_mean = np.abs(shap.TreeExplainer(lgbm).shap_values(sample)).mean(axis=0)
-    et_sample = sample if len(sample) <= SHAP_ET_MAX_ROWS else sample.sample(SHAP_ET_MAX_ROWS, random_state=42)
-    et_X      = pd.DataFrame(et_sample).fillna(et_wrapper.fill_values)
-    et_mean   = np.abs(shap.TreeExplainer(et_wrapper.model).shap_values(et_X)).mean(axis=0)
-    return (cat_mean + lgbm_mean + et_mean) / 3
 
 
 def shap_top_features_by_row(ensemble_models, features, top_n=SHAP_TOP_N):
@@ -668,8 +650,11 @@ class Command(BaseCommand):
                         df, ff = build_forecast_frame(fd, ff)
                         ff_train = select_daily_training_forecasts(ff)
 
-                        # ── Periodic feature experiment ───────────────────────
-                        if _experiment_due and not _cli_fs and not options.get("features"):
+                        # ── Feature experiment ─────────────────────────────────
+                        # Runs locally only (via --force_experiment), never automatically on
+                        # the production schedule — see push_feature_experiment for uploading
+                        # a locally-computed result to production.
+                        if options.get("force_experiment") and not _cli_fs and not options.get("features"):
                             try:
                                 logger.info("Running feature set experiment…")
                                 _exp_started = time.monotonic()
@@ -698,7 +683,6 @@ class Command(BaseCommand):
                                 if _save_job:
                                     _save_job.options["feature_experiment"] = _exp_payload
                                     _save_job.save(update_fields=["options"])
-                                _experiment_due = False
                             except Exception:
                                 logger.exception("Feature experiment failed; keeping existing feature set")
                         # ─────────────────────────────────────────────────────
@@ -967,38 +951,6 @@ class Command(BaseCommand):
                                 _fi_job.save(update_fields=["options"])
                         except Exception:
                             pass
-
-                        # 6. SHAP Feature Importance (mean |SHAP| averaged across all three ensemble models)
-                        try:
-                            _shap_started = time.monotonic()
-                            shap_sample = test_X[features]
-                            if len(shap_sample) > SHAP_IMPORTANCE_SAMPLE:
-                                shap_sample = shap_sample.sample(SHAP_IMPORTANCE_SAMPLE, random_state=42)
-                            mean_abs_shap = _global_mean_abs_shap(ensemble_models, shap_sample)
-                            logger.info(
-                                "Global SHAP importance elapsed_seconds=%.2f (%d rows)",
-                                time.monotonic() - _shap_started, len(shap_sample),
-                            )
-
-                            fig, ax = plt.subplots(figsize=(8, 6))
-                            pd.Series(mean_abs_shap * factor, index=features).sort_values().plot.barh(ax=ax, color="#4a90d9")
-                            ax.set_title("SHAP Feature Importance (ensemble average)")
-                            ax.set_xlabel("Mean |SHAP value| (p/kWh Agile, region X)")
-                            save_plot(fig, "6_shap_importance")
-                            logger.info("Saved stats plot 6/6: SHAP feature importance (%d sample rows)", len(shap_sample))
-
-                            _shap_dict = {
-                                str(f): round(float(v), 4)
-                                for f, v in zip(features, mean_abs_shap.tolist())
-                            }
-                            _shap_job = UpdateJob.objects.filter(
-                                job_type=UpdateJob.JOB_UPDATE,
-                            ).order_by("-requested_at").first()
-                            if _shap_job:
-                                _shap_job.options["shap_importance"] = _shap_dict
-                                _shap_job.save(update_fields=["options"])
-                        except Exception:
-                            logger.exception("SHAP importance computation failed; skipping")
 
                         # fig, ax = plt.subplots(figsize=(8, 6))
                         # bins = [0, 1, 2, 3, 5, 10, 15]
