@@ -672,7 +672,12 @@ class Command(BaseCommand):
                         if _experiment_due and not _cli_fs and not options.get("features"):
                             try:
                                 logger.info("Running feature set experiment…")
+                                _exp_started = time.monotonic()
                                 _winner, _exp_results = run_feature_experiment(df, ff_train, prices, logger)
+                                logger.info(
+                                    "Feature experiment elapsed_seconds=%.2f",
+                                    time.monotonic() - _exp_started,
+                                )
                                 # Update features for this run if the winner differs
                                 if _winner != _optimal_fs:
                                     logger.info(
@@ -702,7 +707,9 @@ class Command(BaseCommand):
                             logger.info(f"Forecasts Database:\n{ff.to_string()}")
 
                         # Only use the forecasts closest to 16:15 for training
+                        _step_started = time.monotonic()
                         train_X, train_y = build_training_data(df, ff_train, prices, features, max_days)
+                        logger.info("build_training_data elapsed_seconds=%.2f", time.monotonic() - _step_started)
                         if debug:
                             logger.info(f"train_X:\n{train_X}")
                         _z = (train_y - train_y.mean()) / train_y.std()
@@ -712,21 +719,28 @@ class Command(BaseCommand):
                             "Computing ensemble cross-validation score "
                             f"({len(train_X)} rows, {len(train_X.columns)} features)"
                         )
+                        _step_started = time.monotonic()
                         scores = cross_val_ensemble_rmse(train_X, train_y, sample_weights)
-                        logger.info(f"Ensemble cross-val RMSE: {scores}")
+                        logger.info(
+                            "Ensemble cross-val RMSE: %s elapsed_seconds=%.2f",
+                            scores, time.monotonic() - _step_started,
+                        )
                         refresh_db_connection("after cross-validation")
 
                         logger.info(
                             "Fitting final ensemble model "
                             f"({len(train_X)} rows, {len(train_X.columns)} features)"
                         )
+                        _step_started = time.monotonic()
                         ensemble_models = fit_day_ahead_ensemble(train_X, train_y, sample_weights)
-                        logger.info("Finished fitting ensemble model")
+                        logger.info("Finished fitting ensemble model elapsed_seconds=%.2f", time.monotonic() - _step_started)
                         refresh_db_connection("after fitting ensemble model")
 
                         # Drop the training data set
                         logger.info("Preparing holdout/test dataset")
+                        _step_started = time.monotonic()
                         test_X, test_y = build_holdout_data(df, ff_train, prices, max_days)
+                        logger.info("build_holdout_data elapsed_seconds=%.2f", time.monotonic() - _step_started)
 
                         if len(test_X) > MAX_TEST_X:
                             logger.info(f"Sampling test dataset from {len(test_X)} rows to {MAX_TEST_X} rows")
@@ -956,10 +970,15 @@ class Command(BaseCommand):
 
                         # 6. SHAP Feature Importance (mean |SHAP| averaged across all three ensemble models)
                         try:
+                            _shap_started = time.monotonic()
                             shap_sample = test_X[features]
                             if len(shap_sample) > SHAP_IMPORTANCE_SAMPLE:
                                 shap_sample = shap_sample.sample(SHAP_IMPORTANCE_SAMPLE, random_state=42)
                             mean_abs_shap = _global_mean_abs_shap(ensemble_models, shap_sample)
+                            logger.info(
+                                "Global SHAP importance elapsed_seconds=%.2f (%d rows)",
+                                time.monotonic() - _shap_started, len(shap_sample),
+                            )
 
                             fig, ax = plt.subplots(figsize=(8, 6))
                             pd.Series(mean_abs_shap * factor, index=features).sort_values().plot.barh(ax=ax, color="#4a90d9")
@@ -1001,8 +1020,12 @@ class Command(BaseCommand):
                         logger.info("Finished latest forecast prediction")
 
                         try:
+                            _shap_row_started = time.monotonic()
                             shap_top_features = shap_top_features_by_row(ensemble_models, prediction_features)
-                            logger.info("Computed per-row SHAP top features (%d rows)", len(shap_top_features))
+                            logger.info(
+                                "Computed per-row SHAP top features (%d rows) elapsed_seconds=%.2f",
+                                len(shap_top_features), time.monotonic() - _shap_row_started,
+                            )
                         except Exception:
                             logger.exception("Per-row SHAP computation failed; skipping")
 
