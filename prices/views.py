@@ -48,6 +48,32 @@ logger = logging.getLogger("prices.web")
 USER_GROUP_NAME = "Users"
 PRIVILEGED_GROUP_NAME = "Privileged Users"
 
+_FEATURE_LABELS = {
+    "bm_wind": "BM wind (MW)",
+    "solar": "Solar (MW)",
+    "emb_wind": "Embedded wind (MW)",
+    "nuclear": "UK nuclear (MW)",
+    "fr_nuclear": "FR nuclear (MW)",
+    "gas_ttf": "Gas TTF (€/MWh)",
+    "demand": "Demand (MW)",
+    "temp_2m": "Temperature (°C)",
+    "wind_10m": "Wind speed (m/s)",
+    "rad": "Radiation (W/m²)",
+    "dispatchable_capacity": "Dispatch capacity (MW)",
+    "fr_wind": "FR wind speed (m/s)",
+    "fr_rad": "FR solar rad. (W/m²)",
+    "peak": "Peak hours (16–19)",
+    "weekend": "Weekend",
+    "days_ago": "Forecast age (days)",
+    "dt": "Lead time (days)",
+    "time": "Time of day",
+    "dow": "Day of week",
+}
+
+# Region X (national average) linear transform: agile_p_per_kwh ≈ day_ahead * _AF_M + _AF_A
+# Used to scale model-native SHAP values (£/MWh) to consumer-facing Agile p/kWh for display.
+_AF_M, _AF_A = GLOBAL_SETTINGS["REGIONS"]["X"]["factors"]
+
 
 def _is_raw_day_ahead_region(region):
     return regions.get(region, {}).get("raw_day_ahead", False)
@@ -250,6 +276,14 @@ def _scheduled_duplicate_response(request, job_type):
             "update": _job_payload(recent_job),
         }
     )
+
+
+@require_GET
+def healthz(request):
+    """Minimal liveness check for the fly.io health monitor: touches the DB but does
+    no heavy computation, so a genuinely wedged worker/DB still fails this fast."""
+    Forecasts.objects.exists()
+    return HttpResponse("OK")
 
 
 @require_GET
@@ -1567,6 +1601,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         show_export = self.request.GET.get("export", "0") == "1" and not raw
         show_gen = self.request.GET.get("gen", "1") == "1"
         show_fc_gen = show_gen and self.request.GET.get("fg", "0") == "1"
+        show_dc = self.request.GET.get("dc", "0") == "1"
         show_af = _truthy(self.request.GET.get("af", "")) and not raw
         show_x2r = _truthy(self.request.GET.get("x2r", "")) and not raw
         color_fn = _export_price_color if show_export else _price_color
@@ -1666,7 +1701,10 @@ class GraphV2View(V2NavMixin, TemplateView):
             summary["current_badge"] = _price_badge(p if not raw else None)
 
         # Upcoming forecast for next-slot and window calculations
-        upcoming_fc = primary_s[primary_s.index >= current_slot].iloc[:48]
+        if not primary_s.empty:
+            upcoming_fc = primary_s[primary_s.index >= current_slot].iloc[:48]
+        else:
+            upcoming_fc = pd.Series(dtype=float)
 
         if not upcoming_fc.empty:
             if show_export:
@@ -1754,7 +1792,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         _bmrs_rows = source_rows.get("bmrs", -1)
         _om_rows = source_rows.get("openmeteo", -1)
         _rte_rows = source_rows.get("rte_nuclear", -1)
-        _opmr_rows = source_rows.get("neso_opmr", -1)
+        _dc_rows = source_rows.get("neso_dc", -1)
         _om_fr_rows = source_rows.get("openmeteo_fr", -1)
 
         def _bin_health(rows, threshold):
@@ -1783,7 +1821,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         _bmrs_health = _bin_health(_bmrs_rows, _BMRS_THRESHOLD)
         _om_health = _bin_health(_om_rows, _NESO_THRESHOLD)
         _rte_health = _bin_health(_rte_rows, 24)      # ≥24 rows = at least 12h of 30-min data
-        _opmr_health = _bin_health(_opmr_rows, 14)   # ≥14 rows = at least 7 days broadcast
+        _dc_health = _bin_health(_dc_rows, 14)   # ≥14 rows = at least 7 days broadcast
         _om_fr_health = _bin_health(_om_fr_rows, 336)  # ≥336 rows = at least 7 days of 30-min data
 
         # Octopus: check freshness of PriceHistory (binary: ok if ≤ 26 h old)
@@ -1840,13 +1878,13 @@ class GraphV2View(V2NavMixin, TemplateView):
         _worst_health = lambda a, b: min([a, b], key=lambda h: _rank.get(h, 1))
 
         # NESO consolidated: forecast data + OPMR
-        _neso_combined_health = _worst_health(_neso_health, _opmr_health)
+        _neso_combined_health = _worst_health(_neso_health, _dc_health)
         if _neso_combined_health == "ok":
             _neso_combined_detail = "OK"
         elif _neso_health != "ok":
             _neso_combined_detail = _neso_detail()
         else:
-            _neso_combined_detail = f"OPMR: {_opmr_rows} rows" if _opmr_rows > 0 else _src_detail("neso_opmr")
+            _neso_combined_detail = f"Dispatch cap: {_dc_rows} rows" if _dc_rows > 0 else _src_detail("neso_dc")
 
         # Open-Meteo consolidated: UK + France
         # Only include FR in the combined health if it has been fetched at least once.
@@ -1914,7 +1952,11 @@ class GraphV2View(V2NavMixin, TemplateView):
             today_gb = now_gb.normalize()
             tomorrow_gb = today_gb + pd.Timedelta("1D")
             # Best available prices: actual (Octopus-confirmed) where available, else forecast
-            future_prices = primary_s[primary_s.index > now_gb].copy()
+            if not primary_s.empty:
+                future_prices = primary_s[primary_s.index > now_gb].copy()
+            else:
+                future_prices = pd.Series(dtype=float)
+
             if not actual.empty:
                 future_actual = actual[actual.index > now_gb]
                 future_prices.update(future_actual)
@@ -1975,36 +2017,46 @@ class GraphV2View(V2NavMixin, TemplateView):
 
         # --- Build chart ---
         _STRIP_ROW = 2
-        if show_gen:
-            figure = make_subplots(
-                rows=3,
-                cols=1,
-                subplot_titles=("", "", "Generation & Demand"),
-                shared_xaxes=True,
-                vertical_spacing=0.04,
-                row_heights=[0.55, 0.04, 0.41],
-            )
+        _n_rows = 2 + int(show_gen) + int(show_dc)
+        _GEN_ROW  = 3 if show_gen else None
+        _DC_ROW = (4 if show_gen else 3) if show_dc else None
 
-            def add_price(trace):
-                figure.add_trace(trace, row=1, col=1)
-
-            def add_gen(trace):
-                figure.add_trace(trace, row=3, col=1)
-
-            chart_height = 660
+        if _n_rows == 4:
+            _row_heights     = [0.45, 0.03, 0.28, 0.24]
+            _subplot_titles  = ("", "", "Generation & Demand", "Dispatch Capacity")
+            chart_height     = 820
+        elif show_gen:
+            _row_heights     = [0.55, 0.04, 0.41]
+            _subplot_titles  = ("", "", "Generation & Demand")
+            chart_height     = 660
+        elif show_dc:
+            _row_heights     = [0.65, 0.04, 0.31]
+            _subplot_titles  = ("", "", "Dispatch Capacity")
+            chart_height     = 600
         else:
-            figure = make_subplots(
-                rows=2,
-                cols=1,
-                shared_xaxes=True,
-                vertical_spacing=0,
-                row_heights=[0.94, 0.06],
-            )
+            _row_heights     = [0.94, 0.06]
+            _subplot_titles  = ("", "")
+            chart_height     = 440
 
-            def add_price(trace):
-                figure.add_trace(trace, row=1, col=1)
+        figure = make_subplots(
+            rows=_n_rows,
+            cols=1,
+            subplot_titles=_subplot_titles,
+            shared_xaxes=True,
+            vertical_spacing=0.04 if _n_rows > 2 else 0,
+            row_heights=_row_heights,
+        )
 
-            chart_height = 440
+        def add_price(trace):
+            figure.add_trace(trace, row=1, col=1)
+
+        def add_gen(trace):
+            if _GEN_ROW:
+                figure.add_trace(trace, row=_GEN_ROW, col=1)
+
+        def add_dc(trace):
+            if _DC_ROW:
+                figure.add_trace(trace, row=_DC_ROW, col=1)
 
         # Uncertainty band — shaded fill drawn first so lines sit on top
         if show_band and not low_s.empty and not high_s.empty and not primary_s.empty:
@@ -2193,7 +2245,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         )
 
         # Generation & demand subplot
-        if show_gen and latest is not None:
+        if (show_gen or show_dc) and latest is not None:
             fp = list(
                 ForecastData.objects.filter(
                     forecast=latest,
@@ -2206,72 +2258,89 @@ class GraphV2View(V2NavMixin, TemplateView):
                     date_time__gte=prior_gb.tz_convert("UTC"),
                     date_time__lte=now_gb.tz_convert("UTC"),
                 )
-            )
-            if fp:
-                add_gen(go.Scatter(
-                    x=[r.date_time for r in fp],
-                    y=[(r.demand + r.solar + r.emb_wind) / 1000 for r in fp],
-                    line={"color": "cyan", "width": 2}, name="Forecast demand",
-                ))
-                add_gen(go.Scatter(
-                    x=[r.date_time for r in fp], y=[r.nuclear / 1000 for r in fp],
-                    fill="tozeroy", line={"color": "rgba(160,160,160,1)"},
-                    fillcolor="rgba(180,180,180,0.8)", name="Nuclear",
-                ))
-                add_gen(go.Scatter(
-                    x=[r.date_time for r in fp],
-                    y=[(r.nuclear + r.bm_wind) / 1000 for r in fp],
-                    fill="tonexty", line={"color": "rgba(63,127,63)"},
-                    fillcolor="rgba(127,255,127,0.8)", name="Metered wind",
-                ))
-                add_gen(go.Scatter(
-                    x=[r.date_time for r in fp],
-                    y=[(r.nuclear + r.bm_wind + r.emb_wind) / 1000 for r in fp],
-                    fill="tonexty", line={"color": "rgba(50,150,220)"},
-                    fillcolor="rgba(100,200,255,0.7)", name="Embedded wind",
-                ))
-                add_gen(go.Scatter(
-                    x=[r.date_time for r in fp],
-                    y=[(r.nuclear + r.bm_wind + r.emb_wind + r.solar) / 1000 for r in fp],
-                    fill="tonexty", line={"color": "lightgray", "width": 2},
-                    fillcolor="rgba(255,255,127,0.8)", name="Solar",
-                ))
-            if h_rows:
-                add_gen(go.Scatter(
-                    x=[r.date_time for r in h_rows],
-                    y=[(r.demand + r.solar + (r.total_wind - r.bm_wind)) / 1000 for r in h_rows],
-                    line={"color": "#aaaa77", "width": 2}, name="Historic demand",
-                ))
-            if show_fc_gen and older:
-                for i, fc_obj in enumerate(older[:3]):
-                    fc_gen_rows = list(
-                        ForecastData.objects.filter(
-                            forecast=fc_obj,
-                            date_time__gte=prior_gb.tz_convert("UTC"),
-                            date_time__lte=end_gb.tz_convert("UTC"),
-                        ).order_by("date_time")
-                    )
-                    if not fc_gen_rows:
-                        continue
-                    color = self._OLDER_COLORS[i % len(self._OLDER_COLORS)]
-                    fc_label = pd.Timestamp(fc_obj.created_at).tz_convert("GB").strftime("%d %b %H:%M")
+            ) if show_gen else []
+            if show_gen:
+                if fp:
                     add_gen(go.Scatter(
-                        x=[r.date_time for r in fc_gen_rows],
-                        y=[(r.nuclear + r.bm_wind + r.emb_wind + r.solar) / 1000 for r in fc_gen_rows],
-                        mode="lines",
-                        line=dict(color=color, width=1.5, dash="dot"),
-                        name=f"Gen ({fc_label})",
-                        hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} GW<extra>Gen {fc_label}</extra>",
+                        x=[r.date_time for r in fp],
+                        y=[(r.demand + r.solar + r.emb_wind) / 1000 for r in fp],
+                        line={"color": "cyan", "width": 2}, name="Forecast demand",
                     ))
                     add_gen(go.Scatter(
-                        x=[r.date_time for r in fc_gen_rows],
-                        y=[(r.demand + r.solar + r.emb_wind) / 1000 for r in fc_gen_rows],
-                        mode="lines",
-                        line=dict(color=color, width=1.5, dash="dot"),
-                        name=f"Demand ({fc_label})",
-                        hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} GW<extra>Demand {fc_label}</extra>",
+                        x=[r.date_time for r in fp], y=[r.nuclear / 1000 for r in fp],
+                        fill="tozeroy", line={"color": "rgba(160,160,160,1)"},
+                        fillcolor="rgba(180,180,180,0.8)", name="Nuclear",
                     ))
-            figure.update_yaxes(title_text="Power [GW]", fixedrange=True, row=3, col=1)
+                    add_gen(go.Scatter(
+                        x=[r.date_time for r in fp],
+                        y=[(r.nuclear + r.bm_wind) / 1000 for r in fp],
+                        fill="tonexty", line={"color": "rgba(63,127,63)"},
+                        fillcolor="rgba(127,255,127,0.8)", name="Metered wind",
+                    ))
+                    add_gen(go.Scatter(
+                        x=[r.date_time for r in fp],
+                        y=[(r.nuclear + r.bm_wind + r.emb_wind) / 1000 for r in fp],
+                        fill="tonexty", line={"color": "rgba(50,150,220)"},
+                        fillcolor="rgba(100,200,255,0.7)", name="Embedded wind",
+                    ))
+                    add_gen(go.Scatter(
+                        x=[r.date_time for r in fp],
+                        y=[(r.nuclear + r.bm_wind + r.emb_wind + r.solar) / 1000 for r in fp],
+                        fill="tonexty", line={"color": "lightgray", "width": 2},
+                        fillcolor="rgba(255,255,127,0.8)", name="Solar",
+                    ))
+                if h_rows:
+                    add_gen(go.Scatter(
+                        x=[r.date_time for r in h_rows],
+                        y=[(r.demand + r.solar + (r.total_wind - r.bm_wind)) / 1000 for r in h_rows],
+                        line={"color": "#aaaa77", "width": 2}, name="Historic demand",
+                    ))
+                if show_fc_gen and older:
+                    for i, fc_obj in enumerate(older[:3]):
+                        fc_gen_rows = list(
+                            ForecastData.objects.filter(
+                                forecast=fc_obj,
+                                date_time__gte=prior_gb.tz_convert("UTC"),
+                                date_time__lte=end_gb.tz_convert("UTC"),
+                            ).order_by("date_time")
+                        )
+                        if not fc_gen_rows:
+                            continue
+                        color = self._OLDER_COLORS[i % len(self._OLDER_COLORS)]
+                        fc_label = pd.Timestamp(fc_obj.created_at).tz_convert("GB").strftime("%d %b %H:%M")
+                        add_gen(go.Scatter(
+                            x=[r.date_time for r in fc_gen_rows],
+                            y=[(r.nuclear + r.bm_wind + r.emb_wind + r.solar) / 1000 for r in fc_gen_rows],
+                            mode="lines",
+                            line=dict(color=color, width=1.5, dash="dot"),
+                            name=f"Gen ({fc_label})",
+                            hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} GW<extra>Gen {fc_label}</extra>",
+                        ))
+                        add_gen(go.Scatter(
+                            x=[r.date_time for r in fc_gen_rows],
+                            y=[(r.demand + r.solar + r.emb_wind) / 1000 for r in fc_gen_rows],
+                            mode="lines",
+                            line=dict(color=color, width=1.5, dash="dot"),
+                            name=f"Demand ({fc_label})",
+                            hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} GW<extra>Demand {fc_label}</extra>",
+                        ))
+                figure.update_yaxes(title_text="Power [GW]", fixedrange=True, row=_GEN_ROW, col=1)
+
+            if show_dc and fp:
+                dc_rows = [(r.date_time, r.dispatchable_capacity) for r in fp if r.dispatchable_capacity is not None]
+                if dc_rows:
+                    xs, ys = zip(*dc_rows)
+                    add_dc(go.Scatter(
+                        x=list(xs),
+                        y=list(ys),
+                        mode="lines",
+                        fill="tozeroy",
+                        line={"color": "#fd7e14", "width": 2, "shape": "hv"},
+                        fillcolor="rgba(253,126,20,0.25)",
+                        name="Dispatch capacity",
+                        hovertemplate="%{x|%d %b}<br><b>%{y:.0f} MW</b><extra>Dispatch capacity</extra>",
+                    ))
+                figure.update_yaxes(title_text="Dispatch capacity [MW]", fixedrange=True, row=_DC_ROW, col=1)
 
         # Colour strip at bottom of price chart
         if not strip_s.empty:
@@ -2311,7 +2380,7 @@ class GraphV2View(V2NavMixin, TemplateView):
             paper_bgcolor="#1a1d21",
             bargap=0,
         )
-        if show_gen:
+        if show_gen or show_dc:
             figure.update_layout(**common_layout)
             figure.update_yaxes(
                 title_text=price_display["axis_title"],
@@ -2341,6 +2410,33 @@ class GraphV2View(V2NavMixin, TemplateView):
             ]
         )
 
+        # SHAP per-slot explanations: scale model-native £/MWh values using the selected
+        # region's own linear factor so contributors are in the same units as the price chart.
+        _shap_m, _shap_a = regions.get(region, regions["X"])["factors"]
+        shap_data = {}
+        if latest is not None:
+            shap_rows = (
+                ForecastData.objects
+                .filter(
+                    forecast=latest,
+                    date_time__gte=prior_gb.tz_convert("UTC"),
+                    date_time__lte=end_gb.tz_convert("UTC"),
+                )
+                .exclude(shap_top_features__isnull=True)
+                .order_by("date_time")
+            )
+            for row in shap_rows:
+                ts_ms = int(pd.Timestamp(row.date_time).timestamp() * 1000)
+                shap_data[str(ts_ms)] = {
+                    "time": pd.Timestamp(row.date_time).tz_convert("GB").strftime("%d %b %H:%M"),
+                    "price": round(row.day_ahead * _shap_m + _shap_a, 1) if row.day_ahead is not None else None,
+                    "contributors": [
+                        {"label": _FEATURE_LABELS.get(item["feature"], item["feature"]),
+                         "value": round(item["value"] * _shap_m, 2)}
+                        for item in (row.shap_top_features or [])
+                    ],
+                }
+
         # Forecast list for template checkboxes
         forecast_list = [
             {
@@ -2362,6 +2458,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 "show_export": show_export,
                 "show_gen": show_gen,
                 "show_fc_gen": show_fc_gen,
+                "show_dc": show_dc,
                 "show_af": show_af,
                 "show_x2r": show_x2r,
                 "summary": summary,
@@ -2372,6 +2469,8 @@ class GraphV2View(V2NavMixin, TemplateView):
                      for ts, p in strip_s.items() if pd.notna(p)]
                 ) if not raw else "[]",
                 "now_ms": int(now_gb.timestamp() * 1000),
+                "shap_data_json": json.dumps(shap_data),
+                "shap_unit": price_display["unit"],
                 "day_options": self._DAY_OPTIONS,
                 "forecast_list": forecast_list,
                 "selected_ids": selected_ids,
@@ -2693,6 +2792,7 @@ class StatsV2View(V2NavMixin, StatsView):
             "diagnostic_date_from": diag["date_from"],
             "diagnostic_date_to": diag["date_to"],
             "feature_experiment": self._build_feature_experiment_section(),
+            "shap_explanations": self._build_shap_explanations(),
         }
         cache.set(cache_key, v2_extra, timeout=60 * 60 * 24)
         context.update(v2_extra)
@@ -2969,6 +3069,11 @@ class StatsV2View(V2NavMixin, StatsView):
         if fi_chart:
             charts.append(fi_chart)
 
+        # Chart 6: SHAP Feature Importance
+        shap_chart = StatsV2View._build_shap_importance_chart()
+        if shap_chart:
+            charts.append(shap_chart)
+
         return {
             "charts": charts,
             "sample_count": sample_count,
@@ -2993,28 +3098,6 @@ class StatsV2View(V2NavMixin, StatsView):
         if not fi:
             return None
 
-        _FEATURE_LABELS = {
-            "bm_wind": "BM wind (MW)",
-            "solar": "Solar (MW)",
-            "emb_wind": "Embedded wind (MW)",
-            "nuclear": "UK nuclear (MW)",
-            "fr_nuclear": "FR nuclear (MW)",
-            "gas_ttf": "Gas TTF (€/MWh)",
-            "demand": "Demand (MW)",
-            "temp_2m": "Temperature (°C)",
-            "wind_10m": "Wind speed (m/s)",
-            "rad": "Radiation (W/m²)",
-            "opmr_surplus": "OPMR surplus (MW)",
-            "fr_wind": "France wind speed (m/s)",
-            "fr_rad": "France solar radiation (W/m²)",
-            "peak": "Peak hours (16–19)",
-            "weekend": "Weekend",
-            "days_ago": "Forecast age (days)",
-            "dt": "Lead time (days)",
-            "time": "Time of day",
-            "dow": "Day of week",
-        }
-
         sorted_items = sorted(fi.items(), key=lambda x: x[1])
         labels = [_FEATURE_LABELS.get(k, k) for k, _ in sorted_items]
         values = [v for _, v in sorted_items]
@@ -3033,6 +3116,7 @@ class StatsV2View(V2NavMixin, StatsView):
             paper_bgcolor="#343a40",
             height=max(300, 30 * len(labels) + 60),
             margin={"r": 10, "t": 30, "l": 170, "b": 50},
+            font={"size": 12, "color": "#dee2e6"},
             xaxis={"title": "Relative importance (ensemble average)"},
             yaxis={"title": ""},
         )
@@ -3045,6 +3129,86 @@ class StatsV2View(V2NavMixin, StatsView):
             ),
             "chart": fig.to_html(full_html=False, include_plotlyjs=False),
         }
+
+    @staticmethod
+    def _build_shap_importance_chart():
+        """Read SHAP feature importance (mean |SHAP|, LightGBM) from the most recent UpdateJob."""
+        shap_job = (
+            UpdateJob.objects
+            .exclude(options__shap_importance=None)
+            .order_by("-requested_at")
+            .first()
+        )
+        if shap_job is None:
+            return None
+        shap_imp = shap_job.options.get("shap_importance", {})
+        if not shap_imp:
+            return None
+
+        sorted_items = sorted(shap_imp.items(), key=lambda x: x[1])
+        labels = [_FEATURE_LABELS.get(k, k) for k, _ in sorted_items]
+        values = [v * _AF_M for _, v in sorted_items]
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=values,
+            y=labels,
+            orientation="h",
+            marker_color="#28a745",
+            hovertemplate="%{y}<br>Mean |SHAP|: %{x:.2f} p/kWh<extra></extra>",
+        ))
+        fig.update_layout(
+            template="plotly_dark",
+            plot_bgcolor="#212529",
+            paper_bgcolor="#343a40",
+            height=max(300, 35 * len(labels) + 60),
+            margin={"r": 10, "t": 30, "l": 210, "b": 50},
+            font={"size": 12, "color": "#dee2e6"},
+            xaxis={"title": "Mean |SHAP value| (p/kWh Agile, region X)"},
+            yaxis={"title": ""},
+        )
+        return {
+            "title": "SHAP Feature Importance",
+            "description": (
+                "Mean absolute SHAP contribution per feature averaged across all three ensemble models "
+                "(CatBoost, LightGBM, ExtraTrees), computed on the holdout set. Values are scaled to "
+                "Agile p/kWh (region X). The per-slot breakdown on the forecast page averages "
+                "CatBoost + LightGBM only — ExtraTrees is too slow for per-row use with 700 trees."
+            ),
+            "chart": fig.to_html(full_html=False, include_plotlyjs=False),
+        }
+
+    @staticmethod
+    def _build_shap_explanations(limit=8):
+        """Top SHAP feature contributions for the next few upcoming forecast slots."""
+        latest_forecast = Forecasts.objects.order_by("-created_at").first()
+        if latest_forecast is None:
+            return []
+
+        rows = (
+            ForecastData.objects
+            .filter(forecast=latest_forecast, date_time__gte=pd.Timestamp.now(tz="UTC"))
+            .exclude(shap_top_features__isnull=True)
+            .order_by("date_time")[:limit]
+        )
+
+        explanations = []
+        for row in rows:
+            contributors = [
+                {
+                    "label": _FEATURE_LABELS.get(item["feature"], item["feature"]),
+                    "value": round(item["value"] * _AF_M, 2),
+                }
+                for item in (row.shap_top_features or [])
+            ]
+            if not contributors:
+                continue
+            explanations.append({
+                "time": row.date_time,
+                "price": round(row.day_ahead * _AF_M + _AF_A, 1) if row.day_ahead is not None else None,
+                "contributors": contributors,
+            })
+        return explanations
 
     @staticmethod
     def _build_feature_experiment_section():
