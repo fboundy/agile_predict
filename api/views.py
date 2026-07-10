@@ -45,7 +45,7 @@ class PriceForecastRegionAPIView(generics.ListAPIView):
         context = super().get_serializer_context()
         context.update({"request": self.request})
         context.update({"region": self.kwargs["region"].upper()})
-        context.update({"days": min(max(int(self.request.query_params.get("days", 7)), 1), 7)})
+        context.update({"days": min(max(int(self.request.query_params.get("days", 14)), 1), 14)})
         context.update({"high_low": self.request.query_params.get("high_low", "true").lower() in ["true", "1"]})
         context.update({"export": self.request.query_params.get("export", "false").lower() in ["true", "1", "yes", "on"]})
         return context
