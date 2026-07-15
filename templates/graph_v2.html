@@ -22,7 +22,7 @@
 <div class="container-lg py-3">
 
   {# ======== Status cards (data sources + externals) collapsed behind toggle ======== #}
-  {% if api_status or ext_statuses %}
+  {% if api_status or show_af or show_x2r %}
   <div class="mb-3">
     <button id="status-btn" class="btn d-flex align-items-center gap-3 px-3 py-2 w-100 text-start"
             style="background:#2a2d31;border:none;color:#dee2e6;border-radius:.375rem;transition:background .2s"
@@ -33,18 +33,8 @@
       <span class="ms-auto" style="font-size:.75rem;opacity:.4">&#9660;</span>
     </button>
     <div class="collapse" id="status-detail">
-      <div class="row g-2 mt-1">
+      <div class="row g-2 mt-1" id="status-cards-row">
         {% if api_status %}{% for src in api_status.sources %}
-        <div class="col-6 col-sm-4 col-md-3" data-health="{{ src.health }}">
-          <div class="card border-0 shadow-sm h-100" style="background:{% if src.health == 'ok' %}#1a4a2c{% elif src.health == 'warn' %}#ffc107{% elif src.health == 'fail' %}#4a1a22{% else %}#2a2d31{% endif %}">
-            <div class="card-body py-2 px-3" style="{% if src.health == 'warn' %}color:#111{% endif %}">
-              <div class="fw-semibold" style="font-size:.82rem">{{ src.name }}</div>
-              <div style="font-size:.72rem;margin-top:2px;{% if src.health == 'warn' %}color:#333{% else %}opacity:.65{% endif %}">{{ src.detail }}</div>
-            </div>
-          </div>
-        </div>
-        {% endfor %}{% endif %}
-        {% if ext_statuses %}{% for src in ext_statuses %}
         <div class="col-6 col-sm-4 col-md-3" data-health="{{ src.health }}">
           <div class="card border-0 shadow-sm h-100" style="background:{% if src.health == 'ok' %}#1a4a2c{% elif src.health == 'warn' %}#ffc107{% elif src.health == 'fail' %}#4a1a22{% else %}#2a2d31{% endif %}">
             <div class="card-body py-2 px-3" style="{% if src.health == 'warn' %}color:#111{% endif %}">
@@ -59,25 +49,29 @@
   </div>
   <script>
   (function () {
-    var cards = document.querySelectorAll('#status-detail [data-health]');
-    var worst = 'ok';
-    cards.forEach(function (c) {
-      var h = c.dataset.health;
-      if (h === 'fail') worst = 'fail';
-      else if (h === 'warn' && worst !== 'fail') worst = 'warn';
-    });
-    var btn = document.getElementById('status-btn');
-    var el  = document.getElementById('status-indicator');
-    if (worst === 'fail') {
-      btn.style.background = '#4a1a22';
-      el.innerHTML = '<span style="color:#f77">&#x2715; fault</span>';
-    } else if (worst === 'warn') {
-      btn.style.background = '#4a3800';
-      el.innerHTML = '<span style="color:#ffc107">&#x26A0; warning</span>';
-    } else {
-      btn.style.background = '#1a4a2c';
-      el.innerHTML = '<span style="color:#6fcf8e">&#x2713; all OK</span>';
+    function refreshStatusIndicator() {
+      var cards = document.querySelectorAll('#status-detail [data-health]');
+      var worst = 'ok';
+      cards.forEach(function (c) {
+        var h = c.dataset.health;
+        if (h === 'fail') worst = 'fail';
+        else if (h === 'warn' && worst !== 'fail') worst = 'warn';
+      });
+      var btn = document.getElementById('status-btn');
+      var el  = document.getElementById('status-indicator');
+      if (worst === 'fail') {
+        btn.style.background = '#4a1a22';
+        el.innerHTML = '<span style="color:#f77">&#x2715; fault</span>';
+      } else if (worst === 'warn') {
+        btn.style.background = '#4a3800';
+        el.innerHTML = '<span style="color:#ffc107">&#x26A0; warning</span>';
+      } else {
+        btn.style.background = '#1a4a2c';
+        el.innerHTML = '<span style="color:#6fcf8e">&#x2713; all OK</span>';
+      }
     }
+    window.__refreshStatusIndicator = refreshStatusIndicator;
+    refreshStatusIndicator();
   })();
   </script>
   {% endif %}
@@ -284,6 +278,67 @@
     });
   })();
   </script>
+
+  {% if show_af or show_x2r %}
+  <script>
+  (function () {
+    var plotDiv = document.querySelector('.plotly-graph-div');
+    if (!plotDiv) return;
+
+    var params = new URLSearchParams();
+    params.set('days', '{{ days }}');
+    {% if show_export %}params.set('export', '1');{% endif %}
+    {% if show_af %}params.set('af', '1');{% endif %}
+    {% if show_x2r %}params.set('x2r', '1');{% endif %}
+
+    function addStatusCard(name, health, detail) {
+      var row = document.getElementById('status-cards-row');
+      if (!row) return;
+      var bg = health === 'ok' ? '#1a4a2c' : health === 'warn' ? '#ffc107' : health === 'fail' ? '#4a1a22' : '#2a2d31';
+      var textStyle   = health === 'warn' ? 'color:#111' : '';
+      var detailStyle = health === 'warn' ? 'color:#333' : 'opacity:.65';
+      var col = document.createElement('div');
+      col.className = 'col-6 col-sm-4 col-md-3';
+      col.dataset.health = health;
+      col.innerHTML =
+        '<div class="card border-0 shadow-sm h-100" style="background:' + bg + '">' +
+          '<div class="card-body py-2 px-3" style="' + textStyle + '">' +
+            '<div class="fw-semibold" style="font-size:.82rem"></div>' +
+            '<div style="font-size:.72rem;margin-top:2px;' + detailStyle + '"></div>' +
+          '</div>' +
+        '</div>';
+      col.querySelector('.fw-semibold').textContent = name;
+      col.querySelector('.fw-semibold').nextElementSibling.textContent = detail;
+      row.appendChild(col);
+    }
+
+    fetch('/v2/{{ region|escapejs }}/ext-forecast/?' + params.toString())
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        (data.traces || []).forEach(function (t) {
+          Plotly.addTraces(plotDiv, {
+            x: t.x.map(function (ms) { return new Date(ms); }),
+            y: t.y,
+            mode: 'lines',
+            line: { shape: 'hv', color: t.color, width: 1.5 },
+            name: t.name,
+            xaxis: 'x',
+            yaxis: 'y',
+            hovertemplate: '%{x|%d %b %H:%M}<br><b>%{y:.2f} {{ shap_unit }}</b><extra>' + t.name + '</extra>',
+          });
+        });
+        (data.statuses || []).forEach(function (src) {
+          addStatusCard(src.name, src.health, src.detail);
+        });
+        if (window.__refreshStatusIndicator) window.__refreshStatusIndicator();
+      })
+      .catch(function () {
+        addStatusCard('External forecasts', 'fail', 'Failed to load');
+        if (window.__refreshStatusIndicator) window.__refreshStatusIndicator();
+      });
+  })();
+  </script>
+  {% endif %}
 
   {# ======== Why this price? (SHAP explanation) + Cheapest windows ======== #}
   <div class="row g-3 mb-3">
