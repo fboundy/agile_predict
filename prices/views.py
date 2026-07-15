@@ -1577,6 +1577,110 @@ def _ext_db_fallback(source, region, start, end):
     }
 
 
+_EXT_COLORS = {"AgileForecast": "#D55E00", "X2R": "#009E73"}
+_EXT_SOURCES = {
+    "AgileForecast": (fetch_agileforecast, ExternalForecast.SOURCE_AGILEFORECAST),
+    "X2R": (fetch_x2r, ExternalForecast.SOURCE_X2R),
+}
+
+
+def _fetch_external_forecasts(ext_labels, region, show_export, prior_gb, end_gb):
+    """Fetch AgileForecast/X2R comparison series (live, with stored-data fallback).
+
+    Used by ext_forecast_json — this makes the live external-API calls (5-15s
+    timeouts), so it must never run on GraphV2View's synchronous render path;
+    the browser fetches it separately after the main chart has already loaded.
+    Returns (traces, statuses) where traces are Plotly-ready dicts and statuses
+    are health/detail entries for the "Data sources" card.
+    """
+    traces = []
+    statuses = []
+    for ext_label in ext_labels:
+        ext_fetcher, ext_source_const = _EXT_SOURCES[ext_label]
+        ext_data = None
+        ext_health = "ok"
+        ext_detail = "Live"
+
+        try:
+            ext_data = ext_fetcher(region)
+        except Exception as exc:
+            logger.warning("ext_forecast_json: %s live call failed: %s", ext_label, exc)
+            fallback = _ext_db_fallback(ext_source_const, region, prior_gb, end_gb)
+            if fallback is not None:
+                ext_data = fallback
+                ext_health = "warn" if fallback["is_fresh"] else "fail"
+                ext_detail = "Stored data (live unavailable)" if fallback["is_fresh"] else "Stale data (download failed)"
+            else:
+                statuses.append({"name": ext_label, "health": "fail", "detail": "No data available"})
+                continue
+
+        ext_rows = ext_data.get("rows", [])
+        if not ext_rows:
+            statuses.append({"name": ext_label, "health": "fail", "detail": "No data"})
+            continue
+
+        ext_s = pd.Series(
+            index=pd.to_datetime([r["date_time"] for r in ext_rows]),
+            data=[float(r["agile_pred"]) for r in ext_rows],
+        ).sort_index()
+        try:
+            ext_s.index = ext_s.index.tz_convert("GB")
+        except TypeError:
+            ext_s.index = ext_s.index.tz_localize("GB")
+        ext_s = ext_s[(ext_s.index >= prior_gb) & (ext_s.index <= end_gb)]
+        if show_export:
+            ext_s = import_agile_to_export_agile(ext_s, region=region)
+        if ext_s.empty:
+            statuses.append({"name": ext_label, "health": "warn", "detail": "No data in range"})
+            continue
+
+        created_at = pd.Timestamp(ext_data["source_created_at"]).tz_convert("GB")
+        if ext_health == "ok":
+            ext_detail = f"Live ({created_at.strftime('%d %b %H:%M')})"
+        statuses.append({"name": ext_label, "health": ext_health, "detail": ext_detail})
+
+        traces.append({
+            "name": f"{ext_label} ({created_at.strftime('%d %b %H:%M')})",
+            "color": _EXT_COLORS[ext_label],
+            "x": [int(ts.timestamp() * 1000) for ts in ext_s.index],
+            "y": [round(float(v), 4) for v in ext_s.values],
+        })
+
+    return traces, statuses
+
+
+@require_GET
+def ext_forecast_json(request, region):
+    """AJAX endpoint for the AgileForecast/X2R comparison overlay (af=1/x2r=1).
+
+    Split out of GraphV2View so the main page render never blocks on these
+    external HTTP calls (5-15s timeouts) — the browser fetches this
+    separately once the base chart has already rendered.
+    """
+    region = region.upper()
+    if region not in regions:
+        region = "X"
+    raw = _is_raw_day_ahead_region(region)
+
+    days = min(max(int(request.GET.get("days", 5)), 1), 14)
+    show_export = request.GET.get("export", "0") == "1" and not raw
+    show_af = _truthy(request.GET.get("af", "")) and not raw
+    show_x2r = _truthy(request.GET.get("x2r", "")) and not raw
+
+    now_gb = pd.Timestamp.now(tz="GB")
+    prior_gb = now_gb - pd.Timedelta(hours=12)
+    end_gb = now_gb + pd.Timedelta(days=days)
+
+    ext_labels = []
+    if show_af:
+        ext_labels.append("AgileForecast")
+    if show_x2r:
+        ext_labels.append("X2R")
+
+    traces, statuses = _fetch_external_forecasts(ext_labels, region, show_export, prior_gb, end_gb)
+    return JsonResponse({"traces": traces, "statuses": statuses})
+
+
 class GraphV2View(V2NavMixin, TemplateView):
     """Colour-coded bar chart UI — alternative to the accordion-sidebar GraphFormView."""
 
@@ -2176,72 +2280,10 @@ class GraphV2View(V2NavMixin, TemplateView):
                 hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} {unit}<extra>{older_label}</extra>",
             ))
 
-        # External forecasts (AgileForecast / X2R)
-        _EXT_COLORS = {"AgileForecast": "#D55E00", "X2R": "#009E73"}
-        _EXT_SOURCES = {
-            "AgileForecast": (fetch_agileforecast, ExternalForecast.SOURCE_AGILEFORECAST),
-            "X2R": (fetch_x2r, ExternalForecast.SOURCE_X2R),
-        }
-        _ext_labels = []
-        if show_af:
-            _ext_labels.append("AgileForecast")
-        if show_x2r:
-            _ext_labels.append("X2R")
-
+        # External forecasts (AgileForecast / X2R): fetched client-side via
+        # ext_forecast_json after the main chart renders, not here — these make
+        # live HTTP calls with 5-15s timeouts and must never block this view.
         ext_statuses = []
-        for ext_label in _ext_labels:
-            ext_fetcher, ext_source_const = _EXT_SOURCES[ext_label]
-            ext_data = None
-            ext_health = "ok"
-            ext_detail = "Live"
-
-            try:
-                ext_data = ext_fetcher(region)
-            except Exception as exc:
-                logger.warning("GraphV2: %s live call failed: %s", ext_label, exc)
-                fallback = _ext_db_fallback(ext_source_const, region, prior_gb, end_gb)
-                if fallback is not None:
-                    ext_data = fallback
-                    ext_health = "warn" if fallback["is_fresh"] else "fail"
-                    ext_detail = "Stored data (live unavailable)" if fallback["is_fresh"] else "Stale data (download failed)"
-                else:
-                    ext_statuses.append({"name": ext_label, "health": "fail", "detail": "No data available"})
-                    continue
-
-            ext_rows = ext_data.get("rows", [])
-            if not ext_rows:
-                ext_statuses.append({"name": ext_label, "health": "fail", "detail": "No data"})
-                continue
-
-            ext_s = pd.Series(
-                index=pd.to_datetime([r["date_time"] for r in ext_rows]),
-                data=[float(r["agile_pred"]) for r in ext_rows],
-            ).sort_index()
-            try:
-                ext_s.index = ext_s.index.tz_convert("GB")
-            except TypeError:
-                ext_s.index = ext_s.index.tz_localize("GB")
-            ext_s = ext_s[(ext_s.index >= prior_gb) & (ext_s.index <= end_gb)]
-            if show_export:
-                ext_s = import_agile_to_export_agile(ext_s, region=region)
-            if ext_s.empty:
-                ext_statuses.append({"name": ext_label, "health": "warn", "detail": "No data in range"})
-                continue
-
-            created_at = pd.Timestamp(ext_data["source_created_at"]).tz_convert("GB")
-            if ext_health == "ok":
-                ext_detail = f"Live ({created_at.strftime('%d %b %H:%M')})"
-            ext_statuses.append({"name": ext_label, "health": ext_health, "detail": ext_detail})
-
-            ext_color = _EXT_COLORS[ext_label]
-            add_price(go.Scatter(
-                x=ext_s.index,
-                y=ext_s.values,
-                mode="lines",
-                line=dict(shape="hv", color=ext_color, width=1.5),
-                name=f"{ext_label} ({created_at.strftime('%d %b %H:%M')})",
-                hovertemplate=f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>{ext_label}</extra>",
-            ))
 
         # Now vline — appears across all subplots
         figure.add_vline(
