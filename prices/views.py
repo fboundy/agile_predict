@@ -1650,19 +1650,30 @@ class GraphV2View(V2NavMixin, TemplateView):
         low_s = pd.Series(dtype=float)
         high_s = pd.Series(dtype=float)
 
+        # Single shared read of the latest forecast's ForecastData rows (widest range any
+        # of raw-price/gen&dc/SHAP need), replacing what used to be three separate queries
+        # over the same (forecast=latest, date_time range) filter.
+        fd_latest_rows = []
+        if latest is not None:
+            fd_latest_rows = list(
+                ForecastData.objects.filter(
+                    forecast=latest,
+                    date_time__gte=prior_gb.tz_convert("UTC"),
+                    date_time__lte=end_gb.tz_convert("UTC"),
+                ).order_by("date_time").values(
+                    "date_time", "day_ahead", "demand", "solar", "emb_wind",
+                    "nuclear", "bm_wind", "dispatchable_capacity", "shap_top_features",
+                )
+            )
+
         if latest is not None:
             if raw:
-                fd_rows = list(
-                    ForecastData.objects.filter(
-                        forecast=latest,
-                        date_time__gte=actual_end.tz_convert("UTC"),
-                        date_time__lte=end_gb.tz_convert("UTC"),
-                    ).order_by("date_time")
-                )
+                actual_end_utc = actual_end.tz_convert("UTC")
+                fd_rows = [r for r in fd_latest_rows if r["date_time"] >= actual_end_utc]
                 if fd_rows:
                     primary_s = pd.Series(
-                        index=pd.to_datetime([r.date_time for r in fd_rows]).tz_convert("GB"),
-                        data=[r.day_ahead for r in fd_rows],
+                        index=pd.to_datetime([r["date_time"] for r in fd_rows]).tz_convert("GB"),
+                        data=[r["day_ahead"] for r in fd_rows],
                     )
             else:
                 ad_rows = list(
@@ -2246,13 +2257,7 @@ class GraphV2View(V2NavMixin, TemplateView):
 
         # Generation & demand subplot
         if (show_gen or show_dc) and latest is not None:
-            fp = list(
-                ForecastData.objects.filter(
-                    forecast=latest,
-                    date_time__gte=prior_gb.tz_convert("UTC"),
-                    date_time__lte=end_gb.tz_convert("UTC"),
-                ).order_by("date_time")
-            )
+            fp = fd_latest_rows
             h_rows = list(
                 History.objects.filter(
                     date_time__gte=prior_gb.tz_convert("UTC"),
@@ -2262,30 +2267,30 @@ class GraphV2View(V2NavMixin, TemplateView):
             if show_gen:
                 if fp:
                     add_gen(go.Scatter(
-                        x=[r.date_time for r in fp],
-                        y=[(r.demand + r.solar + r.emb_wind) / 1000 for r in fp],
+                        x=[r["date_time"] for r in fp],
+                        y=[(r["demand"] + r["solar"] + r["emb_wind"]) / 1000 for r in fp],
                         line={"color": "cyan", "width": 2}, name="Forecast demand",
                     ))
                     add_gen(go.Scatter(
-                        x=[r.date_time for r in fp], y=[r.nuclear / 1000 for r in fp],
+                        x=[r["date_time"] for r in fp], y=[r["nuclear"] / 1000 for r in fp],
                         fill="tozeroy", line={"color": "rgba(160,160,160,1)"},
                         fillcolor="rgba(180,180,180,0.8)", name="Nuclear",
                     ))
                     add_gen(go.Scatter(
-                        x=[r.date_time for r in fp],
-                        y=[(r.nuclear + r.bm_wind) / 1000 for r in fp],
+                        x=[r["date_time"] for r in fp],
+                        y=[(r["nuclear"] + r["bm_wind"]) / 1000 for r in fp],
                         fill="tonexty", line={"color": "rgba(63,127,63)"},
                         fillcolor="rgba(127,255,127,0.8)", name="Metered wind",
                     ))
                     add_gen(go.Scatter(
-                        x=[r.date_time for r in fp],
-                        y=[(r.nuclear + r.bm_wind + r.emb_wind) / 1000 for r in fp],
+                        x=[r["date_time"] for r in fp],
+                        y=[(r["nuclear"] + r["bm_wind"] + r["emb_wind"]) / 1000 for r in fp],
                         fill="tonexty", line={"color": "rgba(50,150,220)"},
                         fillcolor="rgba(100,200,255,0.7)", name="Embedded wind",
                     ))
                     add_gen(go.Scatter(
-                        x=[r.date_time for r in fp],
-                        y=[(r.nuclear + r.bm_wind + r.emb_wind + r.solar) / 1000 for r in fp],
+                        x=[r["date_time"] for r in fp],
+                        y=[(r["nuclear"] + r["bm_wind"] + r["emb_wind"] + r["solar"]) / 1000 for r in fp],
                         fill="tonexty", line={"color": "lightgray", "width": 2},
                         fillcolor="rgba(255,255,127,0.8)", name="Solar",
                     ))
@@ -2327,7 +2332,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 figure.update_yaxes(title_text="Power [GW]", fixedrange=True, row=_GEN_ROW, col=1)
 
             if show_dc and fp:
-                dc_rows = [(r.date_time, r.dispatchable_capacity) for r in fp if r.dispatchable_capacity is not None]
+                dc_rows = [(r["date_time"], r["dispatchable_capacity"]) for r in fp if r["dispatchable_capacity"] is not None]
                 if dc_rows:
                     xs, ys = zip(*dc_rows)
                     add_dc(go.Scatter(
@@ -2415,25 +2420,16 @@ class GraphV2View(V2NavMixin, TemplateView):
         _shap_m, _shap_a = regions.get(region, regions["X"])["factors"]
         shap_data = {}
         if latest is not None:
-            shap_rows = (
-                ForecastData.objects
-                .filter(
-                    forecast=latest,
-                    date_time__gte=prior_gb.tz_convert("UTC"),
-                    date_time__lte=end_gb.tz_convert("UTC"),
-                )
-                .exclude(shap_top_features__isnull=True)
-                .order_by("date_time")
-            )
+            shap_rows = [r for r in fd_latest_rows if r["shap_top_features"] is not None]
             for row in shap_rows:
-                ts_ms = int(pd.Timestamp(row.date_time).timestamp() * 1000)
+                ts_ms = int(pd.Timestamp(row["date_time"]).timestamp() * 1000)
                 shap_data[str(ts_ms)] = {
-                    "time": pd.Timestamp(row.date_time).tz_convert("GB").strftime("%d %b %H:%M"),
-                    "price": round(row.day_ahead * _shap_m + _shap_a, 1) if row.day_ahead is not None else None,
+                    "time": pd.Timestamp(row["date_time"]).tz_convert("GB").strftime("%d %b %H:%M"),
+                    "price": round(row["day_ahead"] * _shap_m + _shap_a, 1) if row["day_ahead"] is not None else None,
                     "contributors": [
                         {"label": _FEATURE_LABELS.get(item["feature"], item["feature"]),
                          "value": round(item["value"] * _shap_m, 2)}
-                        for item in (row.shap_top_features or [])
+                        for item in (row["shap_top_features"] or [])
                     ],
                 }
 
