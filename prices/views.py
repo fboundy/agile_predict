@@ -1681,6 +1681,34 @@ def ext_forecast_json(request, region):
     return JsonResponse({"traces": traces, "statuses": statuses})
 
 
+@require_GET
+def forecast_list_json(request):
+    """List the available forecast runs so URL/API callers can discover valid ``fc`` ids.
+
+    A forecast run is region-agnostic (one Forecasts row spans every region), so this
+    endpoint is not region-scoped. The returned ids are exactly what the ``/v2/`` GUI —
+    and this endpoint's callers — pass back as ``fc=<id>`` query parameters to pin the
+    chart to specific runs. Newest first; ``count`` (1-50, default 8) caps the number
+    returned.
+    """
+    try:
+        count = int(request.GET.get("count", 8))
+    except (TypeError, ValueError):
+        count = 8
+    count = min(max(count, 1), 50)
+
+    forecasts = [
+        {
+            "id": f.id,
+            "name": f.name,
+            "created_at": f.created_at.isoformat(),
+            "label": pd.Timestamp(f.created_at).tz_convert("GB").strftime("%d %b %H:%M"),
+        }
+        for f in Forecasts.objects.order_by("-created_at")[:count]
+    ]
+    return JsonResponse({"forecasts": forecasts}, json_dumps_params={"indent": 2})
+
+
 class GraphV2View(V2NavMixin, TemplateView):
     """Colour-coded bar chart UI — alternative to the accordion-sidebar GraphFormView."""
 
