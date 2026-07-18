@@ -47,6 +47,54 @@
       </div>
     </div>
 
+    {# ===== GUI URL parameters ===== #}
+    <div class="col-12">
+      <div class="card border-0 shadow-sm" style="background:#2a2d31">
+        <div class="card-body py-3 px-4">
+          <h6 class="mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">Chart URL parameters</h6>
+          <p style="font-size:.88rem" class="mb-2">
+            Every option on the chart page is driven by the URL, so a fully-configured view can be
+            bookmarked or refreshed on a timer. Append query parameters to
+            <code>https://agilepredict.com/v2/{REGION}/</code>:
+          </p>
+          <div class="rounded p-3 mb-3" style="background:#1a1d21;font-size:.82rem;font-family:monospace">
+            days    — days to plot, 1-14 (default 5)<br>
+            band    — p10/p90 uncertainty band, 1/0 (default 1)<br>
+            export  — Agile Outgoing export prices, 1/0 (default 0)<br>
+            gen     — generation &amp; demand panel, 1/0 (default 1)<br>
+            fg      — forecast generation on that panel, 1/0 (default 0)<br>
+            dc      — dispatchable capacity, 1/0 (default 0)<br>
+            af      — AgileForecast comparison overlay, 1/0 (default 0)<br>
+            x2r     — X2R comparison overlay, 1/0 (default 0)<br>
+            fc      — forecast run id to plot; repeat to overlay several
+          </div>
+          <p style="font-size:.88rem" class="mb-1">Examples:</p>
+          <ul style="font-size:.85rem" class="mb-3">
+            <li class="mb-1">
+              Region G, 7 days, export prices, no generation panel:<br>
+              <code>https://agilepredict.com/v2/G/?days=7&amp;export=1&amp;gen=0</code>
+            </li>
+            <li>
+              Overlay two specific forecast runs:<br>
+              <code>https://agilepredict.com/v2/X/?fc=482&amp;fc=479</code>
+            </li>
+          </ul>
+          <p style="font-size:.88rem" class="mb-2">
+            Discover valid <code>fc</code> ids from the forecast-runs endpoint (newest first;
+            <code>count</code> caps the number, 1-50, default 8):
+          </p>
+          <div class="rounded p-3" style="background:#1a1d21;font-size:.82rem;font-family:monospace;white-space:pre-wrap">{% verbatim %}GET https://agilepredict.com/v2/forecasts/?count=5
+
+{
+  "forecasts": [
+    { "id": 482, "name": "...", "created_at": "...", "label": "18 Jul 06:00" },
+    ...
+  ]
+}{% endverbatim %}</div>
+        </div>
+      </div>
+    </div>
+
     {# ===== Home Assistant sensor ===== #}
     <div class="col-lg-6">
       <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">

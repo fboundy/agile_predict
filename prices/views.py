@@ -1577,6 +1577,138 @@ def _ext_db_fallback(source, region, start, end):
     }
 
 
+_EXT_COLORS = {"AgileForecast": "#D55E00", "X2R": "#009E73"}
+_EXT_SOURCES = {
+    "AgileForecast": (fetch_agileforecast, ExternalForecast.SOURCE_AGILEFORECAST),
+    "X2R": (fetch_x2r, ExternalForecast.SOURCE_X2R),
+}
+
+
+def _fetch_external_forecasts(ext_labels, region, show_export, prior_gb, end_gb):
+    """Fetch AgileForecast/X2R comparison series (live, with stored-data fallback).
+
+    Used by ext_forecast_json — this makes the live external-API calls (5-15s
+    timeouts), so it must never run on GraphV2View's synchronous render path;
+    the browser fetches it separately after the main chart has already loaded.
+    Returns (traces, statuses) where traces are Plotly-ready dicts and statuses
+    are health/detail entries for the "Data sources" card.
+    """
+    traces = []
+    statuses = []
+    for ext_label in ext_labels:
+        ext_fetcher, ext_source_const = _EXT_SOURCES[ext_label]
+        ext_data = None
+        ext_health = "ok"
+        ext_detail = "Live"
+
+        try:
+            ext_data = ext_fetcher(region)
+        except Exception as exc:
+            logger.warning("ext_forecast_json: %s live call failed: %s", ext_label, exc)
+            fallback = _ext_db_fallback(ext_source_const, region, prior_gb, end_gb)
+            if fallback is not None:
+                ext_data = fallback
+                ext_health = "warn" if fallback["is_fresh"] else "fail"
+                ext_detail = "Stored data (live unavailable)" if fallback["is_fresh"] else "Stale data (download failed)"
+            else:
+                statuses.append({"name": ext_label, "health": "fail", "detail": "No data available"})
+                continue
+
+        ext_rows = ext_data.get("rows", [])
+        if not ext_rows:
+            statuses.append({"name": ext_label, "health": "fail", "detail": "No data"})
+            continue
+
+        ext_s = pd.Series(
+            index=pd.to_datetime([r["date_time"] for r in ext_rows]),
+            data=[float(r["agile_pred"]) for r in ext_rows],
+        ).sort_index()
+        try:
+            ext_s.index = ext_s.index.tz_convert("GB")
+        except TypeError:
+            ext_s.index = ext_s.index.tz_localize("GB")
+        ext_s = ext_s[(ext_s.index >= prior_gb) & (ext_s.index <= end_gb)]
+        if show_export:
+            ext_s = import_agile_to_export_agile(ext_s, region=region)
+        if ext_s.empty:
+            statuses.append({"name": ext_label, "health": "warn", "detail": "No data in range"})
+            continue
+
+        created_at = pd.Timestamp(ext_data["source_created_at"]).tz_convert("GB")
+        if ext_health == "ok":
+            ext_detail = f"Live ({created_at.strftime('%d %b %H:%M')})"
+        statuses.append({"name": ext_label, "health": ext_health, "detail": ext_detail})
+
+        traces.append({
+            "name": f"{ext_label} ({created_at.strftime('%d %b %H:%M')})",
+            "color": _EXT_COLORS[ext_label],
+            "x": [int(ts.timestamp() * 1000) for ts in ext_s.index],
+            "y": [round(float(v), 4) for v in ext_s.values],
+        })
+
+    return traces, statuses
+
+
+@require_GET
+def ext_forecast_json(request, region):
+    """AJAX endpoint for the AgileForecast/X2R comparison overlay (af=1/x2r=1).
+
+    Split out of GraphV2View so the main page render never blocks on these
+    external HTTP calls (5-15s timeouts) — the browser fetches this
+    separately once the base chart has already rendered.
+    """
+    region = region.upper()
+    if region not in regions:
+        region = "X"
+    raw = _is_raw_day_ahead_region(region)
+
+    days = min(max(int(request.GET.get("days", 5)), 1), 14)
+    show_export = request.GET.get("export", "0") == "1" and not raw
+    show_af = _truthy(request.GET.get("af", "")) and not raw
+    show_x2r = _truthy(request.GET.get("x2r", "")) and not raw
+
+    now_gb = pd.Timestamp.now(tz="GB")
+    prior_gb = now_gb - pd.Timedelta(hours=12)
+    end_gb = now_gb + pd.Timedelta(days=days)
+
+    ext_labels = []
+    if show_af:
+        ext_labels.append("AgileForecast")
+    if show_x2r:
+        ext_labels.append("X2R")
+
+    traces, statuses = _fetch_external_forecasts(ext_labels, region, show_export, prior_gb, end_gb)
+    return JsonResponse({"traces": traces, "statuses": statuses})
+
+
+@require_GET
+def forecast_list_json(request):
+    """List the available forecast runs so URL/API callers can discover valid ``fc`` ids.
+
+    A forecast run is region-agnostic (one Forecasts row spans every region), so this
+    endpoint is not region-scoped. The returned ids are exactly what the ``/v2/`` GUI —
+    and this endpoint's callers — pass back as ``fc=<id>`` query parameters to pin the
+    chart to specific runs. Newest first; ``count`` (1-50, default 8) caps the number
+    returned.
+    """
+    try:
+        count = int(request.GET.get("count", 8))
+    except (TypeError, ValueError):
+        count = 8
+    count = min(max(count, 1), 50)
+
+    forecasts = [
+        {
+            "id": f.id,
+            "name": f.name,
+            "created_at": f.created_at.isoformat(),
+            "label": pd.Timestamp(f.created_at).tz_convert("GB").strftime("%d %b %H:%M"),
+        }
+        for f in Forecasts.objects.order_by("-created_at")[:count]
+    ]
+    return JsonResponse({"forecasts": forecasts}, json_dumps_params={"indent": 2})
+
+
 class GraphV2View(V2NavMixin, TemplateView):
     """Colour-coded bar chart UI — alternative to the accordion-sidebar GraphFormView."""
 
@@ -1650,19 +1782,30 @@ class GraphV2View(V2NavMixin, TemplateView):
         low_s = pd.Series(dtype=float)
         high_s = pd.Series(dtype=float)
 
+        # Single shared read of the latest forecast's ForecastData rows (widest range any
+        # of raw-price/gen&dc/SHAP need), replacing what used to be three separate queries
+        # over the same (forecast=latest, date_time range) filter.
+        fd_latest_rows = []
+        if latest is not None:
+            fd_latest_rows = list(
+                ForecastData.objects.filter(
+                    forecast=latest,
+                    date_time__gte=prior_gb.tz_convert("UTC"),
+                    date_time__lte=end_gb.tz_convert("UTC"),
+                ).order_by("date_time").values(
+                    "date_time", "day_ahead", "demand", "solar", "emb_wind",
+                    "nuclear", "bm_wind", "dispatchable_capacity", "shap_top_features",
+                )
+            )
+
         if latest is not None:
             if raw:
-                fd_rows = list(
-                    ForecastData.objects.filter(
-                        forecast=latest,
-                        date_time__gte=actual_end.tz_convert("UTC"),
-                        date_time__lte=end_gb.tz_convert("UTC"),
-                    ).order_by("date_time")
-                )
+                actual_end_utc = actual_end.tz_convert("UTC")
+                fd_rows = [r for r in fd_latest_rows if r["date_time"] >= actual_end_utc]
                 if fd_rows:
                     primary_s = pd.Series(
-                        index=pd.to_datetime([r.date_time for r in fd_rows]).tz_convert("GB"),
-                        data=[r.day_ahead for r in fd_rows],
+                        index=pd.to_datetime([r["date_time"] for r in fd_rows]).tz_convert("GB"),
+                        data=[r["day_ahead"] for r in fd_rows],
                     )
             else:
                 ad_rows = list(
@@ -2165,72 +2308,10 @@ class GraphV2View(V2NavMixin, TemplateView):
                 hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} {unit}<extra>{older_label}</extra>",
             ))
 
-        # External forecasts (AgileForecast / X2R)
-        _EXT_COLORS = {"AgileForecast": "#D55E00", "X2R": "#009E73"}
-        _EXT_SOURCES = {
-            "AgileForecast": (fetch_agileforecast, ExternalForecast.SOURCE_AGILEFORECAST),
-            "X2R": (fetch_x2r, ExternalForecast.SOURCE_X2R),
-        }
-        _ext_labels = []
-        if show_af:
-            _ext_labels.append("AgileForecast")
-        if show_x2r:
-            _ext_labels.append("X2R")
-
+        # External forecasts (AgileForecast / X2R): fetched client-side via
+        # ext_forecast_json after the main chart renders, not here — these make
+        # live HTTP calls with 5-15s timeouts and must never block this view.
         ext_statuses = []
-        for ext_label in _ext_labels:
-            ext_fetcher, ext_source_const = _EXT_SOURCES[ext_label]
-            ext_data = None
-            ext_health = "ok"
-            ext_detail = "Live"
-
-            try:
-                ext_data = ext_fetcher(region)
-            except Exception as exc:
-                logger.warning("GraphV2: %s live call failed: %s", ext_label, exc)
-                fallback = _ext_db_fallback(ext_source_const, region, prior_gb, end_gb)
-                if fallback is not None:
-                    ext_data = fallback
-                    ext_health = "warn" if fallback["is_fresh"] else "fail"
-                    ext_detail = "Stored data (live unavailable)" if fallback["is_fresh"] else "Stale data (download failed)"
-                else:
-                    ext_statuses.append({"name": ext_label, "health": "fail", "detail": "No data available"})
-                    continue
-
-            ext_rows = ext_data.get("rows", [])
-            if not ext_rows:
-                ext_statuses.append({"name": ext_label, "health": "fail", "detail": "No data"})
-                continue
-
-            ext_s = pd.Series(
-                index=pd.to_datetime([r["date_time"] for r in ext_rows]),
-                data=[float(r["agile_pred"]) for r in ext_rows],
-            ).sort_index()
-            try:
-                ext_s.index = ext_s.index.tz_convert("GB")
-            except TypeError:
-                ext_s.index = ext_s.index.tz_localize("GB")
-            ext_s = ext_s[(ext_s.index >= prior_gb) & (ext_s.index <= end_gb)]
-            if show_export:
-                ext_s = import_agile_to_export_agile(ext_s, region=region)
-            if ext_s.empty:
-                ext_statuses.append({"name": ext_label, "health": "warn", "detail": "No data in range"})
-                continue
-
-            created_at = pd.Timestamp(ext_data["source_created_at"]).tz_convert("GB")
-            if ext_health == "ok":
-                ext_detail = f"Live ({created_at.strftime('%d %b %H:%M')})"
-            ext_statuses.append({"name": ext_label, "health": ext_health, "detail": ext_detail})
-
-            ext_color = _EXT_COLORS[ext_label]
-            add_price(go.Scatter(
-                x=ext_s.index,
-                y=ext_s.values,
-                mode="lines",
-                line=dict(shape="hv", color=ext_color, width=1.5),
-                name=f"{ext_label} ({created_at.strftime('%d %b %H:%M')})",
-                hovertemplate=f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>{ext_label}</extra>",
-            ))
 
         # Now vline — appears across all subplots
         figure.add_vline(
@@ -2246,13 +2327,7 @@ class GraphV2View(V2NavMixin, TemplateView):
 
         # Generation & demand subplot
         if (show_gen or show_dc) and latest is not None:
-            fp = list(
-                ForecastData.objects.filter(
-                    forecast=latest,
-                    date_time__gte=prior_gb.tz_convert("UTC"),
-                    date_time__lte=end_gb.tz_convert("UTC"),
-                ).order_by("date_time")
-            )
+            fp = fd_latest_rows
             h_rows = list(
                 History.objects.filter(
                     date_time__gte=prior_gb.tz_convert("UTC"),
@@ -2262,30 +2337,30 @@ class GraphV2View(V2NavMixin, TemplateView):
             if show_gen:
                 if fp:
                     add_gen(go.Scatter(
-                        x=[r.date_time for r in fp],
-                        y=[(r.demand + r.solar + r.emb_wind) / 1000 for r in fp],
+                        x=[r["date_time"] for r in fp],
+                        y=[(r["demand"] + r["solar"] + r["emb_wind"]) / 1000 for r in fp],
                         line={"color": "cyan", "width": 2}, name="Forecast demand",
                     ))
                     add_gen(go.Scatter(
-                        x=[r.date_time for r in fp], y=[r.nuclear / 1000 for r in fp],
+                        x=[r["date_time"] for r in fp], y=[r["nuclear"] / 1000 for r in fp],
                         fill="tozeroy", line={"color": "rgba(160,160,160,1)"},
                         fillcolor="rgba(180,180,180,0.8)", name="Nuclear",
                     ))
                     add_gen(go.Scatter(
-                        x=[r.date_time for r in fp],
-                        y=[(r.nuclear + r.bm_wind) / 1000 for r in fp],
+                        x=[r["date_time"] for r in fp],
+                        y=[(r["nuclear"] + r["bm_wind"]) / 1000 for r in fp],
                         fill="tonexty", line={"color": "rgba(63,127,63)"},
                         fillcolor="rgba(127,255,127,0.8)", name="Metered wind",
                     ))
                     add_gen(go.Scatter(
-                        x=[r.date_time for r in fp],
-                        y=[(r.nuclear + r.bm_wind + r.emb_wind) / 1000 for r in fp],
+                        x=[r["date_time"] for r in fp],
+                        y=[(r["nuclear"] + r["bm_wind"] + r["emb_wind"]) / 1000 for r in fp],
                         fill="tonexty", line={"color": "rgba(50,150,220)"},
                         fillcolor="rgba(100,200,255,0.7)", name="Embedded wind",
                     ))
                     add_gen(go.Scatter(
-                        x=[r.date_time for r in fp],
-                        y=[(r.nuclear + r.bm_wind + r.emb_wind + r.solar) / 1000 for r in fp],
+                        x=[r["date_time"] for r in fp],
+                        y=[(r["nuclear"] + r["bm_wind"] + r["emb_wind"] + r["solar"]) / 1000 for r in fp],
                         fill="tonexty", line={"color": "lightgray", "width": 2},
                         fillcolor="rgba(255,255,127,0.8)", name="Solar",
                     ))
@@ -2327,7 +2402,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 figure.update_yaxes(title_text="Power [GW]", fixedrange=True, row=_GEN_ROW, col=1)
 
             if show_dc and fp:
-                dc_rows = [(r.date_time, r.dispatchable_capacity) for r in fp if r.dispatchable_capacity is not None]
+                dc_rows = [(r["date_time"], r["dispatchable_capacity"]) for r in fp if r["dispatchable_capacity"] is not None]
                 if dc_rows:
                     xs, ys = zip(*dc_rows)
                     add_dc(go.Scatter(
@@ -2415,25 +2490,16 @@ class GraphV2View(V2NavMixin, TemplateView):
         _shap_m, _shap_a = regions.get(region, regions["X"])["factors"]
         shap_data = {}
         if latest is not None:
-            shap_rows = (
-                ForecastData.objects
-                .filter(
-                    forecast=latest,
-                    date_time__gte=prior_gb.tz_convert("UTC"),
-                    date_time__lte=end_gb.tz_convert("UTC"),
-                )
-                .exclude(shap_top_features__isnull=True)
-                .order_by("date_time")
-            )
+            shap_rows = [r for r in fd_latest_rows if r["shap_top_features"] is not None]
             for row in shap_rows:
-                ts_ms = int(pd.Timestamp(row.date_time).timestamp() * 1000)
+                ts_ms = int(pd.Timestamp(row["date_time"]).timestamp() * 1000)
                 shap_data[str(ts_ms)] = {
-                    "time": pd.Timestamp(row.date_time).tz_convert("GB").strftime("%d %b %H:%M"),
-                    "price": round(row.day_ahead * _shap_m + _shap_a, 1) if row.day_ahead is not None else None,
+                    "time": pd.Timestamp(row["date_time"]).tz_convert("GB").strftime("%d %b %H:%M"),
+                    "price": round(row["day_ahead"] * _shap_m + _shap_a, 1) if row["day_ahead"] is not None else None,
                     "contributors": [
                         {"label": _FEATURE_LABELS.get(item["feature"], item["feature"]),
                          "value": round(item["value"] * _shap_m, 2)}
-                        for item in (row.shap_top_features or [])
+                        for item in (row["shap_top_features"] or [])
                     ],
                 }
 
