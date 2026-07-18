@@ -356,7 +356,7 @@
         Top SHAP feature contributions (ensemble average, {{ shap_unit }}) driving the predicted price for this slot.
         Red bars push the price up, blue bars pull it down.
       </p>
-      <div id="shap-explain-chart"></div>
+      <div id="shap-explain-chart" style="max-width:100%;overflow-x:hidden"></div>
     </div>
   </div>
   </div>
@@ -387,6 +387,16 @@
       var values = sorted.map(function (c) { return c.value; });
       var colors = values.map(function (v) { return v >= 0 ? '#dc3545' : '#4a9eff'; });
 
+      // Show the panel *before* rendering: Plotly measures the container width at
+      // draw time, and a chart drawn into a display:none element falls back to its
+      // default ~700px width — which overflows narrow (phone) viewports.
+      panel.classList.remove('d-none');
+
+      // Feature labels need room, but a fixed 210px left margin is wider than a
+      // phone screen; cap it to a fraction of the actual container width.
+      var chartW = chartEl.clientWidth || panel.clientWidth || window.innerWidth;
+      var leftMargin = Math.max(90, Math.min(210, Math.round(chartW * 0.45)));
+
       Plotly.react(chartEl, [{
         type: 'bar',
         orientation: 'h',
@@ -396,16 +406,15 @@
         hovertemplate: '%{y}<br>%{x:.2f} ' + SHAP_UNIT + '<extra></extra>',
       }], {
         template: 'plotly_dark',
+        autosize: true,
         plot_bgcolor: '#212529',
         paper_bgcolor: '#2a2d31',
-        margin: { l: 210, r: 20, t: 10, b: 40 },
+        margin: { l: leftMargin, r: 20, t: 10, b: 40 },
         font: { size: 12, color: '#dee2e6' },
         height: Math.max(150, 38 * labels.length + 50),
         xaxis: { title: 'SHAP contribution (' + SHAP_UNIT + ')', zeroline: true, zerolinecolor: '#888', zerolinewidth: 2 },
-        yaxis: { title: '' },
+        yaxis: { title: '', automargin: true },
       }, { displayModeBar: false, responsive: true });
-
-      panel.classList.remove('d-none');
     }
 
     plotDiv.on('plotly_click', function (data) {
