@@ -1736,6 +1736,10 @@ class GraphV2View(V2NavMixin, TemplateView):
         show_dc = self.request.GET.get("dc", "0") == "1"
         show_af = _truthy(self.request.GET.get("af", "")) and not raw
         show_x2r = _truthy(self.request.GET.get("x2r", "")) and not raw
+        # Draw forecasts for their full duration (back over the confirmed-price
+        # region) instead of trimming them at the last confirmed slot — mirrors
+        # v1's "Allow Forecast Overlap".
+        show_overlap = self.request.GET.get("overlap", "0") == "1"
         color_fn = _export_price_color if show_export else _price_color
 
         fc_param = self.request.GET.getlist("fc")
@@ -1767,6 +1771,12 @@ class GraphV2View(V2NavMixin, TemplateView):
             actual = pd.Series(dtype=float)
 
         actual_end = actual.index[-1] if not actual.empty else now_gb
+
+        # Lower bound for forecast series: normally the last confirmed slot (so
+        # forecasts don't overdraw confirmed prices); with overlap on, extend back
+        # to the chart's left edge so each forecast shows for its full duration.
+        fc_lower_gb = prior_gb if show_overlap else actual_end
+        fc_lower_utc = fc_lower_gb.tz_convert("UTC")
 
         # --- Forecasts ---
         recent_forecasts = list(Forecasts.objects.order_by("-created_at")[:8])
@@ -1800,8 +1810,7 @@ class GraphV2View(V2NavMixin, TemplateView):
 
         if latest is not None:
             if raw:
-                actual_end_utc = actual_end.tz_convert("UTC")
-                fd_rows = [r for r in fd_latest_rows if r["date_time"] >= actual_end_utc]
+                fd_rows = [r for r in fd_latest_rows if r["date_time"] >= fc_lower_utc]
                 if fd_rows:
                     primary_s = pd.Series(
                         index=pd.to_datetime([r["date_time"] for r in fd_rows]).tz_convert("GB"),
@@ -1812,7 +1821,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                     AgileData.objects.filter(
                         forecast=latest,
                         region=region,
-                        date_time__gte=actual_end.tz_convert("UTC"),
+                        date_time__gte=fc_lower_utc,
                         date_time__lte=end_gb.tz_convert("UTC"),
                     ).order_by("date_time")
                 )
@@ -2273,7 +2282,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 od_rows = list(
                     ForecastData.objects.filter(
                         forecast=fc_obj,
-                        date_time__gte=actual_end.tz_convert("UTC"),
+                        date_time__gte=fc_lower_utc,
                         date_time__lte=end_gb.tz_convert("UTC"),
                     ).order_by("date_time")
                 )
@@ -2288,7 +2297,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                     AgileData.objects.filter(
                         forecast=fc_obj,
                         region=region,
-                        date_time__gte=actual_end.tz_convert("UTC"),
+                        date_time__gte=fc_lower_utc,
                         date_time__lte=end_gb.tz_convert("UTC"),
                     ).order_by("date_time")
                 )
@@ -2527,6 +2536,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 "show_dc": show_dc,
                 "show_af": show_af,
                 "show_x2r": show_x2r,
+                "show_overlap": show_overlap,
                 "summary": summary,
                 "api_status": api_status,
                 "cheap_windows": cheap_windows,
