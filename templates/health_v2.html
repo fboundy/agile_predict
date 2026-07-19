@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-lg py-3">
+
+  <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+    <div>
+      <h5 class="mb-0">Production health</h5>
+      <div class="text-body-secondary" style="font-size:.8rem">Uptime of <code>prices.fly.dev</code>, polled every minute</div>
+    </div>
+  </div>
+
+  {% if not monitor_present %}
+  <div class="rounded p-3" style="background:#2a2d31">
+    <span class="badge bg-secondary">No data</span>
+    <span class="ms-2" style="font-size:.9rem">No <code>uptime_monitor.log</code> on this server — the per-minute monitor runs on the dev host only, not on production.</span>
+  </div>
+  {% else %}
+
+  {% if monitor_stale %}
+  <div class="rounded p-3 mb-3" style="background:#4a1a22;color:#f8d7da">
+    <strong>⚠ Monitor is stale.</strong> The last check was {{ monitor_last }} ({{ monitor_age_min }} min ago). The
+    <code>uptime_monitor.sh</code> cron job may have stopped — figures below are only current up to then.
+  </div>
+  {% endif %}
+
+  {# ===== Summary cards ===== #}
+  <div class="row g-2 mb-3">
+    <div class="col-6 col-lg-3">
+      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+        <div class="card-body py-2 px-3">
+          <div class="text-body-secondary mb-1" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Current status</div>
+          <div class="d-flex align-items-baseline gap-2 flex-wrap">
+            <span class="fs-4 fw-bold badge {% if current_up %}bg-success{% else %}bg-danger{% endif %}">{% if current_up %}UP{% else %}DOWN{% endif %}</span>
+            <span class="text-body-secondary" style="font-size:.8rem">HTTP {{ current_code }}</span>
+          </div>
+          <div style="font-size:.8rem" class="text-body-secondary mt-1">since {{ status_since }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+        <div class="card-body py-2 px-3">
+          <div class="text-body-secondary mb-1" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Monitor</div>
+          <div class="d-flex align-items-baseline gap-2 flex-wrap">
+            <span class="fs-5 fw-bold badge {% if monitor_stale %}bg-warning text-dark{% else %}bg-success{% endif %}">{% if monitor_stale %}STALE{% else %}LIVE{% endif %}</span>
+          </div>
+          <div style="font-size:.8rem" class="text-body-secondary mt-1">last {{ monitor_last }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+        <div class="card-body py-2 px-3">
+          <div class="text-body-secondary mb-1" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Latency (avg / p95)</div>
+          <div class="d-flex align-items-baseline gap-1 flex-wrap">
+            <span class="fs-4 fw-bold">{{ latency_avg_ms|default:"—" }}</span>
+            <span class="text-body-secondary" style="font-size:.85rem">/ {{ latency_p95_ms|default:"—" }} ms</span>
+          </div>
+          <div style="font-size:.8rem" class="text-body-secondary mt-1">over last {{ days }}d</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+        <div class="card-body py-2 px-3">
+          <div class="text-body-secondary mb-1" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Uptime (7d)</div>
+          {% for w in windows %}{% if w.label == "7 days" %}
+          <div class="fs-4 fw-bold">{{ w.uptime }}%</div>
+          <div style="font-size:.8rem" class="text-body-secondary mt-1">{{ w.episodes }} outage{{ w.episodes|pluralize }}</div>
+          {% endif %}{% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ===== Chart window selector ===== #}
+  <div class="rounded p-2 mb-2 d-flex align-items-center gap-2" style="background:#2a2d31">
+    <span class="text-body-secondary" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em">Chart window</span>
+    <div class="btn-group btn-group-sm" role="group">
+      {% for d in day_options %}
+      <a href="?days={{ d }}" class="btn {% if days == d %}btn-primary{% else %}btn-outline-secondary{% endif %}">{{ d }}d</a>
+      {% endfor %}
+    </div>
+  </div>
+
+  {# ===== Latency + outage chart ===== #}
+  <div class="rounded mb-3" style="background:#343a40">
+    {{ graph|safe }}
+  </div>
+
+  <div class="row g-3">
+    {# ===== Uptime by window ===== #}
+    <div class="col-lg-5">
+      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+        <div class="card-body py-2 px-3">
+          <h6 class="text-body-secondary mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Uptime by window</h6>
+          <table class="table table-sm table-dark table-borderless mb-0" style="font-size:.85rem;background:transparent">
+            <thead><tr class="text-body-secondary">
+              <th>Window</th><th class="text-end">Uptime</th><th class="text-end">Checks</th><th class="text-end">Failed</th><th class="text-end">Outages</th>
+            </tr></thead>
+            <tbody>
+              {% for w in windows %}
+              <tr>
+                <td>{{ w.label }}</td>
+                <td class="text-end fw-semibold">{{ w.uptime }}%</td>
+                <td class="text-end text-body-secondary">{{ w.total }}</td>
+                <td class="text-end">{{ w.failed }}</td>
+                <td class="text-end">{{ w.episodes }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    {# ===== Recent outages ===== #}
+    <div class="col-lg-7">
+      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+        <div class="card-body py-2 px-3">
+          <h6 class="text-body-secondary mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Recent outages</h6>
+          {% if episodes %}
+          <table class="table table-sm table-dark table-borderless mb-0" style="font-size:.85rem;background:transparent">
+            <thead><tr class="text-body-secondary">
+              <th>Start</th><th>End</th><th class="text-end">Duration</th><th class="text-end">Last code</th>
+            </tr></thead>
+            <tbody>
+              {% for e in episodes %}
+              <tr>
+                <td>{{ e.start }}</td>
+                <td>{% if e.ongoing %}<span class="badge bg-danger">ongoing</span>{% else %}{{ e.end }}{% endif %}</td>
+                <td class="text-end">{{ e.duration }}</td>
+                <td class="text-end"><code>{{ e.code }}</code></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <div class="text-body-secondary" style="font-size:.9rem">No outages recorded. 🎉</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% endif %}
+</div>
+{% endblock content %}
