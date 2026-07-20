@@ -145,5 +145,44 @@
   </div>
 
   {% endif %}
+
+  {# ===== Rate limiting / offenders ===== #}
+  {% if ratelimit %}
+  <div class="card border-0 shadow-sm mt-3" style="background:#2a2d31">
+    <div class="card-body py-2 px-3">
+      <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+        <h6 class="text-body-secondary mb-0" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Rate limiting</h6>
+        <div class="d-flex gap-2 align-items-center" style="font-size:.78rem">
+          <span class="badge {% if ratelimit.enabled %}bg-success{% else %}bg-secondary{% endif %}">{% if ratelimit.enabled %}ON{% else %}OFF{% endif %}</span>
+          {% if ratelimit.enabled %}
+          <span class="badge {% if ratelimit.enforce %}bg-info{% else %}bg-warning text-dark{% endif %}">{% if ratelimit.enforce %}enforcing{% else %}log-only{% endif %}</span>
+          <span class="text-body-secondary">{{ ratelimit.per_min }}/min per IP · block {{ ratelimit.block_seconds }}s · cache {{ response_cache_ttl }}s</span>
+          {% endif %}
+        </div>
+      </div>
+      {% if offenders %}
+      <table class="table table-sm table-dark table-borderless mb-0" style="font-size:.85rem;background:transparent">
+        <thead><tr class="text-body-secondary">
+          <th>IP</th><th class="text-end">Events</th><th class="text-end">Blocks</th><th>Last seen</th><th>Last path</th>
+        </tr></thead>
+        <tbody>
+          {% for o in offenders %}
+          <tr>
+            <td><code>{{ o.ip }}</code></td>
+            <td class="text-end">{{ o.events }}</td>
+            <td class="text-end">{% if o.blocks %}<span class="badge bg-danger">{{ o.blocks }}</span>{% else %}0{% endif %}</td>
+            <td class="text-body-secondary">{{ o.last }}</td>
+            <td class="text-body-secondary text-truncate" style="max-width:260px">{{ o.path }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="text-body-secondary" style="font-size:.9rem">No rate-limit offenders recorded.</div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
 </div>
 {% endblock content %}

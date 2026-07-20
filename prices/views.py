@@ -1795,6 +1795,42 @@ def _episode_list(df, limit=15):
     return out
 
 
+def _rl_field(line, key):
+    """Pull `key=value` out of a rate_limit.log line (value ends at whitespace)."""
+    token = f"{key}="
+    idx = line.find(token)
+    if idx == -1:
+        return ""
+    return line[idx + len(token):].split()[0]
+
+
+def _load_rate_limit_offenders(limit=15):
+    """Aggregate recent RateLimitMiddleware events (logs/rate_limit.log) by IP."""
+    path = Path(settings.BASE_DIR) / "logs" / "rate_limit.log"
+    if not path.exists():
+        return []
+    try:
+        with path.open() as fh:
+            lines = fh.readlines()[-5000:]
+    except OSError:
+        return []
+
+    agg = {}
+    for line in lines:
+        if "prices.ratelimit" not in line:
+            continue
+        ip = _rl_field(line, "ip")
+        if not ip:
+            continue
+        rec = agg.setdefault(ip, {"ip": ip, "events": 0, "blocks": 0, "last": "", "path": ""})
+        rec["events"] += 1
+        if "BLOCK ip=" in line:
+            rec["blocks"] += 1
+        rec["last"] = " ".join(line.split()[:2])[:16]
+        rec["path"] = _rl_field(line, "path")
+    return sorted(agg.values(), key=lambda r: (r["blocks"], r["events"]), reverse=True)[:limit]
+
+
 class ProdHealthView(V2NavMixin, TemplateView):
     """Ops dashboard tracking PRODUCTION (prices.fly.dev) health from the local
     uptime_monitor.log. Intended for the dev server, where bin/uptime_monitor.sh
@@ -1817,6 +1853,15 @@ class ProdHealthView(V2NavMixin, TemplateView):
         days = min(max(days, 1), 90)
         context["days"] = days
         context["day_options"] = self._DAY_OPTIONS
+
+        context["ratelimit"] = {
+            "enabled": getattr(settings, "RATELIMIT_ENABLED", True),
+            "enforce": getattr(settings, "RATELIMIT_ENFORCE", True),
+            "per_min": getattr(settings, "RATELIMIT_PER_MIN", 60),
+            "block_seconds": getattr(settings, "RATELIMIT_BLOCK_SECONDS", 600),
+        }
+        context["offenders"] = _load_rate_limit_offenders()
+        context["response_cache_ttl"] = getattr(settings, "RESPONSE_CACHE_TTL", 180)
 
         df = _load_uptime_log()
         context["monitor_present"] = not df.empty

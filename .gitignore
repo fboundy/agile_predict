@@ -37,3 +37,6 @@ catboost_info/
 # OS artefacts
 .DS_Store
 Thumbs.db
+
+# Local Django file-based cache
+.django_cache/
