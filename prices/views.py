@@ -1529,6 +1529,9 @@ class V2NavMixin:
                 "stats_link": "/v2/stats/",
                 "api_link": "/v2/api_how_to/",
                 "about_link": "/v2/about/",
+                # Only surface the prod-health page where the monitor log exists
+                # (the dev host) — keeps it off public production even after merges.
+                "health_link": "/v2/health/" if (Path(settings.BASE_DIR) / "logs" / "uptime_monitor.log").exists() else "",
                 "home_link": "/v2/X/",
                 "is_v2": True,
                 "classic_url": "/X/",
@@ -1707,6 +1710,256 @@ def forecast_list_json(request):
         for f in Forecasts.objects.order_by("-created_at")[:count]
     ]
     return JsonResponse({"forecasts": forecasts}, json_dumps_params={"indent": 2})
+
+
+def _load_uptime_log():
+    """Parse logs/uptime_monitor.log into a sorted DataFrame [ts, code, latency, ok].
+
+    Each line is written by bin/uptime_monitor.sh as 'ISO8601Z  http_code  time_total'.
+    Returns an empty frame when the log is absent (e.g. on prod, where that cron
+    monitor does not run) so callers can render a graceful 'no data' state.
+    """
+    path = Path(settings.BASE_DIR) / "logs" / "uptime_monitor.log"
+    cols = ["ts", "code", "latency", "ok"]
+    if not path.exists():
+        return pd.DataFrame(columns=cols)
+
+    records = []
+    with path.open() as fh:
+        for line in fh:
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            latency = 0.0
+            if len(parts) > 2:
+                try:
+                    latency = float(parts[2])
+                except ValueError:
+                    latency = 0.0
+            records.append((parts[0], parts[1], latency))
+
+    if not records:
+        return pd.DataFrame(columns=cols)
+
+    df = pd.DataFrame(records, columns=["ts", "code", "latency"])
+    df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
+    df = df.dropna(subset=["ts"]).sort_values("ts").reset_index(drop=True)
+    df["ok"] = df["code"].str.match(r"^[23]").fillna(False).astype(bool)
+    return df
+
+
+def _count_episodes(ok_values):
+    """Number of distinct outage episodes (runs of consecutive failed checks)."""
+    episodes = 0
+    in_episode = False
+    for ok in ok_values:
+        if not ok and not in_episode:
+            in_episode = True
+            episodes += 1
+        elif ok and in_episode:
+            in_episode = False
+    return episodes
+
+
+def _episode_list(df, limit=15):
+    """Most-recent outage episodes as display dicts (start, end/ongoing, duration, code)."""
+    episodes = []
+    in_episode = False
+    start = None
+    last_code = None
+    prev_ts = None
+    for ts, ok, code in zip(df["ts"], df["ok"], df["code"]):
+        if not ok:
+            if not in_episode:
+                in_episode = True
+                start = ts
+            last_code = code
+        elif in_episode:
+            in_episode = False
+            episodes.append({"start": start, "end": prev_ts, "code": last_code})
+        prev_ts = ts
+    if in_episode:
+        episodes.append({"start": start, "end": prev_ts, "code": last_code, "ongoing": True})
+
+    out = []
+    for e in reversed(episodes[-limit:]):
+        # each check is one minute; a single-check episode is ~1 min
+        dur_min = int(round((e["end"] - e["start"]).total_seconds() / 60)) + 1
+        out.append({
+            "start": e["start"].tz_convert("GB").strftime("%d %b %H:%M"),
+            "end": "ongoing" if e.get("ongoing") else e["end"].tz_convert("GB").strftime("%H:%M"),
+            "duration": f"{dur_min} min",
+            "code": e["code"],
+            "ongoing": e.get("ongoing", False),
+        })
+    return out
+
+
+def _rl_field(line, key):
+    """Pull `key=value` out of a rate_limit.log line (value ends at whitespace)."""
+    token = f"{key}="
+    idx = line.find(token)
+    if idx == -1:
+        return ""
+    return line[idx + len(token):].split()[0]
+
+
+def _load_rate_limit_offenders(limit=15):
+    """Aggregate recent RateLimitMiddleware events (logs/rate_limit.log) by IP."""
+    path = Path(settings.BASE_DIR) / "logs" / "rate_limit.log"
+    if not path.exists():
+        return []
+    try:
+        with path.open() as fh:
+            lines = fh.readlines()[-5000:]
+    except OSError:
+        return []
+
+    agg = {}
+    for line in lines:
+        if "prices.ratelimit" not in line:
+            continue
+        ip = _rl_field(line, "ip")
+        if not ip:
+            continue
+        rec = agg.setdefault(ip, {"ip": ip, "events": 0, "blocks": 0, "last": "", "path": ""})
+        rec["events"] += 1
+        if "BLOCK ip=" in line:
+            rec["blocks"] += 1
+        rec["last"] = " ".join(line.split()[:2])[:16]
+        rec["path"] = _rl_field(line, "path")
+    return sorted(agg.values(), key=lambda r: (r["blocks"], r["events"]), reverse=True)[:limit]
+
+
+class ProdHealthView(V2NavMixin, TemplateView):
+    """Ops dashboard tracking PRODUCTION (prices.fly.dev) health from the local
+    uptime_monitor.log. Intended for the dev server, where bin/uptime_monitor.sh
+    logs a per-minute ping; on prod the log is absent and the page says so.
+    """
+
+    template_name = "health_v2.html"
+    _nav_page = "health"
+
+    _WINDOWS = [("24 hours", 1), ("7 days", 7), ("30 days", 30)]
+    _DAY_OPTIONS = [1, 7, 14, 30]
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+
+        try:
+            days = int(self.request.GET.get("days", 7))
+        except (TypeError, ValueError):
+            days = 7
+        days = min(max(days, 1), 90)
+        context["days"] = days
+        context["day_options"] = self._DAY_OPTIONS
+
+        context["ratelimit"] = {
+            "enabled": getattr(settings, "RATELIMIT_ENABLED", True),
+            "enforce": getattr(settings, "RATELIMIT_ENFORCE", True),
+            "per_min": getattr(settings, "RATELIMIT_PER_MIN", 60),
+            "block_seconds": getattr(settings, "RATELIMIT_BLOCK_SECONDS", 600),
+        }
+        context["offenders"] = _load_rate_limit_offenders()
+        context["response_cache_ttl"] = getattr(settings, "RESPONSE_CACHE_TTL", 180)
+
+        df = _load_uptime_log()
+        context["monitor_present"] = not df.empty
+        if df.empty:
+            return context
+
+        now = pd.Timestamp.now(tz="UTC")
+        last_ts = df["ts"].iloc[-1]
+        last_row = df.iloc[-1]
+        age_min = (now - last_ts).total_seconds() / 60.0
+
+        # Freshness — the monitor runs every minute, so >3 min stale = it stopped
+        context["monitor_stale"] = age_min > 3
+        context["monitor_last"] = last_ts.tz_convert("GB").strftime("%d %b %H:%M")
+        context["monitor_age_min"] = int(age_min)
+
+        current_up = bool(last_row["ok"])
+        context["current_up"] = current_up
+        context["current_code"] = last_row["code"]
+        context["current_latency_ms"] = int(round(last_row["latency"] * 1000))
+
+        # How long the current up/down streak has held
+        i = len(df) - 1
+        oks = df["ok"].tolist()
+        while i > 0 and oks[i - 1] == current_up:
+            i -= 1
+        context["status_since"] = df["ts"].iloc[i].tz_convert("GB").strftime("%d %b %H:%M")
+
+        # Uptime across fixed windows + all history
+        windows = []
+        for label, wdays in self._WINDOWS + [("All", None)]:
+            sub = df if wdays is None else df[df["ts"] >= now - pd.Timedelta(days=wdays)]
+            total = len(sub)
+            if total == 0:
+                windows.append({"label": label, "total": 0, "uptime": "—", "failed": 0, "episodes": 0})
+                continue
+            failed = int((~sub["ok"]).sum())
+            windows.append({
+                "label": label,
+                "total": total,
+                "failed": failed,
+                "uptime": f"{100.0 * (total - failed) / total:.2f}",
+                "episodes": _count_episodes(sub["ok"].tolist()),
+            })
+        context["windows"] = windows
+
+        context["episodes"] = _episode_list(df, limit=15)
+
+        # Chart window + latency stats
+        win = df[df["ts"] >= now - pd.Timedelta(days=days)]
+        ok_win = win[win["ok"]]
+        if not ok_win.empty:
+            context["latency_avg_ms"] = int(round(ok_win["latency"].mean() * 1000))
+            context["latency_p95_ms"] = int(round(ok_win["latency"].quantile(0.95) * 1000))
+        context["graph"] = self._build_chart(win)
+
+        return context
+
+    def _build_chart(self, win):
+        if win.empty:
+            return ""
+        figure = go.Figure()
+        ok = win[win["ok"]]
+        if not ok.empty:
+            figure.add_trace(go.Scatter(
+                x=ok["ts"].dt.tz_convert("GB"),
+                y=(ok["latency"] * 1000).round(0),
+                mode="lines",
+                line=dict(color="#4a9eff", width=1),
+                name="Response time",
+                hovertemplate="%{x|%d %b %H:%M}<br>%{y:.0f} ms<extra></extra>",
+            ))
+        fail = win[~win["ok"]]
+        if not fail.empty:
+            figure.add_trace(go.Scatter(
+                x=fail["ts"].dt.tz_convert("GB"),
+                y=[0] * len(fail),
+                mode="markers",
+                marker=dict(color="#dc3545", size=7, symbol="x"),
+                name="Down",
+                text=fail["code"],
+                hovertemplate="%{x|%d %b %H:%M}<br>DOWN (HTTP %{text})<extra></extra>",
+            ))
+        figure.update_layout(
+            template="plotly_dark",
+            height=420,
+            plot_bgcolor="#212529",
+            paper_bgcolor="#343a40",
+            margin=dict(l=55, r=15, t=15, b=35),
+            hovermode="x",
+            legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+            yaxis=dict(title="Response time (ms)", rangemode="tozero"),
+        )
+        return figure.to_html(
+            full_html=False,
+            include_plotlyjs="cdn",
+            config={"displayModeBar": False, "responsive": True},
+        )
 
 
 class GraphV2View(V2NavMixin, TemplateView):

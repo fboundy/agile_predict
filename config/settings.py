@@ -57,6 +57,12 @@ LOGGING = {
             "class": "logging.StreamHandler",
             "formatter": "verbose",
         },
+        "ratelimit_file": {
+            "level": "INFO",
+            "class": "logging.FileHandler",
+            "filename": os.path.join(BASE_DIR, "logs", "rate_limit.log"),
+            "formatter": "verbose",
+        },
     },
     "formatters": {
         "verbose": {
@@ -94,8 +100,43 @@ LOGGING = {
             "level": "WARNING",
             "propagate": False,
         },
+        "prices.ratelimit": {
+            "handlers": ["ratelimit_file", "console"],
+            "level": "INFO",
+            "propagate": False,
+        },
     },
 }
+
+
+# --- Caching / throttling ---------------------------------------------------
+# Shared, file-based cache so the two gunicorn workers share state and it
+# survives the frequent worker reboots (a per-process LocMemCache is wiped every
+# time a worker is recycled). Used for response caching, rate-limit counters,
+# and the existing stats-context cache.
+CACHE_DIR = env("CACHE_DIR", default=os.path.join(BASE_DIR, ".django_cache"))
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+        "LOCATION": CACHE_DIR,
+        "TIMEOUT": 300,
+        "OPTIONS": {"MAX_ENTRIES": 1000, "CULL_FREQUENCY": 4},
+    },
+}
+
+# Per-IP rate limiting (mitigates gunicorn worker exhaustion from crawlers that
+# sweep every region/param combination). All values overridable via env so
+# limits can be tuned — or the whole thing disabled — without a redeploy.
+RATELIMIT_ENABLED = env.bool("RATELIMIT_ENABLED", default=True)
+RATELIMIT_ENFORCE = env.bool("RATELIMIT_ENFORCE", default=True)  # False = log offenders but don't block
+RATELIMIT_PER_MIN = env.int("RATELIMIT_PER_MIN", default=60)  # requests/min/IP for throttled paths
+RATELIMIT_BLOCK_THRESHOLD = env.int("RATELIMIT_BLOCK_THRESHOLD", default=5)  # over-limit windows before an escalated block
+RATELIMIT_BLOCK_SECONDS = env.int("RATELIMIT_BLOCK_SECONDS", default=600)  # length of the escalated block
+
+# Short-TTL response caching for anonymous GETs on the heavy chart/API paths.
+RESPONSE_CACHE_ENABLED = env.bool("RESPONSE_CACHE_ENABLED", default=True)
+RESPONSE_CACHE_TTL = env.int("RESPONSE_CACHE_TTL", default=180)
+RESPONSE_CACHE_MAX_BYTES = env.int("RESPONSE_CACHE_MAX_BYTES", default=2_000_000)
 
 
 # Application definition
@@ -119,6 +160,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "prices.middleware.HealthCheckMiddleware",
+    "prices.middleware.RateLimitMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
@@ -126,8 +168,10 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
-
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    # Innermost: serves cached anonymous GETs; kept last so all the security
+    # middleware above still post-process cache hits.
+    "prices.middleware.ResponseCacheMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
