@@ -1989,6 +1989,22 @@ class ProdHealthView(V2NavMixin, TemplateView):
         )
 
 
+class LimitationsView(V2NavMixin, TemplateView):
+    """Static page describing service limitations — fair-use rate limits, brief
+    response caching, the AI-crawler policy, and best-effort availability.
+    Linked from the site footer.
+    """
+
+    template_name = "limitations.html"
+    _nav_page = ""
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["rate_per_min"] = getattr(settings, "RATELIMIT_PER_MIN", 60)
+        context["cache_ttl"] = getattr(settings, "RESPONSE_CACHE_TTL", 180)
+        return context
+
+
 class GraphV2View(V2NavMixin, TemplateView):
     """Colour-coded bar chart UI — alternative to the accordion-sidebar GraphFormView."""
 

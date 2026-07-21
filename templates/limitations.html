@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-lg py-3" style="max-width:820px">
+
+  <div class="mb-3">
+    <h5 class="mb-0">Service limitations</h5>
+    <div class="text-body-secondary" style="font-size:.8rem">How AgilePredict handles traffic, caching and automated access</div>
+  </div>
+
+  <div class="card border-0 shadow-sm mb-3" style="background:#2a2d31">
+    <div class="card-body py-3 px-4" style="font-size:.9rem">
+      <p class="text-body-secondary mb-0">
+        AgilePredict is a free, hobby-scale service running on a small single instance. To keep it
+        responsive for everyone, a few limits are in place. They rarely affect ordinary browsing, but
+        they do shape how automated clients should behave.
+      </p>
+    </div>
+  </div>
+
+  <div class="card border-0 shadow-sm mb-3" style="background:#2a2d31">
+    <div class="card-body py-3 px-4">
+      <h6 class="mb-2" style="font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">Fair-use rate limiting</h6>
+      <p style="font-size:.9rem" class="mb-2">
+        Requests are limited to roughly <strong>{{ rate_per_min }} per minute per IP address</strong> on the
+        chart and API endpoints. Clients that exceed this receive an <code>HTTP 429 (Too Many Requests)</code>
+        response with a <code>Retry-After</code> header; persistent offenders are blocked for a short period.
+      </p>
+      <p style="font-size:.9rem" class="mb-0 text-body-secondary">
+        If you are polling the <a href="/v2/api_how_to/" class="link-info">API</a>, once every few hours is
+        plenty — forecasts only refresh a handful of times a day. Please cache responses your end and avoid
+        fetching every region and option combination in a tight loop.
+      </p>
+    </div>
+  </div>
+
+  <div class="card border-0 shadow-sm mb-3" style="background:#2a2d31">
+    <div class="card-body py-3 px-4">
+      <h6 class="mb-2" style="font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">Caching &amp; data freshness</h6>
+      <p style="font-size:.9rem" class="mb-0">
+        To reduce load, chart pages and API responses may be served from a short-lived cache
+        (up to about <strong>{{ cache_ttl }} seconds</strong>). This means a response can occasionally be a
+        few minutes behind the very latest data. Since underlying forecasts and confirmed prices update far
+        less frequently than that, it makes no practical difference to the numbers you see.
+      </p>
+    </div>
+  </div>
+
+  <div class="card border-0 shadow-sm mb-3" style="background:#2a2d31">
+    <div class="card-body py-3 px-4">
+      <h6 class="mb-2" style="font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">Automated access &amp; AI crawlers</h6>
+      <p style="font-size:.9rem" class="mb-2">
+        Bulk AI training and scraping crawlers (for example GPTBot, ClaudeBot, CCBot, PerplexityBot and
+        similar) are disallowed in <a href="/robots.txt" class="link-info">robots.txt</a>. Such crawlers
+        sweep every page and option combination, which generates far more load than human visitors and can
+        make the site unavailable for real users.
+      </p>
+      <p style="font-size:.9rem" class="mb-0 text-body-secondary">
+        Ordinary search-engine indexing and on-demand fetches (such as a person asking an assistant to open
+        a specific page) are not blocked. Genuine integrations are welcome — please just use the API sensibly
+        and within the rate limits above.
+      </p>
+    </div>
+  </div>
+
+  <div class="card border-0 shadow-sm" style="background:#2a2d31">
+    <div class="card-body py-3 px-4">
+      <h6 class="mb-2" style="font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">Availability</h6>
+      <p style="font-size:.9rem" class="mb-0">
+        Availability is best-effort. The service may be briefly slow or unavailable during traffic spikes,
+        upstream data outages, or deployments. No warranty is given as to availability, accuracy or fitness
+        for any purpose — see the notices in the footer.
+      </p>
+    </div>
+  </div>
+
+</div>
+{% endblock content %}
