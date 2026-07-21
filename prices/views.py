@@ -1712,6 +1712,33 @@ def forecast_list_json(request):
     return JsonResponse({"forecasts": forecasts}, json_dumps_params={"indent": 2})
 
 
+@require_GET
+def robots_txt(request):
+    """Serve robots.txt. Blocks the AI scrapers that sweep every region/param
+    combination and exhaust the two gunicorn workers (GPTBot was the confirmed
+    offender behind the 2026-07-20 outages); asks everything else to be gentle.
+    Well-behaved crawlers honour this, cutting load before it reaches the app —
+    the rate limiter remains the backstop for those that don't.
+    """
+    blocked = [
+        "GPTBot",          # OpenAI training crawler — confirmed offender
+        "OAI-SearchBot",   # OpenAI search indexer (bulk)
+        "ClaudeBot",       # Anthropic crawler
+        "CCBot",           # Common Crawl
+        "PerplexityBot",   # Perplexity
+        "Bytespider",      # ByteDance
+        "Google-Extended",  # Google AI training (does not affect Search)
+        "Amazonbot",
+        "meta-externalagent",  # Meta AI
+    ]
+    lines = ["# AI scrapers that sweep every region/filter combination — blocked to"]
+    lines.append("# protect the app's 2 workers; the rate limiter backs this up.")
+    for bot in blocked:
+        lines += [f"User-agent: {bot}", "Disallow: /", ""]
+    lines += ["User-agent: *", "Crawl-delay: 10", "Disallow:", ""]
+    return HttpResponse("\n".join(lines), content_type="text/plain")
+
+
 def _load_uptime_log():
     """Parse logs/uptime_monitor.log into a sorted DataFrame [ts, code, latency, ok].
 
