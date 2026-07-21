@@ -6,6 +6,8 @@ from django.core.cache import cache
 from django.http import HttpResponse
 from django.utils.cache import patch_response_headers
 
+from . import blocklist
+
 logger = logging.getLogger("prices.ratelimit")
 
 
@@ -38,6 +40,42 @@ def client_ip(request):
     if xff:
         return xff.split(",")[0].strip()
     return request.META.get("REMOTE_ADDR", "") or "unknown"
+
+
+class BlocklistMiddleware:
+    """Reject requests from known-malicious IPs (reputation blocklist).
+
+    Complements the rate limiter: the limiter stops volumetric abuse, this drops
+    traffic from IP ranges on a curated blocklist (default FireHOL level 1)
+    outright. The check is a cheap in-memory bisect (see prices/blocklist.py);
+    the list refreshes in a background thread. Fail-open; `BLOCKLIST_ENFORCE=false`
+    logs would-be blocks without dropping them.
+    """
+
+    EXEMPT_PREFIXES = ("/healthz", "/static/", "/favicon")
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+        self.enabled = getattr(settings, "BLOCKLIST_ENABLED", False)
+        self.enforce = getattr(settings, "BLOCKLIST_ENFORCE", True)
+
+    def __call__(self, request):
+        if not self.enabled or request.path.startswith(self.EXEMPT_PREFIXES):
+            return self.get_response(request)
+        ip = client_ip(request)
+        try:
+            blocked = blocklist.is_blocked(ip)
+        except Exception:  # pragma: no cover - must fail open
+            blocked = False
+        if blocked:
+            logger.info(
+                "BLOCKLIST-DENY ip=%s enforce=%s path=%s ua=%r",
+                ip, self.enforce, request.path,
+                request.META.get("HTTP_USER_AGENT", "")[:200],
+            )
+            if self.enforce:
+                return HttpResponse("Forbidden\n", status=403, content_type="text/plain")
+        return self.get_response(request)
 
 
 class RateLimitMiddleware:

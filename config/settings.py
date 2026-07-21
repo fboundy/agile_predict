@@ -138,6 +138,17 @@ RESPONSE_CACHE_ENABLED = env.bool("RESPONSE_CACHE_ENABLED", default=True)
 RESPONSE_CACHE_TTL = env.int("RESPONSE_CACHE_TTL", default=180)
 RESPONSE_CACHE_MAX_BYTES = env.int("RESPONSE_CACHE_MAX_BYTES", default=2_000_000)
 
+# Reputation blocklist — drop traffic from known-malicious IP ranges. Uses a
+# conservative curated list (FireHOL level 1) fetched off the request path and
+# refreshed on a TTL. `BLOCKLIST_ENFORCE=false` = log would-be blocks only.
+BLOCKLIST_ENABLED = env.bool("BLOCKLIST_ENABLED", default=True)
+BLOCKLIST_ENFORCE = env.bool("BLOCKLIST_ENFORCE", default=True)
+BLOCKLIST_TTL = env.int("BLOCKLIST_TTL", default=21600)  # 6h
+BLOCKLIST_URLS = env.list(
+    "BLOCKLIST_URLS",
+    default=["https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset"],
+)
+
 
 # Application definition
 
@@ -160,6 +171,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "prices.middleware.HealthCheckMiddleware",
+    "prices.middleware.BlocklistMiddleware",
     "prices.middleware.RateLimitMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",

@@ -158,6 +158,9 @@
           <span class="badge {% if ratelimit.enforce %}bg-info{% else %}bg-warning text-dark{% endif %}">{% if ratelimit.enforce %}enforcing{% else %}log-only{% endif %}</span>
           <span class="text-body-secondary">{{ ratelimit.per_min }}/min per IP · block {{ ratelimit.block_seconds }}s · cache {{ response_cache_ttl }}s</span>
           {% endif %}
+          {% if blocklist.enabled %}
+          <span class="badge bg-secondary">IP blocklist: {{ blocklist.count }} ranges{% if not blocklist.enforce %} (log-only){% endif %}</span>
+          {% endif %}
         </div>
       </div>
       {% if offenders %}

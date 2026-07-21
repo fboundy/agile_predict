@@ -1881,11 +1881,18 @@ class ProdHealthView(V2NavMixin, TemplateView):
         context["days"] = days
         context["day_options"] = self._DAY_OPTIONS
 
+        from prices import blocklist
+
         context["ratelimit"] = {
             "enabled": getattr(settings, "RATELIMIT_ENABLED", True),
             "enforce": getattr(settings, "RATELIMIT_ENFORCE", True),
             "per_min": getattr(settings, "RATELIMIT_PER_MIN", 60),
             "block_seconds": getattr(settings, "RATELIMIT_BLOCK_SECONDS", 600),
+        }
+        context["blocklist"] = {
+            "enabled": getattr(settings, "BLOCKLIST_ENABLED", False),
+            "enforce": getattr(settings, "BLOCKLIST_ENFORCE", True),
+            "count": blocklist.status()["count"],
         }
         context["offenders"] = _load_rate_limit_offenders()
         context["response_cache_ttl"] = getattr(settings, "RESPONSE_CACHE_TTL", 180)
