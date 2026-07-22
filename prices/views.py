@@ -1900,8 +1900,9 @@ class ProdHealthView(V2NavMixin, TemplateView):
         last_row = df.iloc[-1]
         age_min = (now - last_ts).total_seconds() / 60.0
 
-        # Freshness — the monitor runs every minute, so >3 min stale = it stopped
-        context["monitor_stale"] = age_min > 3
+        # Freshness — the monitor runs every 5 minutes, so >11 min stale (two
+        # missed checks) means the cron has stopped.
+        context["monitor_stale"] = age_min > 11
         context["monitor_last"] = last_ts.tz_convert("GB").strftime("%d %b %H:%M")
         context["monitor_age_min"] = int(age_min)
 

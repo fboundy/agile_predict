@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# uptime_monitor.sh — poll prices.fly.dev every minute, log status/timing, and
+# uptime_monitor.sh — poll prices.fly.dev every 5 minutes, log status/timing, and
 # push an ntfy.sh alert on DOWN/UP state transitions (not every failed check,
 # to avoid spam). Pure observation + alerting only — no restart action, so it
 # doesn't interact with watchdog.sh's hourly restart behavior.
-# Scheduled via cron: * * * * *
+# Scheduled via cron: */5 * * * *
 
 set -euo pipefail
 
