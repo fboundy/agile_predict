@@ -29,7 +29,7 @@ from plotly.subplots import make_subplots
 from config.settings import GLOBAL_SETTINGS
 from config.utils import day_ahead_to_agile, import_agile_to_export_agile
 
-from .external_forecasts import fetch_agileforecast, fetch_x2r
+from .external_forecasts import fetch_agileforecast, fetch_x2r, region_rows_from_g
 from .forms import ForecastForm, RegistrationForm
 from .models import (
     AgileData,
@@ -1552,72 +1552,62 @@ class ProductionLoginRequiredMixin:
         return super().dispatch(request, *args, **kwargs)
 
 
-def _ext_db_fallback(source, region, start, end):
-    """Return the most recent stored ExternalForecast rows for a source/region, or None if absent."""
+def _stored_external_rows(source, region):
+    """Latest stored snapshot for a source (persisted at region G by
+    refresh_external_forecasts), derived to the requested region. No network I/O.
+    Returns {rows, source_created_at, age_hours} or None if nothing is stored.
+    """
     latest = (
         ExternalForecast.objects
-        .filter(source=source, region=region)
+        .filter(source=source, region="G")
         .order_by("-source_created_at")
         .first()
     )
     if latest is None:
         return None
-    age_hours = (timezone.now() - latest.downloaded_at).total_seconds() / 3600
-    rows = [
-        {"date_time": r.date_time, "agile_pred": float(r.agile_pred)}
+    g_rows = [
+        {
+            "date_time": r.date_time,
+            "agile_pred": float(r.agile_pred),
+            "agile_low": float(r.agile_low) if r.agile_low is not None else None,
+            "agile_high": float(r.agile_high) if r.agile_high is not None else None,
+        }
         for r in ExternalForecast.objects.filter(
-            source=source,
-            region=region,
-            source_created_at=latest.source_created_at,
-            date_time__gte=start,
-            date_time__lte=end,
+            source=source, region="G", source_created_at=latest.source_created_at
         ).order_by("date_time")
     ]
     return {
-        "rows": rows,
+        "rows": region_rows_from_g(g_rows, region),
         "source_created_at": latest.source_created_at,
-        "is_fresh": age_hours <= 36,
+        "age_hours": (timezone.now() - latest.downloaded_at).total_seconds() / 3600,
     }
 
 
 _EXT_COLORS = {"AgileForecast": "#D55E00", "X2R": "#009E73"}
 _EXT_SOURCES = {
-    "AgileForecast": (fetch_agileforecast, ExternalForecast.SOURCE_AGILEFORECAST),
-    "X2R": (fetch_x2r, ExternalForecast.SOURCE_X2R),
+    "AgileForecast": ExternalForecast.SOURCE_AGILEFORECAST,
+    "X2R": ExternalForecast.SOURCE_X2R,
 }
 
 
 def _fetch_external_forecasts(ext_labels, region, show_export, prior_gb, end_gb):
-    """Fetch AgileForecast/X2R comparison series (live, with stored-data fallback).
+    """Build AgileForecast/X2R comparison series from STORED data only.
 
-    Used by ext_forecast_json — this makes the live external-API calls (5-15s
-    timeouts), so it must never run on GraphV2View's synchronous render path;
-    the browser fetches it separately after the main chart has already loaded.
-    Returns (traces, statuses) where traces are Plotly-ready dicts and statuses
-    are health/detail entries for the "Data sources" card.
+    The data is refreshed on each `manage.py update` run (refresh_external_forecasts),
+    so no live external call is made on the request path — a slow upstream used to
+    stall a worker for 5-15s (see the WORKER TIMEOUT outages). Returns (traces,
+    statuses) where statuses feed the "Data sources" card.
     """
     traces = []
     statuses = []
     for ext_label in ext_labels:
-        ext_fetcher, ext_source_const = _EXT_SOURCES[ext_label]
-        ext_data = None
-        ext_health = "ok"
-        ext_detail = "Live"
+        ext_source_const = _EXT_SOURCES[ext_label]
+        data = _stored_external_rows(ext_source_const, region)
+        if data is None:
+            statuses.append({"name": ext_label, "health": "fail", "detail": "No data available"})
+            continue
 
-        try:
-            ext_data = ext_fetcher(region)
-        except Exception as exc:
-            logger.warning("ext_forecast_json: %s live call failed: %s", ext_label, exc)
-            fallback = _ext_db_fallback(ext_source_const, region, prior_gb, end_gb)
-            if fallback is not None:
-                ext_data = fallback
-                ext_health = "warn" if fallback["is_fresh"] else "fail"
-                ext_detail = "Stored data (live unavailable)" if fallback["is_fresh"] else "Stale data (download failed)"
-            else:
-                statuses.append({"name": ext_label, "health": "fail", "detail": "No data available"})
-                continue
-
-        ext_rows = ext_data.get("rows", [])
+        ext_rows = [r for r in data["rows"] if r.get("agile_pred") is not None]
         if not ext_rows:
             statuses.append({"name": ext_label, "health": "fail", "detail": "No data"})
             continue
@@ -1637,10 +1627,13 @@ def _fetch_external_forecasts(ext_labels, region, show_export, prior_gb, end_gb)
             statuses.append({"name": ext_label, "health": "warn", "detail": "No data in range"})
             continue
 
-        created_at = pd.Timestamp(ext_data["source_created_at"]).tz_convert("GB")
-        if ext_health == "ok":
-            ext_detail = f"Live ({created_at.strftime('%d %b %H:%M')})"
-        statuses.append({"name": ext_label, "health": ext_health, "detail": ext_detail})
+        created_at = pd.Timestamp(data["source_created_at"]).tz_convert("GB")
+        health = "ok" if data["age_hours"] <= 36 else "warn"
+        statuses.append({
+            "name": ext_label,
+            "health": health,
+            "detail": f"Stored ({created_at.strftime('%d %b %H:%M')})",
+        })
 
         traces.append({
             "name": f"{ext_label} ({created_at.strftime('%d %b %H:%M')})",

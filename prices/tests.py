@@ -322,6 +322,38 @@ class LocalRealtimeExternalForecastTests(TestCase):
         self.assertEqual(forecasts[0]["label"], "AgileForecast")
         fetch_agileforecast.assert_called_once_with("G")
 
+    @patch("prices.views.fetch_x2r")
+    @patch("prices.views.fetch_agileforecast")
+    def test_ext_forecast_json_serves_stored_data_without_live_call(self, fetch_agileforecast, fetch_x2r):
+        """The v2 comparison overlay must read stored data (refreshed by the
+        update run) and never make a live external call on the request path."""
+        import pandas as pd
+        from datetime import timedelta as _td
+        from prices.models import ExternalForecast
+        from prices.views import _fetch_external_forecasts
+
+        created = timezone.now()
+        base = created.replace(minute=0, second=0, microsecond=0)
+        for i in range(6):
+            ExternalForecast.objects.create(
+                source=ExternalForecast.SOURCE_AGILEFORECAST,
+                region="G",
+                forecast_name="test",
+                source_created_at=created,
+                date_time=base + _td(minutes=30 * i),
+                agile_pred=20.0 + i,
+            )
+
+        prior = pd.Timestamp.now(tz="GB") - pd.Timedelta(days=1)
+        end = pd.Timestamp.now(tz="GB") + pd.Timedelta(days=2)
+        traces, statuses = _fetch_external_forecasts(["AgileForecast"], "X", False, prior, end)
+
+        self.assertEqual(len(traces), 1)
+        self.assertEqual(statuses[0]["name"], "AgileForecast")
+        self.assertEqual(statuses[0]["health"], "ok")
+        fetch_agileforecast.assert_not_called()
+        fetch_x2r.assert_not_called()
+
     def test_live_forecast_rows_are_limited_to_plot_date_range(self):
         now = timezone.now()
         rows = [

@@ -75,9 +75,6 @@ def _save_rows(source, region, forecast_name, source_created_at, rows):
 
 def download_agileforecast_region_g():
     source = ExternalForecast.SOURCE_AGILEFORECAST
-    if _downloaded_today(source):
-        logger.info("Skipping AgileForecast download; already downloaded today")
-        return 0
 
     url = "https://agileforecast.co.uk/api/G/"
     response = requests.get(url, timeout=30)
@@ -130,9 +127,6 @@ def fetch_agileforecast(region):
 
 def download_x2r_region_g():
     source = ExternalForecast.SOURCE_X2R
-    if _downloaded_today(source):
-        logger.info("Skipping X2R download; already downloaded today")
-        return 0
 
     url = "https://api.x2r.uk/agile/G"
     response = requests.get(url, timeout=30)
@@ -202,7 +196,38 @@ def fetch_x2r(region):
     }
 
 
-def download_daily_external_forecasts():
+def _prune_history(now=None):
+    """Keep, per (source, region), only the newest source_created_at (drives the
+    live comparison overlay) plus the earliest source_created_at of each day (the
+    day-ahead snapshot used for accuracy history). Delete intra-day extras so the
+    table stays ~1 row-set/day/source even though we refresh on every update run.
+    """
+    for source, region in ExternalForecast.objects.values_list("source", "region").distinct():
+        created = list(
+            ExternalForecast.objects.filter(source=source, region=region)
+            .values_list("source_created_at", flat=True)
+            .distinct()
+        )
+        if len(created) <= 1:
+            continue
+        keep = {max(created)}  # newest snapshot -> the chart
+        earliest_by_day = {}
+        for ts in created:
+            day = timezone.localtime(ts).date()
+            if day not in earliest_by_day or ts < earliest_by_day[day]:
+                earliest_by_day[day] = ts
+        keep.update(earliest_by_day.values())  # first-of-day -> history
+        ExternalForecast.objects.filter(source=source, region=region).exclude(
+            source_created_at__in=keep
+        ).delete()
+
+
+def refresh_external_forecasts():
+    """Pull the current external forecasts and store them. Called on each update
+    run (not per web request), so the comparison overlay is served from the DB
+    with no live call on the request path. Retention keeps the latest snapshot
+    for the chart and the first-of-day snapshot for accuracy history.
+    """
     counts = {}
     for source, downloader in [
         (ExternalForecast.SOURCE_AGILEFORECAST, download_agileforecast_region_g),
@@ -214,5 +239,41 @@ def download_daily_external_forecasts():
             logger.exception("Unable to download %s external forecast", source)
             counts[source] = 0
 
+    _prune_history()
     _cleanup()
     return counts
+
+
+# Backwards-compatible alias (older callers / cron).
+download_daily_external_forecasts = refresh_external_forecasts
+
+
+def region_rows_from_g(rows, region):
+    """Derive a region's Agile comparison series from stored region-G rows, using
+    the same national<->regional conversion the app applies to its own forecasts.
+    Region G is returned unchanged; other regions (incl. X) are converted."""
+    region = (region or "G").upper()
+    if region == "G" or not rows:
+        return rows
+
+    idx = pd.to_datetime([row["date_time"] for row in rows])
+
+    def _convert(key):
+        raw = [row.get(key) for row in rows]
+        if all(v is None for v in raw):
+            return [None] * len(rows)
+        series = pd.Series(
+            data=[float(v) if v is not None else float("nan") for v in raw],
+            index=idx,
+        )
+        day_ahead = day_ahead_to_agile(series, reverse=True, region="G")
+        regional = day_ahead_to_agile(day_ahead, region=region)
+        return [None if pd.isna(v) else float(v) for v in regional.values]
+
+    pred = _convert("agile_pred")
+    low = _convert("agile_low")
+    high = _convert("agile_high")
+    return [
+        {**row, "agile_pred": pred[i], "agile_low": low[i], "agile_high": high[i]}
+        for i, row in enumerate(rows)
+    ]

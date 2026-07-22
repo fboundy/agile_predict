@@ -35,7 +35,7 @@ from ...forecast_features import (
     resolve_feature_columns,
     select_daily_training_forecasts,
 )
-from ...external_forecasts import download_daily_external_forecasts
+from ...external_forecasts import refresh_external_forecasts
 from ...models import AgileData, ForecastData, Forecasts, History, PlotImage, PriceHistory, UpdateJob
 
 from config.utils import *
@@ -508,7 +508,7 @@ class Command(BaseCommand):
             no_day_of_week=options.get("no_day_of_week", False),
         )
         logger.info("Using model features: %s", ", ".join(features))
-        download_daily_external_forecasts()
+        refresh_external_forecasts()
 
         drop_last = int(options.get("drop_last", 0) or 0)
 
