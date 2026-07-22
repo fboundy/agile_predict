@@ -377,6 +377,31 @@ class ApiHowToView(TemplateView):
 class AboutView(TemplateView):
     template_name = "about.html"
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        rows = []
+        for code, cfg in GLOBAL_SETTINGS["REGIONS"].items():
+            factors = cfg.get("factors")
+            if cfg.get("raw_day_ahead") or not factors:
+                continue  # Z = raw day-ahead, no conversion
+            export = cfg.get("export_factors")
+            rows.append({
+                "code": code,
+                "name": cfg.get("name", code),
+                "mult": factors[0],
+                "peak": factors[1],
+                "exp_factor": export[0] if export else None,
+                "exp_base": export[1] if export else None,
+                "exp_peak": export[2] if export else None,
+            })
+        # Current value of the time-stepped peak "shift" (added during peak hours).
+        shifts = GLOBAL_SETTINGS.get("SHIFTS", {})
+        now = timezone.now()
+        applicable = [v for d, v in sorted(shifts.items()) if pd.Timestamp(d, tz="GB") <= now]
+        context["conversion_regions"] = rows
+        context["peak_shift"] = applicable[-1] if applicable else 0.0
+        return context
+
 
 class StatsView(TemplateView):
     template_name = "stats.html"

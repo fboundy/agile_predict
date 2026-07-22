@@ -32,6 +32,81 @@
     <div class="col-12">
       <div class="card border-0 shadow-sm" style="background:#2a2d31">
         <div class="card-body py-3 px-4">
+          <h6 class="mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">Wholesale &rarr; regional Agile prices</h6>
+          <p class="mb-2" style="font-size:.9rem">
+            The model forecasts the GB wholesale <strong>day-ahead price</strong> (in &pound;/MWh). Each region's
+            Octopus Agile <strong>import</strong> and <strong>export</strong> unit rate (in p/kWh) is then derived
+            from that wholesale price with a per-region linear formula, plus an extra adjustment during the
+            <strong>peak window, 16:00&ndash;19:00</strong>. The per-region multiplier is applied directly to the
+            &pound;/MWh wholesale value and yields p/kWh.
+          </p>
+          <div class="rounded p-3 mb-2" style="background:#1a1d21;font-size:.84rem;font-family:monospace;white-space:pre-wrap">import (off-peak) = wholesale &times; multiplier
+import (peak)     = wholesale &times; multiplier + peak&nbsp;adder + shift
+
+export (off-peak) = max(0, wholesale &times; factor + base&nbsp;adder)
+export (peak)     = max(0, wholesale &times; factor + base&nbsp;adder + peak&nbsp;adder)</div>
+          <p class="mb-3 text-body-secondary" style="font-size:.82rem">
+            <code>shift</code> is a seasonal peak adjustment, currently <strong>{{ peak_shift }} p/kWh</strong>.
+            Export prices are floored at 0. Region Z is the raw wholesale day-ahead price (no conversion, shown in &pound;/MWh).
+          </p>
+
+          <div class="row g-3">
+            <div class="col-lg-6">
+              <div class="text-body-secondary mb-1" style="font-size:.78rem;text-transform:uppercase;letter-spacing:.05em">Import (Agile) &mdash; p/kWh</div>
+              <div class="table-responsive">
+                <table class="table table-sm table-borderless mb-0" style="font-size:.83rem">
+                  <thead>
+                    <tr class="text-body-secondary" style="border-bottom:1px solid #495057">
+                      <th class="fw-normal py-1">Region</th>
+                      <th class="fw-normal py-1 text-end">Multiplier</th>
+                      <th class="fw-normal py-1 text-end">Peak&nbsp;adder</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for r in conversion_regions %}
+                    <tr>
+                      <td class="py-1"><span class="text-body-secondary">{{ r.code }}</span> {{ r.name }}</td>
+                      <td class="py-1 text-end">{{ r.mult }}</td>
+                      <td class="py-1 text-end">{{ r.peak }}</td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div class="col-lg-6">
+              <div class="text-body-secondary mb-1" style="font-size:.78rem;text-transform:uppercase;letter-spacing:.05em">Export (Agile Outgoing) &mdash; p/kWh</div>
+              <div class="table-responsive">
+                <table class="table table-sm table-borderless mb-0" style="font-size:.83rem">
+                  <thead>
+                    <tr class="text-body-secondary" style="border-bottom:1px solid #495057">
+                      <th class="fw-normal py-1">Region</th>
+                      <th class="fw-normal py-1 text-end">Factor</th>
+                      <th class="fw-normal py-1 text-end">Base&nbsp;adder</th>
+                      <th class="fw-normal py-1 text-end">Peak&nbsp;adder</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for r in conversion_regions %}
+                    <tr>
+                      <td class="py-1"><span class="text-body-secondary">{{ r.code }}</span> {{ r.name }}</td>
+                      <td class="py-1 text-end">{{ r.exp_factor }}</td>
+                      <td class="py-1 text-end">{{ r.exp_base }}</td>
+                      <td class="py-1 text-end">{{ r.exp_peak }}</td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12">
+      <div class="card border-0 shadow-sm" style="background:#2a2d31">
+        <div class="card-body py-3 px-4">
           <h6 class="mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">Model inputs</h6>
           <div class="table-responsive">
             <table class="table table-sm table-borderless mb-0" style="font-size:.85rem">
