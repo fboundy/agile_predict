@@ -14,7 +14,8 @@ CURL_TIMEOUT=25
 log() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >> "$LOG"; }
 
 http_code() {
-    curl -s -o /dev/null -w "%{http_code}" --max-time "$CURL_TIMEOUT" "$URL" 2>/dev/null || echo "000"
+    # -4 (IPv4-only): avoids the CT router's ~5s AAAA-lookup stall on sparse queries.
+    curl -4 -s -o /dev/null -w "%{http_code}" --max-time "$CURL_TIMEOUT" "$URL" 2>/dev/null || echo "000"
 }
 
 code="000"
