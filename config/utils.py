@@ -814,8 +814,16 @@ def get_latest_forecast():
     else:
         missing_cols = []
 
-    df.loc[df["da_wind"] > 0, "bm_wind"] = df["da_wind"]
-    df.drop("da_wind", axis=1, inplace=True)
+    # da_wind (NESO day-ahead wind, WINDFOR-DA) is an optional enhancement: where
+    # present it overrides bm_wind (the incentive forecast). NESO occasionally
+    # publishes it late or not at all — when that happens, fall back to bm_wind
+    # rather than crashing the whole update (previously a missing da_wind froze
+    # every forecast with KeyError: 'da_wind').
+    if "da_wind" in df.columns:
+        df.loc[df["da_wind"] > 0, "bm_wind"] = df["da_wind"]
+        df.drop("da_wind", axis=1, inplace=True)
+    else:
+        logger.warning("NESO da_wind (WINDFOR-DA) unavailable — using bm_wind (WINDFOR) only")
 
     nuclear = get_latest_nuclear_forecast(start=df.index.min(), end=df.index.max())
     if len(nuclear) > 0:
