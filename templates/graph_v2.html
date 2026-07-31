@@ -45,24 +45,32 @@
         </div>
         {% endfor %}{% endif %}
       </div>
+      {% if api_status.summary_health and api_status.summary_health != 'ok' %}
+      <div class="mt-2 px-1" style="font-size:.75rem;color:#adb5bd">
+        {% if api_status.last_run_status == 'failed' %}Last update run failed{% if api_status.last_run_time %} ({{ api_status.last_run_time }}){% endif %}. {% endif %}{% if api_status.forecast_age_h != None %}Latest forecast is {{ api_status.forecast_age_h }}h old.{% endif %}
+      </div>
+      {% endif %}
     </div>
   </div>
   <script>
   (function () {
+    var RANK = { ok: 0, warn: 1, fail: 2 };
+    // Server-side baseline: reflects the whole ingest pipeline (a failed update
+    // run or a stale/absent forecast), not just per-source flags.
+    window.__baseHealth = '{{ api_status.summary_health|default:"ok" }}';
     function refreshStatusIndicator() {
-      var cards = document.querySelectorAll('#status-detail [data-health]');
-      var worst = 'ok';
-      cards.forEach(function (c) {
-        var h = c.dataset.health;
-        if (h === 'fail') worst = 'fail';
-        else if (h === 'warn' && worst !== 'fail') worst = 'warn';
+      var lvl = RANK[window.__baseHealth] || 0;
+      document.querySelectorAll('#status-detail [data-health]').forEach(function (c) {
+        var l = RANK[c.dataset.health];
+        if (l === undefined) l = 1;  // "unknown"/unrecognised is NOT OK -> warning
+        if (l > lvl) lvl = l;
       });
       var btn = document.getElementById('status-btn');
       var el  = document.getElementById('status-indicator');
-      if (worst === 'fail') {
+      if (lvl === 2) {
         btn.style.background = '#4a1a22';
         el.innerHTML = '<span style="color:#f77">&#x2715; fault</span>';
-      } else if (worst === 'warn') {
+      } else if (lvl === 1) {
         btn.style.background = '#4a3800';
         el.innerHTML = '<span style="color:#ffc107">&#x26A0; warning</span>';
       } else {

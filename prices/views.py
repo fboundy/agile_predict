@@ -2398,6 +2398,27 @@ class GraphV2View(V2NavMixin, TemplateView):
 
         overall_health = "ok" if all(s["health"] == "ok" for s in api_sources) else "fail"
 
+        # Summary health for the "Data sources" badge. This reflects the whole
+        # ingest pipeline, not just per-source flags: an "unknown" source (e.g.
+        # after a failed run that recorded no status) is NOT "OK"; a failed last
+        # run is at least a warning; and a stale/absent latest forecast (data no
+        # longer being refreshed) is a fault. Without this, a failed update left
+        # every source "unknown" and the badge wrongly read "all OK".
+        _rank_lvl = {"ok": 0, "warn": 1, "fail": 2}
+        _summary_level = max([0] + [_rank_lvl.get(s["health"], 1) for s in api_sources])
+        if recent_update_job and recent_update_job.status == UpdateJob.STATUS_FAILED:
+            _summary_level = max(_summary_level, 1)
+        _forecast_age_h = None
+        if latest is not None:
+            _forecast_age_h = (
+                pd.Timestamp.now(tz="UTC") - pd.Timestamp(latest.created_at).tz_convert("UTC")
+            ).total_seconds() / 3600
+            if _forecast_age_h > 12:
+                _summary_level = 2
+        else:
+            _summary_level = 2
+        summary_health = {0: "ok", 1: "warn", 2: "fail"}[_summary_level]
+
         # Forecast horizon from latest ForecastData
         future_rows = 0
         if latest is not None:
@@ -2415,6 +2436,8 @@ class GraphV2View(V2NavMixin, TemplateView):
         api_status = {
             "sources": api_sources,
             "overall_health": overall_health,
+            "summary_health": summary_health,
+            "forecast_age_h": int(_forecast_age_h) if _forecast_age_h is not None else None,
             "last_run_time": last_run_time,
             "last_run_status": last_run_status,
             "last_success_time": pd.Timestamp(latest.created_at).tz_convert("GB").strftime("%d %b %H:%M") if latest else None,
