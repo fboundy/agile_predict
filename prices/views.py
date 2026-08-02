@@ -2578,17 +2578,6 @@ class GraphV2View(V2NavMixin, TemplateView):
                 hoverinfo="skip",
             ))
 
-        # Confirmed actuals — solid step line
-        if not actual.empty:
-            add_price(go.Scatter(
-                x=actual.index,
-                y=actual.values,
-                mode="lines",
-                line=dict(shape="hv", color="rgba(255,255,255,0.9)", width=2.0),
-                name="Confirmed",
-                hovertemplate=f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>Confirmed</extra>",
-            ))
-
         # Primary forecast line
         if not primary_s.empty:
             latest_label = (
@@ -2660,6 +2649,18 @@ class GraphV2View(V2NavMixin, TemplateView):
                 line=dict(shape="hv", color=self._OLDER_COLORS[i % len(self._OLDER_COLORS)], width=1.5),
                 name=f"Forecast ({older_label})",
                 hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} {unit}<extra>{older_label}</extra>",
+            ))
+
+        # Confirmed actuals — solid white step line, drawn LAST so it always sits
+        # on top of the forecast lines and stays clearly visible (issue #91).
+        if not actual.empty:
+            add_price(go.Scatter(
+                x=actual.index,
+                y=actual.values,
+                mode="lines",
+                line=dict(shape="hv", color="#ffffff", width=3.0),
+                name="Confirmed",
+                hovertemplate=f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>Confirmed</extra>",
             ))
 
         # External forecasts (AgileForecast / X2R): fetched client-side via
@@ -2816,6 +2817,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 zeroline=True,
                 zerolinecolor="#888",
                 zerolinewidth=2,
+                rangemode="tozero",
                 fixedrange=True,
                 row=1,
                 col=1,
@@ -2828,6 +2830,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                     zeroline=True,
                     zerolinecolor="#888",
                     zerolinewidth=2,
+                    rangemode="tozero",
                     fixedrange=True,
                 ),
             )
