@@ -2034,6 +2034,8 @@ class CostsView(V2NavMixin, TemplateView):
                 tot_cost += cost or 0
                 rows.append({
                     "month": entry["label"],
+                    "gross": round(entry.get("gross", 0.0), 2),
+                    "fees": round(entry.get("fees", 0.0), 2),
                     "cost": cost,
                     "estimated": estimated,
                     "revenue": revenue,

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="container-lg py-3" style="max-width:640px">
+<div class="container-lg py-3" style="max-width:820px">
 
   <div class="mb-3">
     <h5 class="mb-0">Costs &amp; revenue</h5>
@@ -11,23 +11,28 @@
   {% if rows %}
   <div class="card border-0 shadow-sm" style="background:#2a2d31">
     <div class="card-body py-3 px-4">
+      <div class="table-responsive">
       <table class="table table-sm table-dark table-borderless mb-0" style="background:transparent">
         <thead>
           <tr class="text-body-secondary" style="border-bottom:1px solid #495057">
             <th class="fw-normal py-1">Month</th>
-            <th class="fw-normal py-1 text-end">Cost</th>
+            <th class="fw-normal py-1 text-end">Gross</th>
+            <th class="fw-normal py-1 text-end">Fees</th>
             <th class="fw-normal py-1 text-end">Revenue</th>
+            <th class="fw-normal py-1 text-end">Cost</th>
             <th class="fw-normal py-1 text-end">Net</th>
           </tr>
         </thead>
         <tbody>
           {% for r in rows %}
           <tr>
-            <td class="py-1">{{ r.month }}</td>
-            <td class="py-1 text-end text-body-secondary">{% if r.cost != None %}&pound;{{ r.cost|floatformat:2 }}{% if r.estimated %}<span title="estimated — not yet invoiced">*</span>{% endif %}{% else %}&mdash;{% endif %}</td>
+            <td class="py-1 text-nowrap">{{ r.month }}</td>
+            <td class="py-1 text-end text-body-secondary">{% if r.gross %}&pound;{{ r.gross|floatformat:2 }}{% else %}&mdash;{% endif %}</td>
+            <td class="py-1 text-end text-body-secondary">{% if r.fees %}&minus;&pound;{{ r.fees|floatformat:2 }}{% else %}&mdash;{% endif %}</td>
             <td class="py-1 text-end">{% if r.revenue %}&pound;{{ r.revenue|floatformat:2 }}{% else %}<span class="text-body-secondary">&mdash;</span>{% endif %}</td>
+            <td class="py-1 text-end text-body-secondary">{% if r.cost != None %}&pound;{{ r.cost|floatformat:2 }}{% if r.estimated %}<span title="estimated — not yet invoiced">*</span>{% endif %}{% else %}&mdash;{% endif %}</td>
             <td class="py-1 text-end fw-semibold" style="color:{% if r.net == None %}#adb5bd{% elif r.net < 0 %}#f77{% else %}#6fcf8e{% endif %}">
-              {% if r.net != None %}{% if r.net < 0 %}&minus;&pound;{{ r.net|slice:"1:"|floatformat:2 }}{% else %}&pound;{{ r.net|floatformat:2 }}{% endif %}{% else %}&mdash;{% endif %}
+              {% if r.net != None %}{% if r.net < 0 %}&minus;{% endif %}&pound;{{ r.net|floatformat:2|cut:"-" }}{% else %}&mdash;{% endif %}
             </td>
           </tr>
           {% endfor %}
@@ -35,21 +40,24 @@
         <tfoot>
           <tr style="border-top:1px solid #495057">
             <td class="py-2 fw-semibold">Total</td>
-            <td class="py-2 text-end fw-semibold">&pound;{{ total_cost|floatformat:2 }}</td>
+            <td class="py-2 text-end fw-semibold">&pound;{{ total_gross|floatformat:2 }}</td>
+            <td class="py-2 text-end fw-semibold">&minus;&pound;{{ total_fees|floatformat:2 }}</td>
             <td class="py-2 text-end fw-semibold">&pound;{{ total_revenue|floatformat:2 }}</td>
+            <td class="py-2 text-end fw-semibold">&pound;{{ total_cost|floatformat:2 }}</td>
             <td class="py-2 text-end fw-bold" style="color:{% if total_net < 0 %}#f77{% else %}#6fcf8e{% endif %}">
-              {% if total_net < 0 %}&minus;&pound;{{ total_net|slice:"1:"|floatformat:2 }}{% else %}&pound;{{ total_net|floatformat:2 }}{% endif %}
+              {% if total_net < 0 %}&minus;{% endif %}&pound;{{ total_net|floatformat:2|cut:"-" }}
             </td>
           </tr>
         </tfoot>
       </table>
+      </div>
     </div>
   </div>
 
   <div class="text-body-secondary mt-2 px-1" style="font-size:.73rem">
-    Cost = actual fly.io invoices (USD &times; {{ usd_gbp_rate }}); * = estimated, not yet invoiced.
-    Revenue = Ko-fi support after fees ({{ fee_desc }}) &mdash; gross &pound;{{ total_gross|floatformat:2 }}
-    less &pound;{{ total_fees|floatformat:2 }} fees. Update via <code>manage.py import_kofi_csv</code>.
+    Gross = Ko-fi support; Fees = {{ fee_desc }}; Revenue = gross &minus; fees.
+    Cost = actual fly.io invoices (USD &times; {{ usd_gbp_rate }}), * = estimated, not yet invoiced.
+    Net = revenue &minus; cost. Update via <code>manage.py import_kofi_csv</code> and <code>FLY_COST_HISTORY</code>.
   </div>
   {% else %}
   <div class="card border-0 shadow-sm" style="background:#2a2d31">
