@@ -1830,11 +1830,12 @@ def _kofi_totals():
     out["months"] = [
         {
             "month": r["m"].strftime("%b %Y"),
+            "ym": r["m"].strftime("%Y-%m"),
             "currency": r["currency"],
             "total": float(r["total"] or 0),
             "payments": r["n"],
         }
-        for r in monthly[:24]
+        for r in monthly[:36]
     ]
     return out
 
@@ -1945,6 +1946,47 @@ class CostsView(V2NavMixin, TemplateView):
             prod_error = "KOFI_PROD_SUMMARY_URL or UPDATE_TOKEN not set"
         context["kofi_prod"] = prod
         context["kofi_prod_error"] = prod_error
+
+        # --- Combined monthly table: revenue vs cost vs net (GBP) ---
+        # Revenue from whichever source has data (prod if webhook-fed, else the
+        # local table). Cost is the CURRENT fly estimate converted to GBP and
+        # applied uniformly to every month (fly has no historic-billing API).
+        months_src = []
+        if prod and prod.get("months"):
+            months_src = prod["months"]
+        elif context["kofi_local"].get("months"):
+            months_src = context["kofi_local"]["months"]
+
+        rate = getattr(settings, "FLY_USD_TO_GBP", 0.79)
+        cost_gbp = round(context["fly"]["total"] * rate, 2) if context["fly"].get("total") else None
+        context["cost_gbp"] = cost_gbp
+        context["usd_gbp_rate"] = rate
+
+        monthly_rows = []
+        if months_src:
+            by_month = {}
+            for m in months_src:
+                key = m.get("ym") or datetime.strptime(m["month"], "%b %Y").strftime("%Y-%m")
+                entry = by_month.setdefault(key, {"label": m["month"], "revenue": 0.0, "payments": 0})
+                entry["revenue"] += m["total"]
+                entry["payments"] += m["payments"]
+
+            # Fill gap months (zero revenue) from the earliest month to now.
+            first = datetime.strptime(min(by_month), "%Y-%m")
+            cursor = timezone.now().replace(day=1)
+            while cursor.strftime("%Y-%m") >= first.strftime("%Y-%m"):
+                key = cursor.strftime("%Y-%m")
+                entry = by_month.get(key, {"label": cursor.strftime("%b %Y"), "revenue": 0.0, "payments": 0})
+                revenue = round(entry["revenue"], 2)
+                monthly_rows.append({
+                    "month": entry["label"],
+                    "payments": entry["payments"],
+                    "revenue": revenue,
+                    "cost": cost_gbp,
+                    "net": round(revenue - cost_gbp, 2) if cost_gbp is not None else None,
+                })
+                cursor = (cursor - timedelta(days=1)).replace(day=1)
+        context["monthly_rows"] = monthly_rows
         return context
 
 

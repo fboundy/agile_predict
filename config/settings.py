@@ -45,6 +45,8 @@ KOFI_VERIFICATION_TOKEN = env("KOFI_VERIFICATION_TOKEN", default="")
 # Fly Machines API token for the cost estimate (read-only use).
 FLY_API_TOKEN = env("FLY_API_TOKEN", default="")
 FLY_COST_APPS = env.list("FLY_COST_APPS", default=["prices"])
+# For the monthly net column: fly bills USD, Ko-fi is GBP.
+FLY_USD_TO_GBP = env.float("FLY_USD_TO_GBP", default=0.79)
 # Where the dev costs page fetches production's Ko-fi totals (X-Update-Token auth).
 KOFI_PROD_SUMMARY_URL = env("KOFI_PROD_SUMMARY_URL", default="https://prices.fly.dev/webhooks/kofi/summary")
 
