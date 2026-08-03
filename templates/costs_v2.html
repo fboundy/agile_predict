@@ -1,129 +1,63 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="container-lg py-3" style="max-width:900px">
+<div class="container-lg py-3" style="max-width:640px">
 
   <div class="mb-3">
     <h5 class="mb-0">Costs &amp; revenue</h5>
-    <div class="text-body-secondary" style="font-size:.8rem">fly.io hosting cost estimate vs Ko-fi support — dev-only page</div>
+    <div class="text-body-secondary" style="font-size:.8rem">fly.io hosting vs Ko-fi support, by month (GBP)</div>
   </div>
 
-  {# ===== Fly cost estimate ===== #}
-  <div class="card border-0 shadow-sm mb-3" style="background:#2a2d31">
-    <div class="card-body py-3 px-4">
-      <div class="d-flex align-items-baseline justify-content-between flex-wrap gap-2 mb-2">
-        <h6 class="mb-0" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">fly.io hosting (estimated)</h6>
-        {% if fly.ok and fly.total %}<span class="fs-5 fw-bold">${{ fly.total }}<span class="text-body-secondary fs-6">/mo</span></span>{% endif %}
-      </div>
-      {% if fly.ok %}
-        {% for app in fly.apps %}
-        <div class="text-body-secondary mb-1" style="font-size:.78rem">app: <code>{{ app.app }}</code>{% if app.error %} — <span style="color:#f77">{{ app.error }}</span>{% endif %}</div>
-        {% if app.machines %}
-        <table class="table table-sm table-dark table-borderless mb-2" style="font-size:.85rem;background:transparent">
-          <thead><tr class="text-body-secondary">
-            <th>Machine</th><th>Group</th><th>Size</th><th>State</th><th class="text-end">Est. $/mo</th>
-          </tr></thead>
-          <tbody>
-            {% for m in app.machines %}
-            <tr>
-              <td>{{ m.name }}</td>
-              <td class="text-body-secondary">{{ m.group }}</td>
-              <td><code style="font-size:.8rem">{{ m.size }}</code></td>
-              <td>{% if m.state == "started" %}<span class="badge bg-success">started</span>{% else %}<span class="badge bg-secondary">{{ m.state }}</span>{% endif %}</td>
-              <td class="text-end">{% if m.est != None %}{{ m.est }}{% else %}<span class="text-body-secondary">n/a</span>{% endif %}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% endif %}
-        {% endfor %}
-        <div class="text-body-secondary" style="font-size:.75rem">
-          Compute estimate from published shared-CPU rates. Excludes bandwidth, volumes, dedicated IPs and any
-          apps not listed in <code>FLY_COST_APPS</code> (e.g. a separate Postgres app).
-        </div>
-      {% else %}
-        <div class="text-body-secondary" style="font-size:.9rem">Unavailable: {{ fly.error }}</div>
-      {% endif %}
-    </div>
-  </div>
-
-  {# ===== Ko-fi revenue ===== #}
-  <div class="card border-0 shadow-sm mb-3" style="background:#2a2d31">
-    <div class="card-body py-3 px-4">
-      <h6 class="mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">Ko-fi revenue</h6>
-
-      {% if kofi.currencies %}
-      <table class="table table-sm table-dark table-borderless mb-2" style="font-size:.85rem;background:transparent;max-width:560px">
-        <thead><tr class="text-body-secondary">
-          <th>Currency</th><th class="text-end">This month</th><th class="text-end">Last 90d</th><th class="text-end">All time</th>
-        </tr></thead>
-        <tbody>
-          {% for c in kofi.currencies %}
-          <tr>
-            <td>{{ c.currency }}</td>
-            <td class="text-end fw-semibold">{{ c.this_month }}</td>
-            <td class="text-end">{{ c.last_90d }}</td>
-            <td class="text-end">{{ c.all_time }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      {% else %}
-      <div class="text-body-secondary mb-2" style="font-size:.9rem">No payments recorded yet.</div>
-      {% endif %}
-
-      {% if monthly_rows %}
-      <div class="text-body-secondary mb-1" style="font-size:.78rem">Monthly revenue vs cost (GBP)</div>
-      <div style="max-height:420px;overflow-y:auto">
-      <table class="table table-sm table-dark table-borderless mb-2" style="font-size:.85rem;background:transparent;max-width:560px">
-        <thead><tr class="text-body-secondary">
-          <th>Month</th><th class="text-end">Payments</th><th class="text-end">Revenue &pound;</th><th class="text-end">Cost &pound;</th><th class="text-end">Net &pound;</th>
-        </tr></thead>
-        <tbody>
-          {% for m in monthly_rows %}
-          <tr>
-            <td>{{ m.month }}</td>
-            <td class="text-end text-body-secondary">{{ m.payments }}</td>
-            <td class="text-end">{{ m.revenue }}</td>
-            <td class="text-end text-body-secondary">{% if m.cost != None %}{{ m.cost }}{% else %}&mdash;{% endif %}</td>
-            <td class="text-end fw-semibold" style="color:{% if m.net != None and m.net < 0 %}#f77{% else %}#6fcf8e{% endif %}">{% if m.net != None %}{{ m.net }}{% else %}&mdash;{% endif %}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      </div>
-      <div class="text-body-secondary mb-2" style="font-size:.75rem">
-        Cost: live fly estimate ({% if cost_gbp %}&pound;{{ cost_gbp }}/mo = ${{ fly.total }} &times; {{ usd_gbp_rate }}{% else %}unavailable{% endif %})
-        from {{ cost_since|default:"?" }} — when the current machines were created. Earlier months use
-        <code>FLY_COST_HISTORY</code> invoice breakpoints if set, otherwise shown as &mdash; (fly has no
-        historic-billing API).
-      </div>
-      {% endif %}
-
-      <div class="text-body-secondary" style="font-size:.75rem">
-        Data source: {{ kofi_source }} — refresh with <code>manage.py import_kofi_csv</code> from a Ko-fi
-        transaction export, or add entries in the Django admin. Duplicates are skipped automatically.
-      </div>
-    </div>
-  </div>
-
-  {# ===== Net position ===== #}
+  {% if rows %}
   <div class="card border-0 shadow-sm" style="background:#2a2d31">
     <div class="card-body py-3 px-4">
-      <h6 class="mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">Net position (this month)</h6>
-      <div class="d-flex gap-4 flex-wrap" style="font-size:.95rem">
-        <div>Cost: <strong>{% if fly.ok %}~${{ fly.total }}{% else %}n/a{% endif %}</strong></div>
-        <div>Revenue:
-          <strong>
-            {% if kofi.currencies %}
-              {% for c in kofi.currencies %}{{ c.this_month }} {{ c.currency }}{% if not forloop.last %} + {% endif %}{% endfor %}
-            {% else %}0{% endif %}
-          </strong>
-        </div>
-      </div>
-      <div class="text-body-secondary mt-1" style="font-size:.75rem">Currencies shown as-is (no FX conversion); fly bills in USD, Ko-fi typically in GBP.</div>
+      <table class="table table-sm table-dark table-borderless mb-0" style="background:transparent">
+        <thead>
+          <tr class="text-body-secondary" style="border-bottom:1px solid #495057">
+            <th class="fw-normal py-1">Month</th>
+            <th class="fw-normal py-1 text-end">Cost</th>
+            <th class="fw-normal py-1 text-end">Revenue</th>
+            <th class="fw-normal py-1 text-end">Net</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td class="py-1">{{ r.month }}</td>
+            <td class="py-1 text-end text-body-secondary">{% if r.cost != None %}&pound;{{ r.cost|floatformat:2 }}{% if r.estimated %}<span title="estimated — not yet invoiced">*</span>{% endif %}{% else %}&mdash;{% endif %}</td>
+            <td class="py-1 text-end">{% if r.revenue %}&pound;{{ r.revenue|floatformat:2 }}{% else %}<span class="text-body-secondary">&mdash;</span>{% endif %}</td>
+            <td class="py-1 text-end fw-semibold" style="color:{% if r.net == None %}#adb5bd{% elif r.net < 0 %}#f77{% else %}#6fcf8e{% endif %}">
+              {% if r.net != None %}{% if r.net < 0 %}&minus;&pound;{{ r.net|slice:"1:"|floatformat:2 }}{% else %}&pound;{{ r.net|floatformat:2 }}{% endif %}{% else %}&mdash;{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+        <tfoot>
+          <tr style="border-top:1px solid #495057">
+            <td class="py-2 fw-semibold">Total</td>
+            <td class="py-2 text-end fw-semibold">&pound;{{ total_cost|floatformat:2 }}</td>
+            <td class="py-2 text-end fw-semibold">&pound;{{ total_revenue|floatformat:2 }}</td>
+            <td class="py-2 text-end fw-bold" style="color:{% if total_net < 0 %}#f77{% else %}#6fcf8e{% endif %}">
+              {% if total_net < 0 %}&minus;&pound;{{ total_net|slice:"1:"|floatformat:2 }}{% else %}&pound;{{ total_net|floatformat:2 }}{% endif %}
+            </td>
+          </tr>
+        </tfoot>
+      </table>
     </div>
   </div>
+
+  <div class="text-body-secondary mt-2 px-1" style="font-size:.73rem">
+    Cost = actual fly.io invoices (USD &times; {{ usd_gbp_rate }}); * = estimated, not yet invoiced.
+    Revenue = Ko-fi support. Update via <code>manage.py import_kofi_csv</code> and <code>FLY_COST_HISTORY</code>.
+  </div>
+  {% else %}
+  <div class="card border-0 shadow-sm" style="background:#2a2d31">
+    <div class="card-body py-3 px-4 text-body-secondary" style="font-size:.9rem">
+      No data yet. Import Ko-fi payments with <code>manage.py import_kofi_csv &lt;export.csv&gt;</code>
+      and set <code>FLY_COST_HISTORY</code> for hosting costs.
+    </div>
+  </div>
+  {% endif %}
 
 </div>
 {% endblock content %}

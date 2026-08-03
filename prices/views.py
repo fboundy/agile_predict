@@ -1955,80 +1955,80 @@ class CostsView(V2NavMixin, TemplateView):
                 prod_error = str(exc)[:120]
         else:
             prod_error = "KOFI_PROD_SUMMARY_URL or UPDATE_TOKEN not set"
-        # Prefer prod's data if it ever accumulates (webhook-fed); otherwise the
-        # local table (the chosen canonical store — CSV imports live here).
-        if prod and (prod.get("months") or prod.get("currencies")):
-            context["kofi"] = prod
-            context["kofi_source"] = "production"
-        else:
-            context["kofi"] = context["kofi_local"]
-            context["kofi_source"] = "this server"
-        context["kofi_prod_error"] = prod_error
+        kofi = prod if (prod and prod.get("months")) else context["kofi_local"]
 
-        # --- Combined monthly table: revenue vs cost vs net (GBP) ---
-        # Fly has no historic-billing API, so per-month cost comes from:
-        #   1. FLY_COST_HISTORY breakpoints (actual invoice amounts) for months
-        #      before the current machines existed;
-        #   2. the live estimate from the month the oldest current machine was
-        #      created (fly.since_ym) onward;
-        #   3. otherwise unknown (shown as em dash).
+        # --- One monthly table: cost vs revenue vs net, all in GBP ---
+        # Fly has no billing API, so per-month cost comes from FLY_COST_HISTORY
+        # breakpoints ("YYYY-MM:usd", each carried forward until the next) —
+        # derived from the machine count/size recorded in fly.toml's history.
+        # The live Machines API estimate overrides from the month the current
+        # machines were created.
         rate = getattr(settings, "FLY_USD_TO_GBP", 0.79)
         live_total = context["fly"].get("total")
         live_since = context["fly"].get("since_ym")
         breakpoints = []
         for part in (getattr(settings, "FLY_COST_HISTORY", "") or "").split(","):
-            part = part.strip()
             if ":" in part:
-                b_ym, _, b_usd = part.partition(":")
+                b_ym, _, b_usd = part.strip().partition(":")
                 try:
                     breakpoints.append((b_ym.strip(), float(b_usd)))
                 except ValueError:
                     pass
         breakpoints.sort()
 
+        actuals = dict(breakpoints)
+
         def _cost_usd_for(ym):
-            if live_total is not None and live_since and ym >= live_since:
-                return live_total
+            # 1. An actual invoice amount for that month is the truth.
+            if ym in actuals:
+                return actuals[ym], False
+            # 2. Otherwise carry the most recent invoice forward (the current
+            #    month isn't invoiced yet). Preferred over the live estimate,
+            #    which is compute-only and understates the real bill.
             latest = None
             for b_ym, b_usd in breakpoints:
                 if b_ym <= ym:
                     latest = b_usd
-                else:
-                    break
-            return latest
+            if latest is not None:
+                return latest, True
+            # 3. Fall back to the live compute estimate.
+            if live_total is not None and live_since and ym >= live_since:
+                return live_total, True
+            return None, False
 
-        context["cost_gbp"] = round(live_total * rate, 2) if live_total else None
-        context["usd_gbp_rate"] = rate
-        context["cost_since"] = live_since
+        by_month = {}
+        for m in kofi.get("months") or []:
+            key = m.get("ym") or datetime.strptime(m["month"], "%b %Y").strftime("%Y-%m")
+            entry = by_month.setdefault(key, {"label": m["month"], "revenue": 0.0})
+            entry["revenue"] += m["total"]
 
-        monthly_rows = []
-        months_src = context["kofi"].get("months") or []
-        if months_src:
-            by_month = {}
-            for m in months_src:
-                key = m.get("ym") or datetime.strptime(m["month"], "%b %Y").strftime("%Y-%m")
-                entry = by_month.setdefault(key, {"label": m["month"], "revenue": 0.0, "payments": 0})
-                entry["revenue"] += m["total"]
-                entry["payments"] += m["payments"]
-
-            # Fill gap months (zero revenue) from the earliest month to now.
-            first = datetime.strptime(min(by_month), "%Y-%m")
+        rows = []
+        tot_cost = tot_rev = 0.0
+        if by_month or breakpoints:
+            start = min(list(by_month) + [b[0] for b in breakpoints])
             cursor = timezone.now().replace(day=1)
-            while cursor.strftime("%Y-%m") >= first.strftime("%Y-%m"):
+            while cursor.strftime("%Y-%m") >= start:
                 key = cursor.strftime("%Y-%m")
-                entry = by_month.get(key, {"label": cursor.strftime("%b %Y"), "revenue": 0.0, "payments": 0})
+                entry = by_month.get(key, {"label": cursor.strftime("%b %Y"), "revenue": 0.0})
                 revenue = round(entry["revenue"], 2)
-                cost_usd = _cost_usd_for(key)
+                cost_usd, estimated = _cost_usd_for(key)
                 cost = round(cost_usd * rate, 2) if cost_usd is not None else None
-                monthly_rows.append({
+                tot_rev += revenue
+                tot_cost += cost or 0
+                rows.append({
                     "month": entry["label"],
-                    "payments": entry["payments"],
-                    "revenue": revenue,
                     "cost": cost,
+                    "estimated": estimated,
+                    "revenue": revenue,
                     "net": round(revenue - cost, 2) if cost is not None else None,
                 })
                 cursor = (cursor - timedelta(days=1)).replace(day=1)
-        context["monthly_rows"] = monthly_rows
+
+        context["rows"] = rows
+        context["total_cost"] = round(tot_cost, 2)
+        context["total_revenue"] = round(tot_rev, 2)
+        context["total_net"] = round(tot_rev - tot_cost, 2)
+        context["usd_gbp_rate"] = rate
         return context
 
 
