@@ -1955,7 +1955,18 @@ class CostsView(V2NavMixin, TemplateView):
                 prod_error = str(exc)[:120]
         else:
             prod_error = "KOFI_PROD_SUMMARY_URL or UPDATE_TOKEN not set"
-        kofi = prod if (prod and prod.get("months")) else context["kofi_local"]
+        # Prefer production (webhook-fed, so it gains new payments live), but
+        # never at the cost of history: if prod is unreachable or holds fewer
+        # payments than this server, fall back to the local table. Both stores
+        # dedupe on kofi_transaction_id, so the CSV import can be replayed to
+        # either without creating duplicates.
+        local = context["kofi_local"]
+        if prod and prod.get("count", 0) >= local.get("count", 0) and prod.get("months"):
+            kofi = prod
+            context["kofi_source"] = "production (webhook + imported history)"
+        else:
+            kofi = local
+            context["kofi_source"] = "this server"
 
         # --- One monthly table: cost vs revenue vs net, all in GBP ---
         # Fly has no billing API, so per-month cost comes from FLY_COST_HISTORY
