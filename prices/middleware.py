@@ -200,7 +200,8 @@ class ResponseCacheMiddleware:
     """
 
     CACHEABLE_PREFIXES = ("/v2/", "/api/")
-    EXCLUDE_PREFIXES = ("/v2/health",)
+    # Ops pages show live cross-server / API data — never serve them stale.
+    EXCLUDE_PREFIXES = ("/v2/health", "/v2/costs")
 
     def __init__(self, get_response):
         self.get_response = get_response
