@@ -13,7 +13,7 @@
     <div class="card-body py-3 px-4">
       <div class="d-flex align-items-baseline justify-content-between flex-wrap gap-2 mb-2">
         <h6 class="mb-0" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">fly.io hosting (estimated)</h6>
-        {% if fly.ok %}<span class="fs-5 fw-bold">${{ fly.total }}<span class="text-body-secondary fs-6">/mo</span></span>{% endif %}
+        {% if fly.ok and fly.total %}<span class="fs-5 fw-bold">${{ fly.total }}<span class="text-body-secondary fs-6">/mo</span></span>{% endif %}
       </div>
       {% if fly.ok %}
         {% for app in fly.apps %}

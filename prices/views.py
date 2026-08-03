@@ -1880,7 +1880,8 @@ def _fly_cost_estimate():
             apps.append({"app": app, "machines": machines})
         except Exception as exc:
             apps.append({"app": app, "error": str(exc)[:120], "machines": []})
-    return {"ok": True, "apps": apps, "total": round(total, 2)}
+    priced = any(m.get("est") is not None for a in apps for m in a["machines"])
+    return {"ok": True, "apps": apps, "total": round(total, 2) if priced else None}
 
 
 class CostsView(V2NavMixin, TemplateView):
