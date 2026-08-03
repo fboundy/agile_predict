@@ -2021,6 +2021,9 @@ class CostsView(V2NavMixin, TemplateView):
         tot_cost = tot_rev = tot_gross = tot_fees = 0.0
         if by_month or breakpoints:
             start = min(list(by_month) + [b[0] for b in breakpoints])
+            # Clamp to the configured start (default: where fly invoices begin,
+            # so no row shows an unknown cost). Totals follow the visible rows.
+            start = max(start, getattr(settings, "COSTS_START_MONTH", "") or start)
             cursor = timezone.now().replace(day=1)
             while cursor.strftime("%Y-%m") >= start:
                 key = cursor.strftime("%Y-%m")

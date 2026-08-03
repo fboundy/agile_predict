@@ -58,6 +58,9 @@ FLY_COST_HISTORY = env("FLY_COST_HISTORY", default="")
 # lands. PayPal: 2.9% + £0.30 per transaction (verified against invoices).
 # Ko-fi partner fee: 5% of gross, charged from KOFI_PARTNER_FEE_FROM onwards
 # (blank = always). Set KOFI_PARTNER_FEE_PCT=0 to disable.
+# Earliest month shown on the costs page ("YYYY-MM"; blank = all history).
+# Defaults to 2025-01, where the fly invoice record starts.
+COSTS_START_MONTH = env("COSTS_START_MONTH", default="2025-01")
 PAYPAL_FEE_PCT = env.float("PAYPAL_FEE_PCT", default=2.9)
 PAYPAL_FEE_FIXED = env.float("PAYPAL_FEE_FIXED", default=0.30)
 KOFI_PARTNER_FEE_PCT = env.float("KOFI_PARTNER_FEE_PCT", default=5.0)
