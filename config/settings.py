@@ -252,6 +252,17 @@ DATABASES = {
     # }
     "default": env.dj_db_url("DATABASE_URL", default="sqlite:///db.sqlite3"),
 }
+
+# Persistent database connections. Without this Django defaults to
+# CONN_MAX_AGE=0 and opens/closes a new Postgres connection for EVERY request —
+# over the internal network to a separate DB app, with a backend fork per
+# connect. Under load that stalls requests while CPU stays idle (the signature
+# of the 15s timeouts: TLS completes, then no bytes). Reusing connections
+# removes that per-request cost; 16 gunicorn threads is well inside the
+# server's max_connections (300). CONN_HEALTH_CHECKS avoids handing a stale
+# connection to a request after an idle period.
+DATABASES["default"]["CONN_MAX_AGE"] = env.int("DB_CONN_MAX_AGE", default=60)
+CONN_HEALTH_CHECKS = True
 # DATABASES = {
 #     "default": dj_database_url.config(  # Replace this value with your local database's connection string.
 #         default="postgresql://postgres:postgres@localhost:5432/mysite",
