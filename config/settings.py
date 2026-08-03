@@ -53,6 +53,15 @@ FLY_USD_TO_GBP = env.float("FLY_USD_TO_GBP", default=0.79)
 # else the last known amount is carried forward. Copy new figures from
 # fly.io dashboard → Billing → Invoices each month.
 FLY_COST_HISTORY = env("FLY_COST_HISTORY", default="")
+
+# Payment fees deducted from Ko-fi gross, so the page shows what actually
+# lands. PayPal: 2.9% + £0.30 per transaction (verified against invoices).
+# Ko-fi partner fee: 5% of gross, charged from KOFI_PARTNER_FEE_FROM onwards
+# (blank = always). Set KOFI_PARTNER_FEE_PCT=0 to disable.
+PAYPAL_FEE_PCT = env.float("PAYPAL_FEE_PCT", default=2.9)
+PAYPAL_FEE_FIXED = env.float("PAYPAL_FEE_FIXED", default=0.30)
+KOFI_PARTNER_FEE_PCT = env.float("KOFI_PARTNER_FEE_PCT", default=5.0)
+KOFI_PARTNER_FEE_FROM = env("KOFI_PARTNER_FEE_FROM", default="")  # "YYYY-MM"
 # Where the dev costs page fetches production's Ko-fi totals (X-Update-Token auth).
 KOFI_PROD_SUMMARY_URL = env("KOFI_PROD_SUMMARY_URL", default="https://prices.fly.dev/webhooks/kofi/summary")
 

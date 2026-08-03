@@ -1996,21 +1996,38 @@ class CostsView(V2NavMixin, TemplateView):
                 return live_total, True
             return None, False
 
+        # Payment fees: PayPal takes a % + a flat amount PER TRANSACTION (the
+        # flat part dominates on small tips), and Ko-fi takes a partner %.
+        pp_pct = getattr(settings, "PAYPAL_FEE_PCT", 2.9) / 100
+        pp_fixed = getattr(settings, "PAYPAL_FEE_FIXED", 0.30)
+        kofi_pct = getattr(settings, "KOFI_PARTNER_FEE_PCT", 5.0) / 100
+        kofi_from = getattr(settings, "KOFI_PARTNER_FEE_FROM", "") or ""
+
         by_month = {}
         for m in kofi.get("months") or []:
             key = m.get("ym") or datetime.strptime(m["month"], "%b %Y").strftime("%Y-%m")
-            entry = by_month.setdefault(key, {"label": m["month"], "revenue": 0.0})
-            entry["revenue"] += m["total"]
+            entry = by_month.setdefault(key, {"label": m["month"], "gross": 0.0, "payments": 0})
+            entry["gross"] += m["total"]
+            entry["payments"] += m.get("payments", 0)
+
+        for key, entry in by_month.items():
+            fee = entry["gross"] * pp_pct + entry["payments"] * pp_fixed
+            if kofi_pct and key >= kofi_from:
+                fee += entry["gross"] * kofi_pct
+            entry["fees"] = round(fee, 2)
+            entry["revenue"] = round(entry["gross"] - fee, 2)
 
         rows = []
-        tot_cost = tot_rev = 0.0
+        tot_cost = tot_rev = tot_gross = tot_fees = 0.0
         if by_month or breakpoints:
             start = min(list(by_month) + [b[0] for b in breakpoints])
             cursor = timezone.now().replace(day=1)
             while cursor.strftime("%Y-%m") >= start:
                 key = cursor.strftime("%Y-%m")
-                entry = by_month.get(key, {"label": cursor.strftime("%b %Y"), "revenue": 0.0})
+                entry = by_month.get(key, {"label": cursor.strftime("%b %Y"), "revenue": 0.0, "gross": 0.0, "fees": 0.0})
                 revenue = round(entry["revenue"], 2)
+                tot_gross += entry.get("gross", 0.0)
+                tot_fees += entry.get("fees", 0.0)
                 cost_usd, estimated = _cost_usd_for(key)
                 cost = round(cost_usd * rate, 2) if cost_usd is not None else None
                 tot_rev += revenue
@@ -2028,7 +2045,14 @@ class CostsView(V2NavMixin, TemplateView):
         context["total_cost"] = round(tot_cost, 2)
         context["total_revenue"] = round(tot_rev, 2)
         context["total_net"] = round(tot_rev - tot_cost, 2)
+        context["total_gross"] = round(tot_gross, 2)
+        context["total_fees"] = round(tot_fees, 2)
         context["usd_gbp_rate"] = rate
+        context["fee_desc"] = (
+            f"{getattr(settings, 'PAYPAL_FEE_PCT', 2.9)}% + "
+            f"£{getattr(settings, 'PAYPAL_FEE_FIXED', 0.30):.2f}/payment PayPal"
+            + (f", {getattr(settings, 'KOFI_PARTNER_FEE_PCT', 5.0)}% Ko-fi" if kofi_pct else "")
+        )
         return context
 
 

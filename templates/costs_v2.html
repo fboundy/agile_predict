@@ -48,7 +48,8 @@
 
   <div class="text-body-secondary mt-2 px-1" style="font-size:.73rem">
     Cost = actual fly.io invoices (USD &times; {{ usd_gbp_rate }}); * = estimated, not yet invoiced.
-    Revenue = Ko-fi support. Update via <code>manage.py import_kofi_csv</code> and <code>FLY_COST_HISTORY</code>.
+    Revenue = Ko-fi support after fees ({{ fee_desc }}) &mdash; gross &pound;{{ total_gross|floatformat:2 }}
+    less &pound;{{ total_fees|floatformat:2 }} fees. Update via <code>manage.py import_kofi_csv</code>.
   </div>
   {% else %}
   <div class="card border-0 shadow-sm" style="background:#2a2d31">
