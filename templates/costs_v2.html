@@ -77,6 +77,42 @@
         <div class="mb-2" style="font-size:.85rem;color:#ffc107">Production summary unavailable: {{ kofi_prod_error }}</div>
       {% endif %}
 
+      {% if kofi_prod.months %}
+      <div class="text-body-secondary mb-1" style="font-size:.78rem">Monthly totals (production)</div>
+      <table class="table table-sm table-dark table-borderless mb-2" style="font-size:.85rem;background:transparent;max-width:420px">
+        <thead><tr class="text-body-secondary">
+          <th>Month</th><th class="text-end">Payments</th><th class="text-end">Total</th><th>Currency</th>
+        </tr></thead>
+        <tbody>
+          {% for m in kofi_prod.months %}
+          <tr>
+            <td>{{ m.month }}</td>
+            <td class="text-end text-body-secondary">{{ m.payments }}</td>
+            <td class="text-end fw-semibold">{{ m.total }}</td>
+            <td class="text-body-secondary">{{ m.currency }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% elif kofi_local.months %}
+      <div class="text-body-secondary mb-1" style="font-size:.78rem">Monthly totals (this server)</div>
+      <table class="table table-sm table-dark table-borderless mb-2" style="font-size:.85rem;background:transparent;max-width:420px">
+        <thead><tr class="text-body-secondary">
+          <th>Month</th><th class="text-end">Payments</th><th class="text-end">Total</th><th>Currency</th>
+        </tr></thead>
+        <tbody>
+          {% for m in kofi_local.months %}
+          <tr>
+            <td>{{ m.month }}</td>
+            <td class="text-end text-body-secondary">{{ m.payments }}</td>
+            <td class="text-end fw-semibold">{{ m.total }}</td>
+            <td class="text-body-secondary">{{ m.currency }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+
       <div class="text-body-secondary mb-1" style="font-size:.78rem">This server (local table / manual entries)</div>
       {% if kofi_local.currencies %}
       <table class="table table-sm table-dark table-borderless mb-2" style="font-size:.85rem;background:transparent">

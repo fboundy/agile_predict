@@ -615,3 +615,25 @@ class ResponseCacheKeyTests(TestCase):
         with patch("prices.middleware.time.time", return_value=1_800_000_000 + 1800):
             key_b = mw._key(request)
         self.assertNotEqual(key_a, key_b)
+
+
+class KofiTotalsTests(TestCase):
+    def test_monthly_totals_grouped_by_month_and_currency(self):
+        from prices.models import KofiPayment
+        from prices.views import _kofi_totals
+
+        now = timezone.now()
+        last_month = (now.replace(day=1) - timedelta(days=1)).replace(day=15)
+        for i, (ts, amount) in enumerate([(now, 3), (now, 5), (last_month, 2)]):
+            KofiPayment.objects.create(
+                kofi_transaction_id=f"test-{i}", timestamp=ts, amount=amount, currency="GBP"
+            )
+
+        out = _kofi_totals()
+
+        self.assertEqual(out["count"], 3)
+        self.assertEqual(len(out["months"]), 2)  # two distinct months
+        self.assertEqual(out["months"][0]["total"], 8.0)  # newest month first
+        self.assertEqual(out["months"][0]["payments"], 2)
+        self.assertEqual(out["months"][1]["total"], 2.0)
+        self.assertEqual(out["currencies"][0]["this_month"], 8.0)

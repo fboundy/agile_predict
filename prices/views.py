@@ -1806,10 +1806,12 @@ def kofi_webhook(request):
 
 
 def _kofi_totals():
-    """Per-currency revenue aggregates from the local KofiPayment table."""
+    """Per-currency revenue aggregates + monthly breakdown from KofiPayment."""
+    from django.db.models.functions import TruncMonth
+
     now = timezone.now()
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    out = {"count": KofiPayment.objects.count(), "currencies": []}
+    out = {"count": KofiPayment.objects.count(), "currencies": [], "months": []}
     for cur in KofiPayment.objects.values_list("currency", flat=True).distinct():
         qs = KofiPayment.objects.filter(currency=cur)
         out["currencies"].append({
@@ -1818,6 +1820,22 @@ def _kofi_totals():
             "this_month": float(qs.filter(timestamp__gte=month_start).aggregate(s=Sum("amount"))["s"] or 0),
             "last_90d": float(qs.filter(timestamp__gte=now - timedelta(days=90)).aggregate(s=Sum("amount"))["s"] or 0),
         })
+    monthly = (
+        KofiPayment.objects
+        .annotate(m=TruncMonth("timestamp"))
+        .values("m", "currency")
+        .annotate(total=Sum("amount"), n=Count("id"))
+        .order_by("-m", "currency")
+    )
+    out["months"] = [
+        {
+            "month": r["m"].strftime("%b %Y"),
+            "currency": r["currency"],
+            "total": float(r["total"] or 0),
+            "payments": r["n"],
+        }
+        for r in monthly[:24]
+    ]
     return out
 
 
