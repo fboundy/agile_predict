@@ -52,29 +52,24 @@
     <div class="card-body py-3 px-4">
       <h6 class="mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">Ko-fi revenue</h6>
 
-      <div class="text-body-secondary mb-1" style="font-size:.78rem">Production (webhook-fed)</div>
-      {% if kofi_prod %}
-        {% if kofi_prod.currencies %}
-        <table class="table table-sm table-dark table-borderless mb-2" style="font-size:.85rem;background:transparent">
-          <thead><tr class="text-body-secondary">
-            <th>Currency</th><th class="text-end">This month</th><th class="text-end">Last 90d</th><th class="text-end">All time</th>
-          </tr></thead>
-          <tbody>
-            {% for c in kofi_prod.currencies %}
-            <tr>
-              <td>{{ c.currency }}</td>
-              <td class="text-end fw-semibold">{{ c.this_month }}</td>
-              <td class="text-end">{{ c.last_90d }}</td>
-              <td class="text-end">{{ c.all_time }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% else %}
-        <div class="text-body-secondary mb-2" style="font-size:.9rem">No payments recorded yet ({{ kofi_prod.count }} rows).</div>
-        {% endif %}
+      {% if kofi.currencies %}
+      <table class="table table-sm table-dark table-borderless mb-2" style="font-size:.85rem;background:transparent;max-width:560px">
+        <thead><tr class="text-body-secondary">
+          <th>Currency</th><th class="text-end">This month</th><th class="text-end">Last 90d</th><th class="text-end">All time</th>
+        </tr></thead>
+        <tbody>
+          {% for c in kofi.currencies %}
+          <tr>
+            <td>{{ c.currency }}</td>
+            <td class="text-end fw-semibold">{{ c.this_month }}</td>
+            <td class="text-end">{{ c.last_90d }}</td>
+            <td class="text-end">{{ c.all_time }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
       {% else %}
-        <div class="mb-2" style="font-size:.85rem;color:#ffc107">Production summary unavailable: {{ kofi_prod_error }}</div>
+      <div class="text-body-secondary mb-2" style="font-size:.9rem">No payments recorded yet.</div>
       {% endif %}
 
       {% if monthly_rows %}
@@ -98,35 +93,16 @@
       </table>
       </div>
       <div class="text-body-secondary mb-2" style="font-size:.75rem">
-        Cost column applies the <em>current</em> fly compute estimate ({% if cost_gbp %}&pound;{{ cost_gbp }}/mo = ${{ fly.total }} &times; {{ usd_gbp_rate }}{% else %}unavailable{% endif %})
-        uniformly to every month — fly has no historic-billing API, so past months assume today's infrastructure.
+        Cost: live fly estimate ({% if cost_gbp %}&pound;{{ cost_gbp }}/mo = ${{ fly.total }} &times; {{ usd_gbp_rate }}{% else %}unavailable{% endif %})
+        from {{ cost_since|default:"?" }} — when the current machines were created. Earlier months use
+        <code>FLY_COST_HISTORY</code> invoice breakpoints if set, otherwise shown as &mdash; (fly has no
+        historic-billing API).
       </div>
       {% endif %}
 
-      <div class="text-body-secondary mb-1" style="font-size:.78rem">This server (local table / manual entries)</div>
-      {% if kofi_local.currencies %}
-      <table class="table table-sm table-dark table-borderless mb-2" style="font-size:.85rem;background:transparent">
-        <tbody>
-          {% for c in kofi_local.currencies %}
-          <tr>
-            <td>{{ c.currency }}</td>
-            <td class="text-end fw-semibold">{{ c.this_month }}</td>
-            <td class="text-end">{{ c.last_90d }}</td>
-            <td class="text-end">{{ c.all_time }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      {% else %}
-      <div class="text-body-secondary mb-2" style="font-size:.9rem">No local payments recorded.</div>
-      {% endif %}
-
       <div class="text-body-secondary" style="font-size:.75rem">
-        Ko-fi has no fetch API — payments arrive via its webhook, which must point at the public site:
-        <code>https://agilepredict.com/webhooks/kofi/</code> (set the same verification token as
-        <code>KOFI_VERIFICATION_TOKEN</code>). Webhook token on this server:
-        {% if kofi_configured %}<span class="badge bg-success">configured</span>{% else %}<span class="badge bg-warning text-dark">not set</span>{% endif %}.
-        Manual entries can be added in the Django admin.
+        Data source: {{ kofi_source }} — refresh with <code>manage.py import_kofi_csv</code> from a Ko-fi
+        transaction export, or add entries in the Django admin. Duplicates are skipped automatically.
       </div>
     </div>
   </div>
@@ -139,8 +115,8 @@
         <div>Cost: <strong>{% if fly.ok %}~${{ fly.total }}{% else %}n/a{% endif %}</strong></div>
         <div>Revenue:
           <strong>
-            {% if kofi_prod and kofi_prod.currencies %}
-              {% for c in kofi_prod.currencies %}{{ c.this_month }} {{ c.currency }}{% if not forloop.last %} + {% endif %}{% endfor %}
+            {% if kofi.currencies %}
+              {% for c in kofi.currencies %}{{ c.this_month }} {{ c.currency }}{% if not forloop.last %} + {% endif %}{% endfor %}
             {% else %}0{% endif %}
           </strong>
         </div>

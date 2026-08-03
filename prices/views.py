@@ -1875,6 +1875,7 @@ def _fly_cost_estimate():
         return {"ok": False, "error": "FLY_API_TOKEN not set"}
     apps = []
     total = 0.0
+    since_ym = None
     for app in getattr(settings, "FLY_COST_APPS", ["prices"]):
         try:
             resp = _requests.get(
@@ -1889,6 +1890,9 @@ def _fly_cost_estimate():
                 est = _fly_machine_cost(guest)
                 if est is not None:
                     total += est
+                created = (m.get("created_at") or "")[:7]  # YYYY-MM
+                if created:
+                    since_ym = created if since_ym is None else min(since_ym, created)
                 machines.append({
                     "name": m.get("name", m.get("id", "?")),
                     "group": m.get("config", {}).get("env", {}).get("FLY_PROCESS_GROUP", ""),
@@ -1900,7 +1904,14 @@ def _fly_cost_estimate():
         except Exception as exc:
             apps.append({"app": app, "error": str(exc)[:120], "machines": []})
     priced = any(m.get("est") is not None for a in apps for m in a["machines"])
-    return {"ok": True, "apps": apps, "total": round(total, 2) if priced else None}
+    return {
+        "ok": True,
+        "apps": apps,
+        "total": round(total, 2) if priced else None,
+        # Month the oldest current machine was created — the live estimate is
+        # only valid from here; earlier months need FLY_COST_HISTORY.
+        "since_ym": since_ym,
+    }
 
 
 class CostsView(V2NavMixin, TemplateView):
@@ -1944,25 +1955,54 @@ class CostsView(V2NavMixin, TemplateView):
                 prod_error = str(exc)[:120]
         else:
             prod_error = "KOFI_PROD_SUMMARY_URL or UPDATE_TOKEN not set"
-        context["kofi_prod"] = prod
+        # Prefer prod's data if it ever accumulates (webhook-fed); otherwise the
+        # local table (the chosen canonical store — CSV imports live here).
+        if prod and (prod.get("months") or prod.get("currencies")):
+            context["kofi"] = prod
+            context["kofi_source"] = "production"
+        else:
+            context["kofi"] = context["kofi_local"]
+            context["kofi_source"] = "this server"
         context["kofi_prod_error"] = prod_error
 
         # --- Combined monthly table: revenue vs cost vs net (GBP) ---
-        # Revenue from whichever source has data (prod if webhook-fed, else the
-        # local table). Cost is the CURRENT fly estimate converted to GBP and
-        # applied uniformly to every month (fly has no historic-billing API).
-        months_src = []
-        if prod and prod.get("months"):
-            months_src = prod["months"]
-        elif context["kofi_local"].get("months"):
-            months_src = context["kofi_local"]["months"]
-
+        # Fly has no historic-billing API, so per-month cost comes from:
+        #   1. FLY_COST_HISTORY breakpoints (actual invoice amounts) for months
+        #      before the current machines existed;
+        #   2. the live estimate from the month the oldest current machine was
+        #      created (fly.since_ym) onward;
+        #   3. otherwise unknown (shown as em dash).
         rate = getattr(settings, "FLY_USD_TO_GBP", 0.79)
-        cost_gbp = round(context["fly"]["total"] * rate, 2) if context["fly"].get("total") else None
-        context["cost_gbp"] = cost_gbp
+        live_total = context["fly"].get("total")
+        live_since = context["fly"].get("since_ym")
+        breakpoints = []
+        for part in (getattr(settings, "FLY_COST_HISTORY", "") or "").split(","):
+            part = part.strip()
+            if ":" in part:
+                b_ym, _, b_usd = part.partition(":")
+                try:
+                    breakpoints.append((b_ym.strip(), float(b_usd)))
+                except ValueError:
+                    pass
+        breakpoints.sort()
+
+        def _cost_usd_for(ym):
+            if live_total is not None and live_since and ym >= live_since:
+                return live_total
+            latest = None
+            for b_ym, b_usd in breakpoints:
+                if b_ym <= ym:
+                    latest = b_usd
+                else:
+                    break
+            return latest
+
+        context["cost_gbp"] = round(live_total * rate, 2) if live_total else None
         context["usd_gbp_rate"] = rate
+        context["cost_since"] = live_since
 
         monthly_rows = []
+        months_src = context["kofi"].get("months") or []
         if months_src:
             by_month = {}
             for m in months_src:
@@ -1978,12 +2018,14 @@ class CostsView(V2NavMixin, TemplateView):
                 key = cursor.strftime("%Y-%m")
                 entry = by_month.get(key, {"label": cursor.strftime("%b %Y"), "revenue": 0.0, "payments": 0})
                 revenue = round(entry["revenue"], 2)
+                cost_usd = _cost_usd_for(key)
+                cost = round(cost_usd * rate, 2) if cost_usd is not None else None
                 monthly_rows.append({
                     "month": entry["label"],
                     "payments": entry["payments"],
                     "revenue": revenue,
-                    "cost": cost_gbp,
-                    "net": round(revenue - cost_gbp, 2) if cost_gbp is not None else None,
+                    "cost": cost,
+                    "net": round(revenue - cost, 2) if cost is not None else None,
                 })
                 cursor = (cursor - timedelta(days=1)).replace(day=1)
         context["monthly_rows"] = monthly_rows

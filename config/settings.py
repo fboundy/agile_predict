@@ -47,6 +47,11 @@ FLY_API_TOKEN = env("FLY_API_TOKEN", default="")
 FLY_COST_APPS = env.list("FLY_COST_APPS", default=["prices"])
 # For the monthly net column: fly bills USD, Ko-fi is GBP.
 FLY_USD_TO_GBP = env.float("FLY_USD_TO_GBP", default=0.79)
+# Historic monthly fly cost breakpoints (from your invoices), since fly has no
+# historic-billing API: "YYYY-MM:usd,YYYY-MM:usd" — each value applies from
+# that month until the next breakpoint. Months before the current machines
+# existed and not covered by a breakpoint show as unknown.
+FLY_COST_HISTORY = env("FLY_COST_HISTORY", default="")
 # Where the dev costs page fetches production's Ko-fi totals (X-Update-Token auth).
 KOFI_PROD_SUMMARY_URL = env("KOFI_PROD_SUMMARY_URL", default="https://prices.fly.dev/webhooks/kofi/summary")
 
