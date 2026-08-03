@@ -38,10 +38,12 @@
     <div class="card-body py-3 px-4">
       <h6 class="mb-2" style="font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">Caching &amp; data freshness</h6>
       <p style="font-size:.9rem" class="mb-0">
-        To reduce load, chart pages and API responses may be served from a short-lived cache
-        (up to about <strong>{{ cache_ttl }} seconds</strong>). This means a response can occasionally be a
-        few minutes behind the very latest data. Since underlying forecasts and confirmed prices update far
-        less frequently than that, it makes no practical difference to the numbers you see.
+        To reduce load, chart pages and API responses are served from a server-side cache that is
+        regenerated whenever the underlying data actually changes — when a new forecast or fresh Agile
+        prices arrive (a handful of times a day), or when the current half-hour pricing slot rolls over.
+        Your browser may additionally cache a response for up to
+        <strong>{{ cache_client_ttl }} seconds</strong>. In practice, what you see is never more than a few
+        minutes behind the newest available data.
       </p>
     </div>
   </div>

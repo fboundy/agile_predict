@@ -1913,7 +1913,7 @@ class ProdHealthView(V2NavMixin, TemplateView):
             "count": blocklist.status()["count"],
         }
         context["offenders"] = _load_rate_limit_offenders()
-        context["response_cache_ttl"] = getattr(settings, "RESPONSE_CACHE_TTL", 180)
+        context["response_cache_client_ttl"] = getattr(settings, "RESPONSE_CACHE_CLIENT_TTL", 300)
 
         df = _load_uptime_log()
         context["monitor_present"] = not df.empty
@@ -2027,7 +2027,7 @@ class LimitationsView(V2NavMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["rate_per_min"] = getattr(settings, "RATELIMIT_PER_MIN", 60)
-        context["cache_ttl"] = getattr(settings, "RESPONSE_CACHE_TTL", 180)
+        context["cache_client_ttl"] = getattr(settings, "RESPONSE_CACHE_CLIENT_TTL", 300)
         return context
 
 

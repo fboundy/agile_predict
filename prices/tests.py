@@ -574,3 +574,44 @@ class GasTtfHistoryTests(TestCase):
         self.assertIn("period2", params)
         self.assertNotIn("range", params)
         self.assertEqual(gas.iloc[0], 42.5)
+
+
+class ResponseCacheKeyTests(TestCase):
+    """The response cache is event-keyed: entries must invalidate the moment a
+    new forecast (or fresh prices) lands, and must roll with the half-hour slot."""
+
+    def _mw(self):
+        from prices.middleware import ResponseCacheMiddleware
+
+        return ResponseCacheMiddleware(lambda request: None)
+
+    def test_key_changes_when_new_forecast_lands(self):
+        from django.core.cache import cache
+
+        mw = self._mw()
+        request = RequestFactory().get("/v2/X/?days=2")
+        cache.delete("rc:data-ver")  # ensure fresh version computation
+        key_before = mw._key(request)
+
+        Forecasts.objects.create(name="cache-invalidation-test")
+        cache.delete("rc:data-ver")  # simulate micro-cache expiry (<=30s in prod)
+        key_after = mw._key(request)
+
+        self.assertNotEqual(key_before, key_after)
+
+    def test_key_stable_for_same_data_and_slot(self):
+        from django.core.cache import cache
+
+        mw = self._mw()
+        request = RequestFactory().get("/v2/X/?days=2")
+        cache.delete("rc:data-ver")
+        self.assertEqual(mw._key(request), mw._key(request))
+
+    def test_key_includes_slot_bucket(self):
+        mw = self._mw()
+        request = RequestFactory().get("/v2/X/?days=2")
+        with patch("prices.middleware.time.time", return_value=1_800_000_000):
+            key_a = mw._key(request)
+        with patch("prices.middleware.time.time", return_value=1_800_000_000 + 1800):
+            key_b = mw._key(request)
+        self.assertNotEqual(key_a, key_b)

@@ -182,12 +182,17 @@ class RateLimitMiddleware:
 
 
 class ResponseCacheMiddleware:
-    """Short-TTL cache of anonymous GET responses for the heavy chart/API paths.
+    """Event-keyed cache of anonymous GET responses for the heavy chart/API paths.
 
     The v2 chart pages and JSON API build Plotly figures + run sizeable queries
-    on every hit; their output only changes when a new forecast/price lands, so
-    caching identical (path+query) responses for a few minutes slashes worker
-    time for repeat and crawler traffic alike.
+    on every hit (~1.2s of CPU on the shared vCPU), but their content only
+    actually changes when (a) a new forecast / fresh Agile prices land (a
+    handful of times a day) or (b) the half-hour slot rolls over (the "Now"
+    marker, current-price card, upcoming-window calcs). So the cache key embeds
+    a data-version stamp and the current 30-min slot: entries are reused until
+    the content genuinely changes — a far better hit-rate than any fixed TTL,
+    with zero staleness right after an update lands. The stored TTL is only a
+    safety net; browsers get a separate short client TTL.
 
     Only cached when safe: anonymous (no session), GET, 200, no Set-Cookie
     (avoids freezing a CSRF/session cookie), body under a size cap, and on an
@@ -200,7 +205,8 @@ class ResponseCacheMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
         self.enabled = getattr(settings, "RESPONSE_CACHE_ENABLED", True)
-        self.ttl = getattr(settings, "RESPONSE_CACHE_TTL", 180)
+        self.ttl = getattr(settings, "RESPONSE_CACHE_TTL", 3600)
+        self.client_ttl = getattr(settings, "RESPONSE_CACHE_CLIENT_TTL", 300)
         self.max_bytes = getattr(settings, "RESPONSE_CACHE_MAX_BYTES", 2_000_000)
 
     def _cacheable_request(self, request):
@@ -213,8 +219,32 @@ class ResponseCacheMiddleware:
             return False
         return path.startswith(self.CACHEABLE_PREFIXES)
 
+    def _data_version(self):
+        """Cheap stamp of the underlying data: bumps when a new forecast or
+        fresh Agile prices land. Micro-cached for 30s so the per-request cost is
+        ~zero (worst case a new forecast shows ≤30s late). Fail-open to a static
+        stamp — the slot bucket in the key still bounds staleness to 30 min."""
+        try:
+            ver = cache.get("rc:data-ver")
+            if ver is None:
+                from prices.models import Forecasts, PriceHistory
+
+                fid = Forecasts.objects.order_by("-created_at").values_list("id", flat=True).first() or 0
+                pts = PriceHistory.objects.order_by("-date_time").values_list("date_time", flat=True).first()
+                ver = f"{fid}-{int(pts.timestamp()) if pts else 0}"
+                cache.set("rc:data-ver", ver, 30)
+            return ver
+        except Exception:  # pragma: no cover - fail open
+            return "na"
+
     def _key(self, request):
-        return f"rc:{request.get_host()}:{request.path}?{request.META.get('QUERY_STRING', '')}"
+        # Half-hour bucket: the only *time*-dependence the pages have (the "Now"
+        # marker and current-slot pricing) changes exactly on the half hour.
+        slot = int(time.time() // 1800)
+        return (
+            f"rc:{request.get_host()}:{request.path}?{request.META.get('QUERY_STRING', '')}"
+            f":v{self._data_version()}:s{slot}"
+        )
 
     def __call__(self, request):
         if not self._cacheable_request(request):
@@ -229,6 +259,7 @@ class ResponseCacheMiddleware:
             body, status, content_type = cached
             resp = HttpResponse(body, status=status, content_type=content_type)
             resp["X-Response-Cache"] = "HIT"
+            patch_response_headers(resp, cache_timeout=self.client_ttl)
             return resp
 
         response = self.get_response(request)
@@ -245,7 +276,9 @@ class ResponseCacheMiddleware:
                     (response.content, response.status_code, response.get("Content-Type", "text/html")),
                     timeout=self.ttl,
                 )
-                patch_response_headers(response, cache_timeout=self.ttl)
+                # Browsers get a short client TTL — they can't see the version
+                # key, so a long client cache would delay new forecasts.
+                patch_response_headers(response, cache_timeout=self.client_ttl)
                 response["X-Response-Cache"] = "MISS"
         except Exception:  # pragma: no cover - never fail because of caching
             logger.exception("response cache store failed")

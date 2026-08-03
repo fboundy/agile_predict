@@ -133,9 +133,14 @@ RATELIMIT_PER_MIN = env.int("RATELIMIT_PER_MIN", default=60)  # requests/min/IP 
 RATELIMIT_BLOCK_THRESHOLD = env.int("RATELIMIT_BLOCK_THRESHOLD", default=5)  # over-limit windows before an escalated block
 RATELIMIT_BLOCK_SECONDS = env.int("RATELIMIT_BLOCK_SECONDS", default=600)  # length of the escalated block
 
-# Short-TTL response caching for anonymous GETs on the heavy chart/API paths.
+# Event-keyed response caching for anonymous GETs on the heavy chart/API paths.
+# The cache key embeds the latest forecast/price version and the current 30-min
+# slot, so entries live until the content actually changes; RESPONSE_CACHE_TTL
+# is only a stored-entry safety net (must be >= 1800 to span a slot).
+# RESPONSE_CACHE_CLIENT_TTL is the browser-facing Cache-Control max-age.
 RESPONSE_CACHE_ENABLED = env.bool("RESPONSE_CACHE_ENABLED", default=True)
-RESPONSE_CACHE_TTL = env.int("RESPONSE_CACHE_TTL", default=900)
+RESPONSE_CACHE_TTL = env.int("RESPONSE_CACHE_TTL", default=3600)
+RESPONSE_CACHE_CLIENT_TTL = env.int("RESPONSE_CACHE_CLIENT_TTL", default=300)
 RESPONSE_CACHE_MAX_BYTES = env.int("RESPONSE_CACHE_MAX_BYTES", default=2_000_000)
 
 # Reputation blocklist — drop traffic from known-malicious IP ranges. Uses a
