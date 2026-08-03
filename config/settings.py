@@ -135,7 +135,7 @@ RATELIMIT_BLOCK_SECONDS = env.int("RATELIMIT_BLOCK_SECONDS", default=600)  # len
 
 # Short-TTL response caching for anonymous GETs on the heavy chart/API paths.
 RESPONSE_CACHE_ENABLED = env.bool("RESPONSE_CACHE_ENABLED", default=True)
-RESPONSE_CACHE_TTL = env.int("RESPONSE_CACHE_TTL", default=180)
+RESPONSE_CACHE_TTL = env.int("RESPONSE_CACHE_TTL", default=900)
 RESPONSE_CACHE_MAX_BYTES = env.int("RESPONSE_CACHE_MAX_BYTES", default=2_000_000)
 
 # Reputation blocklist — drop traffic from known-malicious IP ranges. Uses a
