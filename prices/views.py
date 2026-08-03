@@ -1,5 +1,5 @@
 from hmac import compare_digest
-from datetime import datetime, time as datetime_time, timedelta
+from datetime import datetime, time as datetime_time, timedelta, timezone as dt_timezone
 import json
 import logging
 from pathlib import Path
@@ -17,7 +17,7 @@ from django.core.mail import send_mail
 from django.http import HttpResponse, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
-from django.utils.dateparse import parse_date
+from django.utils.dateparse import parse_date, parse_datetime
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
@@ -37,6 +37,7 @@ from .models import (
     ForecastData,
     Forecasts,
     History,
+    KofiPayment,
     PlotImage,
     PriceHistory,
     UpdateJob,
@@ -1554,9 +1555,10 @@ class V2NavMixin:
                 "stats_link": "/v2/stats/",
                 "api_link": "/v2/api_how_to/",
                 "about_link": "/v2/about/",
-                # Only surface the prod-health page where the monitor log exists
-                # (the dev host) — keeps it off public production even after merges.
+                # Only surface the ops pages (health, costs) where the monitor log
+                # exists (the dev host) — keeps them off public production.
                 "health_link": "/v2/health/" if (Path(settings.BASE_DIR) / "logs" / "uptime_monitor.log").exists() else "",
+                "costs_link": "/v2/costs/" if (Path(settings.BASE_DIR) / "logs" / "uptime_monitor.log").exists() else "",
                 "home_link": "/v2/X/",
                 "is_v2": True,
                 "classic_url": "/X/",
@@ -1755,6 +1757,176 @@ def robots_txt(request):
         lines += [f"User-agent: {bot}", "Disallow: /", ""]
     lines += ["User-agent: *", "Crawl-delay: 10", "Disallow:", ""]
     return HttpResponse("\n".join(lines), content_type="text/plain")
+
+
+@csrf_exempt
+@require_POST
+def kofi_webhook(request):
+    """Receive Ko-fi payment notifications (configured in the Ko-fi dashboard).
+
+    Ko-fi POSTs a form field `data` containing JSON with a shared
+    `verification_token`. Rejected unless KOFI_VERIFICATION_TOKEN is set and
+    matches. Idempotent on kofi_transaction_id, so retries are safe.
+    """
+    expected = getattr(settings, "KOFI_VERIFICATION_TOKEN", "")
+    if not expected:
+        return HttpResponseForbidden("Webhook not configured")
+    try:
+        payload = json.loads(request.POST.get("data", ""))
+    except (TypeError, ValueError):
+        return HttpResponse("Bad payload", status=400)
+    if not compare_digest(str(payload.get("verification_token", "")), expected):
+        return HttpResponseForbidden("Forbidden")
+
+    txn = payload.get("kofi_transaction_id") or payload.get("message_id")
+    if not txn:
+        return HttpResponse("Missing transaction id", status=400)
+    ts = parse_datetime(str(payload.get("timestamp", ""))) or timezone.now()
+    if timezone.is_naive(ts):
+        ts = timezone.make_aware(ts, dt_timezone.utc)
+    try:
+        amount = float(payload.get("amount") or 0)
+    except (TypeError, ValueError):
+        amount = 0
+    KofiPayment.objects.get_or_create(
+        kofi_transaction_id=txn,
+        defaults={
+            "message_id": payload.get("message_id") or "",
+            "timestamp": ts,
+            "payment_type": payload.get("type") or "",
+            "from_name": payload.get("from_name") or "",
+            "message": payload.get("message") or "",
+            "amount": amount,
+            "currency": payload.get("currency") or "GBP",
+            "is_public": bool(payload.get("is_public", True)),
+            "is_subscription_payment": bool(payload.get("is_subscription_payment", False)),
+        },
+    )
+    return HttpResponse("OK")
+
+
+def _kofi_totals():
+    """Per-currency revenue aggregates from the local KofiPayment table."""
+    now = timezone.now()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    out = {"count": KofiPayment.objects.count(), "currencies": []}
+    for cur in KofiPayment.objects.values_list("currency", flat=True).distinct():
+        qs = KofiPayment.objects.filter(currency=cur)
+        out["currencies"].append({
+            "currency": cur,
+            "all_time": float(qs.aggregate(s=Sum("amount"))["s"] or 0),
+            "this_month": float(qs.filter(timestamp__gte=month_start).aggregate(s=Sum("amount"))["s"] or 0),
+            "last_90d": float(qs.filter(timestamp__gte=now - timedelta(days=90)).aggregate(s=Sum("amount"))["s"] or 0),
+        })
+    return out
+
+
+@require_GET
+def kofi_summary(request):
+    """Token-authed JSON revenue summary — lets the dev costs page read
+    production's Ko-fi totals (the webhook only fires at the public prod URL)."""
+    forbidden = _forbidden_if_update_token_invalid(request)
+    if forbidden:
+        return forbidden
+    return JsonResponse(_kofi_totals())
+
+
+# Fly compute pricing (USD/month, approximate published rates): shared CPUs bill
+# a per-cpu base with 256MB/cpu included; extra RAM ~$5/GB/mo. Estimate only.
+_FLY_SHARED_CPU_BASE = 1.94
+_FLY_RAM_PER_GB = 5.0
+
+
+def _fly_machine_cost(guest):
+    cpus = guest.get("cpus", 1)
+    mem_mb = guest.get("memory_mb", 256)
+    if guest.get("cpu_kind") != "shared":
+        return None  # performance sizes not estimated
+    included = 256 * cpus
+    extra_gb = max(0, mem_mb - included) / 1024
+    return round(_FLY_SHARED_CPU_BASE * cpus + _FLY_RAM_PER_GB * extra_gb, 2)
+
+
+def _fly_cost_estimate():
+    """Live machine inventory + estimated monthly compute cost via the Machines API."""
+    import requests as _requests
+
+    token = getattr(settings, "FLY_API_TOKEN", "")
+    if not token:
+        return {"ok": False, "error": "FLY_API_TOKEN not set"}
+    apps = []
+    total = 0.0
+    for app in getattr(settings, "FLY_COST_APPS", ["prices"]):
+        try:
+            resp = _requests.get(
+                f"https://api.machines.dev/v1/apps/{app}/machines",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=6,
+            )
+            resp.raise_for_status()
+            machines = []
+            for m in resp.json():
+                guest = m.get("config", {}).get("guest", {})
+                est = _fly_machine_cost(guest)
+                if est is not None:
+                    total += est
+                machines.append({
+                    "name": m.get("name", m.get("id", "?")),
+                    "group": m.get("config", {}).get("env", {}).get("FLY_PROCESS_GROUP", ""),
+                    "state": m.get("state", "?"),
+                    "size": f"{guest.get('cpu_kind','?')}-{guest.get('cpus','?')}x {guest.get('memory_mb','?')}MB",
+                    "est": est,
+                })
+            apps.append({"app": app, "machines": machines})
+        except Exception as exc:
+            apps.append({"app": app, "error": str(exc)[:120], "machines": []})
+    return {"ok": True, "apps": apps, "total": round(total, 2)}
+
+
+class CostsView(V2NavMixin, TemplateView):
+    """Dev-only costs vs revenue dashboard: estimated fly.io compute cost from
+    the Machines API, and Ko-fi revenue (local table + production's totals via
+    the token-authed summary endpoint). 404s on hosts without the dev marker
+    so financial figures are never exposed on public production.
+    """
+
+    template_name = "costs_v2.html"
+    _nav_page = "costs"
+
+    def dispatch(self, request, *args, **kwargs):
+        is_dev_host = (Path(settings.BASE_DIR) / "logs" / "uptime_monitor.log").exists()
+        if not is_dev_host and not (request.user.is_authenticated and request.user.is_staff):
+            from django.http import HttpResponseNotFound
+
+            return HttpResponseNotFound("Not found")
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        import requests as _requests
+
+        context = super().get_context_data(**kwargs)
+        context["fly"] = _fly_cost_estimate()
+        context["kofi_local"] = _kofi_totals()
+        context["kofi_configured"] = bool(getattr(settings, "KOFI_VERIFICATION_TOKEN", ""))
+
+        # Production's totals — the Ko-fi webhook fires at the public prod URL,
+        # so prod's DB is where real payments accumulate.
+        prod = None
+        prod_error = None
+        url = getattr(settings, "KOFI_PROD_SUMMARY_URL", "")
+        token = getattr(settings, "UPDATE_TOKEN", "")
+        if url and token:
+            try:
+                resp = _requests.get(url, headers={"X-Update-Token": token}, timeout=6)
+                resp.raise_for_status()
+                prod = resp.json()
+            except Exception as exc:
+                prod_error = str(exc)[:120]
+        else:
+            prod_error = "KOFI_PROD_SUMMARY_URL or UPDATE_TOKEN not set"
+        context["kofi_prod"] = prod
+        context["kofi_prod_error"] = prod_error
+        return context
 
 
 def _load_uptime_log():

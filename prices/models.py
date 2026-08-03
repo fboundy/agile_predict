@@ -160,3 +160,26 @@ class ForecastData(models.Model):
 
     # def __str__(self):
     #     return f"{self.date_time.strftime('%Y-%m-%dT%H:%M%Z') {self.agile:5.2f}}"
+
+
+class KofiPayment(models.Model):
+    """A Ko-fi support payment, recorded via the Ko-fi webhook (or entered
+    manually in the admin). Feeds the dev-only costs/revenue page."""
+
+    kofi_transaction_id = models.CharField(max_length=64, unique=True)
+    message_id = models.CharField(max_length=64, blank=True)
+    timestamp = models.DateTimeField()
+    payment_type = models.CharField(max_length=32, blank=True)  # Donation / Subscription / Shop Order
+    from_name = models.CharField(max_length=128, blank=True)
+    message = models.TextField(blank=True)
+    amount = models.DecimalField(max_digits=8, decimal_places=2)
+    currency = models.CharField(max_length=3, default="GBP")
+    is_public = models.BooleanField(default=True)
+    is_subscription_payment = models.BooleanField(default=False)
+    received_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-timestamp"]
+
+    def __str__(self):
+        return f"{self.from_name or 'anon'} {self.amount} {self.currency} @ {self.timestamp:%Y-%m-%d}"

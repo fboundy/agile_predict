@@ -39,6 +39,15 @@ ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["agilepredict.com", ".agilepr
 UPDATE_TOKEN = env("UPDATE_TOKEN", default="")
 ENTSOE_API_KEY = env("ENTSOE_API_KEY", default="")
 
+# --- Costs/revenue page (dev-only UI; webhook lives on prod) ---
+# Ko-fi webhook shared secret (from the Ko-fi dashboard's webhook settings).
+KOFI_VERIFICATION_TOKEN = env("KOFI_VERIFICATION_TOKEN", default="")
+# Fly Machines API token for the cost estimate (read-only use).
+FLY_API_TOKEN = env("FLY_API_TOKEN", default="")
+FLY_COST_APPS = env.list("FLY_COST_APPS", default=["prices"])
+# Where the dev costs page fetches production's Ko-fi totals (X-Update-Token auth).
+KOFI_PROD_SUMMARY_URL = env("KOFI_PROD_SUMMARY_URL", default="https://prices.fly.dev/webhooks/kofi/summary")
+
 
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 Path(LOG_DIR).mkdir(parents=True, exist_ok=True)  # ensure it exists

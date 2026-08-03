@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-lg py-3" style="max-width:900px">
+
+  <div class="mb-3">
+    <h5 class="mb-0">Costs &amp; revenue</h5>
+    <div class="text-body-secondary" style="font-size:.8rem">fly.io hosting cost estimate vs Ko-fi support — dev-only page</div>
+  </div>
+
+  {# ===== Fly cost estimate ===== #}
+  <div class="card border-0 shadow-sm mb-3" style="background:#2a2d31">
+    <div class="card-body py-3 px-4">
+      <div class="d-flex align-items-baseline justify-content-between flex-wrap gap-2 mb-2">
+        <h6 class="mb-0" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">fly.io hosting (estimated)</h6>
+        {% if fly.ok %}<span class="fs-5 fw-bold">${{ fly.total }}<span class="text-body-secondary fs-6">/mo</span></span>{% endif %}
+      </div>
+      {% if fly.ok %}
+        {% for app in fly.apps %}
+        <div class="text-body-secondary mb-1" style="font-size:.78rem">app: <code>{{ app.app }}</code>{% if app.error %} — <span style="color:#f77">{{ app.error }}</span>{% endif %}</div>
+        {% if app.machines %}
+        <table class="table table-sm table-dark table-borderless mb-2" style="font-size:.85rem;background:transparent">
+          <thead><tr class="text-body-secondary">
+            <th>Machine</th><th>Group</th><th>Size</th><th>State</th><th class="text-end">Est. $/mo</th>
+          </tr></thead>
+          <tbody>
+            {% for m in app.machines %}
+            <tr>
+              <td>{{ m.name }}</td>
+              <td class="text-body-secondary">{{ m.group }}</td>
+              <td><code style="font-size:.8rem">{{ m.size }}</code></td>
+              <td>{% if m.state == "started" %}<span class="badge bg-success">started</span>{% else %}<span class="badge bg-secondary">{{ m.state }}</span>{% endif %}</td>
+              <td class="text-end">{% if m.est != None %}{{ m.est }}{% else %}<span class="text-body-secondary">n/a</span>{% endif %}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+        {% endfor %}
+        <div class="text-body-secondary" style="font-size:.75rem">
+          Compute estimate from published shared-CPU rates. Excludes bandwidth, volumes, dedicated IPs and any
+          apps not listed in <code>FLY_COST_APPS</code> (e.g. a separate Postgres app).
+        </div>
+      {% else %}
+        <div class="text-body-secondary" style="font-size:.9rem">Unavailable: {{ fly.error }}</div>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ===== Ko-fi revenue ===== #}
+  <div class="card border-0 shadow-sm mb-3" style="background:#2a2d31">
+    <div class="card-body py-3 px-4">
+      <h6 class="mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">Ko-fi revenue</h6>
+
+      <div class="text-body-secondary mb-1" style="font-size:.78rem">Production (webhook-fed)</div>
+      {% if kofi_prod %}
+        {% if kofi_prod.currencies %}
+        <table class="table table-sm table-dark table-borderless mb-2" style="font-size:.85rem;background:transparent">
+          <thead><tr class="text-body-secondary">
+            <th>Currency</th><th class="text-end">This month</th><th class="text-end">Last 90d</th><th class="text-end">All time</th>
+          </tr></thead>
+          <tbody>
+            {% for c in kofi_prod.currencies %}
+            <tr>
+              <td>{{ c.currency }}</td>
+              <td class="text-end fw-semibold">{{ c.this_month }}</td>
+              <td class="text-end">{{ c.last_90d }}</td>
+              <td class="text-end">{{ c.all_time }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="text-body-secondary mb-2" style="font-size:.9rem">No payments recorded yet ({{ kofi_prod.count }} rows).</div>
+        {% endif %}
+      {% else %}
+        <div class="mb-2" style="font-size:.85rem;color:#ffc107">Production summary unavailable: {{ kofi_prod_error }}</div>
+      {% endif %}
+
+      <div class="text-body-secondary mb-1" style="font-size:.78rem">This server (local table / manual entries)</div>
+      {% if kofi_local.currencies %}
+      <table class="table table-sm table-dark table-borderless mb-2" style="font-size:.85rem;background:transparent">
+        <tbody>
+          {% for c in kofi_local.currencies %}
+          <tr>
+            <td>{{ c.currency }}</td>
+            <td class="text-end fw-semibold">{{ c.this_month }}</td>
+            <td class="text-end">{{ c.last_90d }}</td>
+            <td class="text-end">{{ c.all_time }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="text-body-secondary mb-2" style="font-size:.9rem">No local payments recorded.</div>
+      {% endif %}
+
+      <div class="text-body-secondary" style="font-size:.75rem">
+        Ko-fi has no fetch API — payments arrive via its webhook, which must point at the public site:
+        <code>https://agilepredict.com/webhooks/kofi/</code> (set the same verification token as
+        <code>KOFI_VERIFICATION_TOKEN</code>). Webhook token on this server:
+        {% if kofi_configured %}<span class="badge bg-success">configured</span>{% else %}<span class="badge bg-warning text-dark">not set</span>{% endif %}.
+        Manual entries can be added in the Django admin.
+      </div>
+    </div>
+  </div>
+
+  {# ===== Net position ===== #}
+  <div class="card border-0 shadow-sm" style="background:#2a2d31">
+    <div class="card-body py-3 px-4">
+      <h6 class="mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#adb5bd">Net position (this month)</h6>
+      <div class="d-flex gap-4 flex-wrap" style="font-size:.95rem">
+        <div>Cost: <strong>{% if fly.ok %}~${{ fly.total }}{% else %}n/a{% endif %}</strong></div>
+        <div>Revenue:
+          <strong>
+            {% if kofi_prod and kofi_prod.currencies %}
+              {% for c in kofi_prod.currencies %}{{ c.this_month }} {{ c.currency }}{% if not forloop.last %} + {% endif %}{% endfor %}
+            {% else %}0{% endif %}
+          </strong>
+        </div>
+      </div>
+      <div class="text-body-secondary mt-1" style="font-size:.75rem">Currencies shown as-is (no FX conversion); fly bills in USD, Ko-fi typically in GBP.</div>
+    </div>
+  </div>
+
+</div>
+{% endblock content %}

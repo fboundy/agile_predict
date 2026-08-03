@@ -85,6 +85,11 @@
                                     <a class="nav-link{% if current_page == 'health' %} active{% endif %}"{% if current_page == 'health' %} aria-current="page"{% endif %} href="{{ health_link }}">Health</a>
                                 </li>
                                 {% endif %}
+                                {% if costs_link %}
+                                <li class="nav-item">
+                                    <a class="nav-link{% if current_page == 'costs' %} active{% endif %}"{% if current_page == 'costs' %} aria-current="page"{% endif %} href="{{ costs_link }}">Costs</a>
+                                </li>
+                                {% endif %}
                                 <li class="nav-item">
                                     <script
                                         type="text/javascript"
