@@ -713,3 +713,29 @@ class CanonicalCacheKeyTests(TestCase):
     # --- safety: unparseable values fall back rather than collapse ---
     def test_unparseable_days_falls_back_to_raw_query(self):
         self._diff("/v2/X/?days=abc", "/v2/X/?days=xyz")
+
+
+class InvalidRegionTests(TestCase):
+    """An unrecognised region must not cost a full chart render: it used to fall
+    back to the national chart, and since the response-cache key includes the
+    path, every bogus path was an uncacheable full render."""
+
+    def test_invalid_region_redirects_cheaply(self):
+        response = self.client.get("/v2/zzz/")
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], "/v2/X/")
+
+    def test_invalid_region_preserves_query(self):
+        response = self.client.get("/v2/s/?days=14&gen=1")
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], "/v2/X/?days=14&gen=1")
+
+    def test_valid_region_not_redirected(self):
+        # Routing only. Rendering needs forecast data this test DB lacks, and the
+        # test client re-raises view exceptions, so suppress that and assert the
+        # request was not short-circuited into a redirect.
+        from django.test import Client
+
+        c = Client(raise_request_exception=False)
+        self.assertNotEqual(c.get("/v2/G/").status_code, 302)
+        self.assertNotEqual(c.get("/v2/g/").status_code, 302)

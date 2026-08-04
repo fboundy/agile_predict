@@ -2349,6 +2349,23 @@ class LimitationsView(V2NavMixin, TemplateView):
 class GraphV2View(V2NavMixin, TemplateView):
     """Colour-coded bar chart UI — alternative to the accordion-sidebar GraphFormView."""
 
+    def dispatch(self, request, *args, **kwargs):
+        # An unrecognised region used to silently render the full national chart.
+        # That is ~1.2s of CPU and a large response for a URL that means nothing,
+        # and because the response-cache key includes the path, every distinct
+        # bogus path was its own cache entry that could never be hit — so a
+        # crawler walking /v2/<anything>/ generated unlimited uncacheable
+        # renders. Redirect instead: same destination for a human typo, but a
+        # few bytes rather than a full render, and it collapses onto the one
+        # cached /v2/X/ entry.
+        region = (kwargs.get("region") or "X").upper()
+        if region not in regions:
+            from django.shortcuts import redirect as _redirect
+
+            qs = request.META.get("QUERY_STRING", "")
+            return _redirect(f"/v2/X/?{qs}" if qs else "/v2/X/")
+        return super().dispatch(request, *args, **kwargs)
+
     template_name = "graph_v2.html"
     _nav_page = "home"
 
