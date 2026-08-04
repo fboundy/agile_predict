@@ -20,3 +20,6 @@ plots/
 environment.yml
 catboost_info/
 *_results.csv
+
+# Local Django file cache (never ship into the image)
+.django_cache/
