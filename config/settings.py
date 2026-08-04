@@ -143,13 +143,28 @@ LOGGING = {
 # survives the frequent worker reboots (a per-process LocMemCache is wiped every
 # time a worker is recycled). Used for response caching, rate-limit counters,
 # and the existing stats-context cache.
+# Still used for the blocklist's single pickle (written ~every 6h, not per
+# request), so keep the directory even though the cache backend is in-memory.
 CACHE_DIR = env("CACHE_DIR", default=os.path.join(BASE_DIR, ".django_cache"))
+Path(CACHE_DIR).mkdir(parents=True, exist_ok=True)
+# In-memory cache, NOT FileBasedCache. FileBasedCache re-lists the whole cache
+# directory on every write to decide whether to cull, and RateLimitMiddleware
+# writes on EVERY request — so each request did a directory scan growing toward
+# MAX_ENTRIES (plus a 250-file delete once over). That degraded the app as the
+# directory filled and eventually wedged it entirely: requests blocked on disk
+# I/O with CPU idle, unaffected by adding threads, and temporarily cured by a
+# restart (fly hands back a fresh rootfs, emptying the directory). Caused the
+# 2026-08-04 outage. LocMemCache is O(1) per write with no I/O.
+# Trade-offs, both acceptable here: the cache is per-process, so each of the 2
+# workers keeps its own copy (a unique URL can miss once per worker), and
+# rate-limit counters are per-worker (effective limit up to 2x RATELIMIT_PER_MIN
+# — deliberately erring towards not blocking real users).
 CACHES = {
     "default": {
-        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
-        "LOCATION": CACHE_DIR,
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "agilepredict",
         "TIMEOUT": 300,
-        "OPTIONS": {"MAX_ENTRIES": 1000, "CULL_FREQUENCY": 4},
+        "OPTIONS": {"MAX_ENTRIES": 400, "CULL_FREQUENCY": 4},
     },
 }
 
