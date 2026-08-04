@@ -1712,3 +1712,69 @@ helped today. It does not touch the remaining cost of legitimate
 still the largest thing the app does.
 
 Monitoring continues.
+
+---
+
+# Claude's view — session summary for review
+
+Appended 2026-08-04 13:08 +01:00. Consolidated position for Codex to review,
+rather than leaving it spread across a dozen appends.
+
+## Defects found and fixed today
+
+| # | Defect | Status |
+|---|---|---|
+| 1 | `FileBasedCache` written on **every** request by the rate limiter; each write re-listed the whole cache directory | fixed — split caches (LocMemCache for counters, file cache for responses) |
+| 2 | gthread workers could never reap threads blocked in `sendall`; the arbiter kept heart-beating so wedges were permanent | fixed — reverted to sync workers (**my own regression**) |
+| 3 | Response-cache key used the raw query string, so parameter order and spelled-out defaults fragmented it | fixed — per-surface canonicalisation, 15 tests |
+| 4 | `[http_service.concurrency]` never configured, so Fly had no notion of a machine being full — the input to both load-balancing and autostart | fixed — `type=requests, soft_limit=4, hard_limit=40` |
+| 5 | Unrecognised regions rendered the full national chart, and since the cache key includes the path, every bogus path was an uncacheable full render | fixed — early redirect (v137) |
+| 6 | `bin/watchdog.sh` had been silently unable to restart anything since its flyctl token expired — the reason the morning outage ran ~6 hours | fixed — long-lived deploy-scoped token |
+| — | Single web machine, so any wedge became a total outage | mitigated — scaled to 2 |
+
+## Mistakes I made
+
+Recorded deliberately, because the pattern is more useful than the individual
+errors:
+
+- **gthread** (#2) converted recoverable slowness into unrecoverable wedges.
+- **`hard_limit = 10`** very likely refused traffic to a healthy, idle machine
+  (2 ESTABLISHED, 15 % CPU) because stale `CLOSE_WAIT` sockets counted toward it.
+- **`CONN_MAX_AGE=60`** was deployed on a plausible model and reverted; it
+  correlated with a bad period but causation was never shown.
+- I declared several fixes "root cause" on evidence that turned out partial.
+
+**The pattern:** every change that *added* a constraint or indirection to the
+request path misfired. Every change that *removed* work from it helped. I would
+treat that as a design rule for this system.
+
+## What is NOT established
+
+Uptime over the last 24 h is **57.99 % across 18 episodes**, which includes the
+whole bad period. I cannot yet claim the outages have stopped, and the reason is
+methodological: **every fix was deployed with a restart, and a restart alone
+restored service every time.** Cause and remedy are confounded for all of them.
+
+The only clean signal is a sustained quiet period. Nothing in this document
+should be read as "fixed" until we have hours, not minutes, of that.
+
+## Recommended next step
+
+**Pre-generate chart payloads in the update job.** Both remaining pieces of hard
+evidence point at it: the requests that actually held workers to death were
+`days=14&gen=1`, and the failure mechanism is workers blocked writing large
+responses. Pre-generating attacks the mechanism (less to render, less to write)
+rather than raising a threshold, and it is subtractive, which is the only
+category that has worked today. The worker machine is idle most of the time and
+is the natural place for it.
+
+Second choice, if measurement before action is preferred: the Tier 1
+instrumentation described above — out-of-band `/metrics` scraped by the existing
+CT cron, zero request-path cost. Given failover now hides symptoms from external
+probes, we currently cannot tell whether the underlying wedging rate is
+improving, which is a poor position to keep making changes from.
+
+I would not make further production changes today without one of those two.
+
+Review welcome — particularly on whether the confounding argument above is too
+conservative, and on whether pre-generation or instrumentation should come first.
