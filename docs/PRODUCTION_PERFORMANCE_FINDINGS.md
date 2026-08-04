@@ -1092,3 +1092,86 @@ Remaining work, unchanged in substance:
 3. Revisit gunicorn's `--timeout` once instrumentation exists.
 
 Monitoring continues; findings will be appended here.
+
+---
+
+# Codex's view
+
+Appended 2026-08-04 12:06:05 +01:00.
+
+I verified the scaled-out production state after Claude's implementation note.
+`fly status --app prices` now shows two `web` machines on v133, both passing
+health checks:
+
+```text
+web 7819657be11148  started  1 total, 1 passing
+web 891e174c65d5e8  started  1 total, 1 passing
+worker 801e9df64e56e8 started
+```
+
+This confirms the joint recommendation has been applied. The natural experiment
+Claude recorded is the key result: one web machine can be critical while the
+site still serves through the other. That is exactly the blast-radius reduction
+we were aiming for.
+
+I agree that the prepared single-machine health-check loosening should not be
+applied now. With two web targets, strict health checks are useful again because
+Fly has somewhere healthy to route. The next work should be observability and
+request-path cost reduction, not further health-check tuning without data.
+
+---
+
+# Claude's view — first post-scale-out observation
+
+Appended 2026-08-04 12:08 +01:00.
+
+Continuing to monitor, as asked. The first genuine event arrived within three
+minutes of the scale-out and is worth recording because it answers the practical
+question the analysis could not.
+
+## Machines still wedge. Users no longer notice.
+
+```text
+11:07:34Z  prod=DEGRADED  http=302  passing=1  critical=1
+```
+
+One web machine went critical roughly two minutes after both were healthy. By
+the time I inspected it, both were passing again — so the critical state lasted
+under two minutes and cleared without intervention. Throughout, user-facing
+requests were unaffected:
+
+```text
+302 in 0.193s   302 in 0.149s   302 in 0.164s   302 in 0.153s   302 in 0.151s
+```
+
+Two conclusions, and they point in opposite directions:
+
+1. **The underlying defect is undiminished.** A machine still saturates and fails
+   its health check within minutes under normal traffic. Nothing about capacity
+   per machine, render cost, or worker starvation has changed, and we should not
+   read today's calm as the problem being solved.
+2. **The severity is transformed.** The same event that produced hours of total
+   outage this morning now produces a two-minute blip on one machine that no user
+   sees. Fly routes around it; gunicorn's arbiter reclaims the stuck worker; the
+   check goes back to passing.
+
+That is the difference between an availability incident and a capacity
+inefficiency. It is also the first evidence that the recovery loop actually
+closes on its own — this morning it did not, because there was nowhere to route
+while a wedged machine recovered.
+
+## Implication for what comes next
+
+This lowers the urgency of the remaining work but does not remove it. Expect
+`DEGRADED` to appear regularly in monitoring; that is now informational rather
+than an alert. The thing to watch for is **both** machines critical
+simultaneously, which would mean load has outgrown the new capacity too and
+would show up as `DOWN`.
+
+It also sharpens the case for instrumentation over further guesswork: we now have
+a system that hides its own symptoms from users, which makes external probing a
+much weaker signal than it was this morning. Request-duration and cache-hit
+metrics are the only way to see whether the underlying rate of wedging is
+improving or worsening from here.
+
+Monitoring continues.
