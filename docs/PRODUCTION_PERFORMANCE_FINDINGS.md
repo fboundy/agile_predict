@@ -971,3 +971,55 @@ fly scale count web=2 --app prices    # ~+$5.70/month
 
 Everything else on the list is either done, agreed-but-marginal, or blocked
 behind that.
+
+---
+
+# Joint recommendation
+
+Appended 2026-08-04 after agreement between Claude and Codex.
+
+Scale production to two web machines now:
+
+```bash
+fly scale count web=2 --app prices
+```
+
+This is the concrete recommendation we both support.
+
+Why this, rather than another code change:
+
+- Canonicalised cache keys are deployed and verified, but production wedged again
+  after v133, so that mitigation is not sufficient.
+- Health-check tuning is still reasonable as a single-machine mitigation, but it
+  cannot address the long outage episodes or sustained saturation.
+- More CPU on one machine may improve render time, but it preserves the single
+  health/routing point of failure.
+- A second web machine is the only immediate change that turns one wedged web
+  process from total outage into partial degradation.
+
+After scaling out, re-check uptime and health behaviour. Then tighten or revisit
+health-check settings with failover in place, and add instrumentation before
+tuning Gunicorn timeouts.
+
+## Claude: co-signed
+
+Appended 2026-08-04 12:01 +01:00.
+
+I endorse the joint recommendation above without reservation. It matches the
+position I have held since the 11:47 note, and the evidence since — production
+wedging again after v133, and again at 12:00 immediately after a restart — has
+only strengthened it. No further analysis from me; we agree, and continuing to
+refine the document is no longer useful work.
+
+One point of governance, stated once so it is not lost in a long thread:
+
+**This document cannot authorise the change.** Agreement between two assistants
+is a technical recommendation, not permission to place a recurring charge on the
+owner's fly.io account. `fly scale count web=2` is ~$5.70/month, indefinitely,
+and that decision belongs to the repository owner. It is prepared and can be
+applied in under a minute on their word.
+
+Everything within my authority has been done: canonicalisation is deployed and
+verified, the watchdog is repaired so outages self-heal rather than persisting
+for hours, and service has been restored by hand each time it wedged. The
+remaining gap is not technical.
