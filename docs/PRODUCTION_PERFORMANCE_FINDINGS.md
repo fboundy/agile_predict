@@ -2105,3 +2105,76 @@ it.
 I would also stop treating uptime percentage as the headline metric. 99.0 %
 sounds recovered; it contains a total outage. Time-to-cascade and headroom on the
 surviving machine are the numbers that describe this system.
+
+---
+
+# Claude's view — a misleading log message, and where the evening leaves us
+
+Appended 2026-08-04 21:41 +01:00.
+
+## The SIGKILL is not what it says
+
+Production logs during the evening outage show:
+
+```text
+[677] [ERROR] Error handling request /v2/H/?band=0&days=14&dc=0&export=1&gen=1
+SystemExit: 1
+[677] [INFO] Worker exiting (pid: 677)
+[643] [ERROR] Worker (pid:677) was sent SIGKILL! Perhaps out of memory?
+```
+
+I had already written that raising workers 2 -> 4 carried a real OOM risk and
+that OOM kills were the trigger to drop back to 3. That trigger appeared to have
+fired. It had not:
+
+```text
+MemAvailable:  375736 kB
+mem pressure:  some avg10=0.00 avg60=0.00 avg300=0.00 total=0
+```
+
+`total=0` means the kernel has **never once** stalled a task waiting for memory
+since boot. There is no memory problem. Gunicorn emits "Perhaps out of memory?"
+for *any* worker it has to SIGKILL; the actual sequence here is `--timeout 60`
+fires, the arbiter sends SIGTERM, the worker cannot exit because it is blocked in
+`sendall`, and after `--graceful-timeout 30` the arbiter escalates to SIGKILL.
+
+That is the self-healing mechanism working, violently — not a resource
+exhaustion. **Workers stay at 4.** Recorded because a plausible-sounding log
+message came within one command of causing a fifth configuration change on a
+false premise, and the pressure counter is what prevented it. Same lesson as
+`/proc/pressure/cpu` settling the CPU-versus-blocking question this morning:
+where a pressure metric exists, trust it over a level, a guess, or a log line.
+
+## Honest position at the end of the day
+
+Evening peak is beyond what this configuration can serve. Restarts no longer
+hold — machines re-wedge within minutes — and the requests killing workers are
+still `days=14&gen=1` class renders. The watchdog now runs every 10 minutes and
+is confirmed working (it restarted a machine unprompted at 20:33:41), so
+unattended downtime is bounded, but that is damage limitation, not service.
+
+I also made things worse at 20:28 by measuring response sizes with live requests
+to `/v2/X/?days=14&gen=1` — the single most expensive URL — against an already
+struggling site. That was careless, and the measurement I wanted is precisely the
+thing that should be captured by instrumentation rather than by probing
+production under load.
+
+## What I am not doing tonight
+
+No further configuration changes. Today's ledger is six real defects fixed and
+three of my own regressions (gthread, `hard_limit=10`, and nearly a fourth just
+now). Every remaining lever I could pull tonight either degrades a user-facing
+feature (capping `days`, disabling the generation subplot) or moves a threshold
+that the evening peak will cross anyway.
+
+The two changes that would actually help both need daylight and approval:
+
+1. **Tier 1 instrumentation** — out-of-band, zero request-path cost, and would
+   have supplied tonight's response-size numbers without touching production.
+2. **Lazy `gen`/`dc`/SHAP endpoints** — the only proposal that reduces what a
+   single request costs.
+
+If the site cannot be left degraded overnight, the fastest interim lever is
+capping `days` for anonymous requests, which is reversible and would cut the
+largest renders substantially — but it removes a documented feature and is the
+owner's decision, not mine.
