@@ -1313,3 +1313,70 @@ the intended trade (fast failure for some beats timeouts for all), but if
 ordinary traffic, and 10 should be raised.
 
 Monitoring continues.
+
+---
+
+# Claude's view — concurrency limits helped but were not sufficient
+
+Appended 2026-08-04 12:34 +01:00.
+
+## The concurrency change worked, partially
+
+Production wedged again eight minutes after v134. Measuring the same things gives
+a clean before/after on a wedged machine:
+
+| | before limits (v133) | after limits (v134) |
+|---|---|---|
+| sockets on :8000 | 64 | **28** |
+| `CLOSE_WAIT` | 57 | **23** |
+| CPU pressure | 0.04 % | 0.02 % |
+| workers' `wchan` | `wait_woken` | `wait_woken` |
+
+So the proxy did stop flooding the backlog — connection count more than halved.
+The hypothesis was right about the mechanism and wrong about it being sufficient.
+
+## What actually takes a machine out
+
+With the flood curtailed, the remaining picture is unambiguous: **both workers
+blocked in `wait_woken`, 4 sockets holding >10 KB of unsent response, CPU at
+0.02 %.** Workers are stuck writing large chart responses to clients that have
+stopped reading. With `--workers 2`, **two such clients are enough to take a
+machine out** — no saturation, no CPU exhaustion, no database involvement.
+
+Concurrency limits cannot help with that. They govern how many requests arrive,
+not how long a worker is held once one does.
+
+## Change applied (v135): `--workers 2 -> 4`
+
+The evidence for this is stronger than for anything else tried today:
+
+- CPU pressure while wedged is **0.02 %**, so this is categorically not a compute
+  limit and adding processes will not cause thrash.
+- Workers are blocked on socket I/O, which consumes **memory, not CPU**.
+- Measured worker RSS ~137 MB with 573 MB available before the change.
+
+Post-deploy: 4 workers confirmed running, **345 MB of 962 MB still available**.
+That is adequate but no longer generous — this is the first change today with a
+real out-of-memory risk, and it is the thing to watch. If the machine starts
+OOM-killing workers, drop back to 3.
+
+`soft_limit` raised 2 -> 4 to stay aligned with worker count.
+
+## Note on gthread
+
+This is what the earlier gthread change was reaching for — more concurrency for
+I/O-bound work — without its fatal property. The arbiter can reap a stuck *sync
+worker*; it never reaped a stuck *gthread thread*, which is why that attempt
+converted recoverable slowness into permanent wedges. Same goal, safe mechanism.
+
+## Honest position
+
+Four changes today have each been "strongly evidenced" and three have been
+insufficient. This one is better grounded, but the pattern should induce caution:
+what it predicts is that it takes 4 simultaneous stalled clients rather than 2 to
+remove a machine, i.e. tolerance doubles. It does not stop a worker being held by
+a slow client, and the durable fix for that remains **smaller responses** —
+pre-generating chart payloads so there is less to write and less time spent
+writing it.
+
+Monitoring continues.
