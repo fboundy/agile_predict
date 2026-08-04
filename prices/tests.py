@@ -637,3 +637,79 @@ class KofiTotalsTests(TestCase):
         self.assertEqual(out["months"][0]["payments"], 2)
         self.assertEqual(out["months"][1]["total"], 2.0)
         self.assertEqual(out["currencies"][0]["this_month"], 8.0)
+
+
+class CanonicalCacheKeyTests(TestCase):
+    """Equivalent URLs must share a response-cache key; URLs that render
+    differently must not. Normalisation mirrors the views' own parsing, so
+    these tests guard against the canonicaliser drifting from them."""
+
+    def _key(self, url):
+        from prices.middleware import ResponseCacheMiddleware
+        from django.core.cache import cache
+
+        cache.delete("rc:data-ver")
+        mw = ResponseCacheMiddleware(lambda r: None)
+        return mw._key(RequestFactory().get(url))
+
+    def _same(self, a, b):
+        self.assertEqual(self._key(a), self._key(b), f"expected same key: {a} vs {b}")
+
+    def _diff(self, a, b):
+        self.assertNotEqual(self._key(a), self._key(b), f"expected different keys: {a} vs {b}")
+
+    # --- equivalent URLs collapse ---
+    def test_parameter_order_irrelevant(self):
+        self._same("/v2/X/?days=5&gen=1", "/v2/X/?gen=1&days=5")
+
+    def test_explicit_defaults_match_omitted(self):
+        self._same("/v2/X/?days=5&gen=1&band=1&dc=0&overlap=0", "/v2/X/")
+
+    def test_unknown_parameters_ignored(self):
+        self._same("/v2/X/?utm_source=twitter&fbclid=abc", "/v2/X/")
+
+    def test_fc_order_irrelevant(self):
+        self._same("/v2/X/?fc=2&fc=1", "/v2/X/?fc=1&fc=2")
+
+    def test_days_clamped_like_the_view(self):
+        # view does min(max(int(days),1),14)
+        self._same("/v2/X/?days=99", "/v2/X/?days=14")
+        self._same("/v2/X/?days=0", "/v2/X/?days=1")
+
+    def test_af_truthy_spellings_equivalent(self):
+        self._same("/v2/X/?af=true", "/v2/X/?af=1")
+        self._same("/v2/X/?af=YES", "/v2/X/?af=on")
+
+    def test_v2_export_only_true_for_literal_one(self):
+        # GraphV2View: get("export","0") == "1" — so "true" is falsy here
+        self._same("/v2/X/?export=true", "/v2/X/")
+        self._diff("/v2/X/?export=1", "/v2/X/")
+
+    def test_api_high_low_spellings_equivalent(self):
+        self._same("/api/G/?high_low=True", "/api/G/?high_low=true")
+        self._same("/api/G/?high_low=true", "/api/G/")
+
+    # --- genuinely different URLs stay separate ---
+    def test_different_days_differ(self):
+        self._diff("/v2/X/?days=5", "/v2/X/?days=7")
+
+    def test_toggles_differ(self):
+        self._diff("/v2/X/?gen=1", "/v2/X/?gen=0")
+        self._diff("/v2/X/?af=1", "/v2/X/?af=0")
+        self._diff("/v2/X/?overlap=1", "/v2/X/?overlap=0")
+
+    def test_different_fc_selection_differs(self):
+        self._diff("/v2/X/?fc=1", "/v2/X/?fc=1&fc=2")
+
+    def test_api_export_changes_key(self):
+        self._diff("/api/G/?export=true", "/api/G/")
+
+    def test_api_format_preserved(self):
+        self._diff("/api/G/?format=json", "/api/G/")
+
+    def test_region_path_still_separates(self):
+        self._diff("/v2/X/?days=5", "/v2/G/?days=5")
+
+    # --- safety: unparseable values fall back rather than collapse ---
+    def test_unparseable_days_falls_back_to_raw_query(self):
+        self._diff("/v2/X/?days=abc", "/v2/X/?days=xyz")

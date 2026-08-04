@@ -181,6 +181,68 @@ class RateLimitMiddleware:
         return resp
 
 
+_TRUE_WORDS = {"1", "true", "yes", "on"}
+
+
+def _canonical_query(path, q):
+    """Collapse query strings that produce identical output onto one cache key.
+
+    The raw query string made `?days=5&gen=1`, `?gen=1&days=5` and `?days=5`
+    (with gen defaulting to on) three separate entries for byte-identical pages,
+    so any client permuting parameters — or spelling out defaults — defeated the
+    cache. That is exactly the traffic pattern seen during the outages.
+
+    Each parameter is normalised with the SAME semantics as the view that reads
+    it, which differ between surfaces (e.g. `export` is only true for a literal
+    "1" on the v2 chart, but accepts true/yes/on in the API). Getting that wrong
+    would serve the wrong cached page, so every parameter below mirrors its view
+    exactly and is covered by tests. Unknown parameters are dropped because the
+    views never read them. Returns None when the surface is unknown or a value
+    cannot be parsed, in which case the caller falls back to the raw query
+    string rather than risk collapsing two different pages together.
+    """
+    try:
+        if path.startswith("/api/"):
+            # api/views.py: PriceForecast*APIView / AccuracyAPIView
+            days = min(max(int(q.get("days", 14)), 1), 14)
+            count = int(q.get("forecast_count", 1))
+            high_low = "1" if str(q.get("high_low", "true")).lower() in {"true", "1"} else "0"
+            export = "1" if str(q.get("export", "false")).lower() in _TRUE_WORDS else "0"
+            region = str(q.get("region", "X")).upper()
+            parts = [
+                f"days={days}", f"forecast_count={count}",
+                f"high_low={high_low}", f"export={export}", f"region={region}",
+            ]
+            fmt = q.get("format", "")
+            if fmt:
+                parts.append(f"format={fmt}")  # DRF renderer — changes output
+            return "&".join(parts)
+
+        if path.startswith("/v2/"):
+            # prices/views.py: GraphV2View.get_context_data / ext_forecast_json
+            days = min(max(int(q.get("days", 5)), 1), 14)
+            band = "0" if q.get("band", "1") == "0" else "1"
+            export = "1" if q.get("export", "0") == "1" else "0"
+            gen = "1" if q.get("gen", "1") == "1" else "0"
+            fg = "1" if q.get("fg", "0") == "1" else "0"
+            dc = "1" if q.get("dc", "0") == "1" else "0"
+            af = "1" if str(q.get("af", "")).lower() in _TRUE_WORDS else "0"
+            x2r = "1" if str(q.get("x2r", "")).lower() in _TRUE_WORDS else "0"
+            overlap = "1" if q.get("overlap", "0") == "1" else "0"
+            # Forecast ids are used as an `id__in` filter, so order is irrelevant.
+            fc = sorted({int(x) for x in q.getlist("fc") if str(x).strip()})
+            parts = [
+                f"days={days}", f"band={band}", f"export={export}", f"gen={gen}",
+                f"fg={fg}", f"dc={dc}", f"af={af}", f"x2r={x2r}", f"overlap={overlap}",
+            ]
+            if fc:
+                parts.append("fc=" + ",".join(str(i) for i in fc))
+            return "&".join(parts)
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
 class ResponseCacheMiddleware:
     """Event-keyed cache of anonymous GET responses for the heavy chart/API paths.
 
@@ -250,8 +312,10 @@ class ResponseCacheMiddleware:
         # Half-hour bucket: the only *time*-dependence the pages have (the "Now"
         # marker and current-slot pricing) changes exactly on the half hour.
         slot = int(time.time() // 1800)
+        canon = _canonical_query(request.path, request.GET)
+        qs = canon if canon is not None else request.META.get("QUERY_STRING", "")
         return (
-            f"rc:{request.get_host()}:{request.path}?{request.META.get('QUERY_STRING', '')}"
+            f"rc:{request.get_host()}:{request.path}?{qs}"
             f":v{self._data_version()}:s{slot}"
         )
 
