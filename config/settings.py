@@ -160,11 +160,26 @@ Path(CACHE_DIR).mkdir(parents=True, exist_ok=True)
 # rate-limit counters are per-worker (effective limit up to 2x RATELIMIT_PER_MIN
 # — deliberately erring towards not blocking real users).
 CACHES = {
+    # Rate-limit counters and other hot keys: written on EVERY request, so this
+    # must be O(1) with no I/O. Per-process is fine for approximate throttling
+    # (effective limit ~= RATELIMIT_PER_MIN x worker count).
     "default": {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
         "LOCATION": "agilepredict",
         "TIMEOUT": 300,
         "OPTIONS": {"MAX_ENTRIES": 400, "CULL_FREQUENCY": 4},
+    },
+    # Rendered responses: must be SHARED across workers, otherwise each worker
+    # renders every URL separately and CPU cost multiplies by the worker count
+    # (using LocMemCache here tripled render load with 3 workers). FileBasedCache
+    # is safe for this one because it is written only on a cache MISS, not on
+    # every request — the per-request writes were what made its directory-scan
+    # culling pathological.
+    "responses": {
+        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+        "LOCATION": CACHE_DIR,
+        "TIMEOUT": 3600,
+        "OPTIONS": {"MAX_ENTRIES": 300, "CULL_FREQUENCY": 3},
     },
 }
 

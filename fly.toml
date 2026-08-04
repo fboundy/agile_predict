@@ -16,7 +16,7 @@ console_command = '/code/manage.py shell'
   PORT = '8000'
 
 [processes]
-  web = 'gunicorn --bind :8000 --workers 3 --timeout 60 --graceful-timeout 30 --max-requests 800 --max-requests-jitter 200 config.wsgi'
+  web = 'gunicorn --bind :8000 --workers 2 --timeout 60 --graceful-timeout 30 --max-requests 800 --max-requests-jitter 200 config.wsgi'
   worker = 'python manage.py update_worker'
 
 [http_service]

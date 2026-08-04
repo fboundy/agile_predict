@@ -2,7 +2,7 @@ import logging
 import time
 
 from django.conf import settings
-from django.core.cache import cache
+from django.core.cache import cache, caches
 from django.http import HttpResponse
 from django.utils.cache import patch_response_headers
 
@@ -220,6 +220,14 @@ class ResponseCacheMiddleware:
             return False
         return path.startswith(self.CACHEABLE_PREFIXES)
 
+    def _store(self):
+        """Shared across workers, so a URL is rendered once for the machine
+        rather than once per worker."""
+        try:
+            return caches["responses"]
+        except Exception:  # pragma: no cover - fall back to the default cache
+            return cache
+
     def _data_version(self):
         """Cheap stamp of the underlying data: bumps when a new forecast or
         fresh Agile prices land. Micro-cached for 30s so the per-request cost is
@@ -252,8 +260,9 @@ class ResponseCacheMiddleware:
             return self.get_response(request)
 
         key = self._key(request)
+        store = self._store()
         try:
-            cached = cache.get(key)
+            cached = store.get(key)
         except Exception:  # pragma: no cover - fail open
             cached = None
         if cached is not None:
@@ -272,7 +281,7 @@ class ResponseCacheMiddleware:
                 and not response.has_header("Set-Cookie")
                 and len(response.content) <= self.max_bytes
             ):
-                cache.set(
+                store.set(
                     key,
                     (response.content, response.status_code, response.get("Content-Type", "text/html")),
                     timeout=self.ttl,
