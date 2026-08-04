@@ -2035,3 +2035,73 @@ canonicalisation, the invalid-region redirect — all landed within a few hours 
 each other, each with a restart. Three hours of stability is consistent with the
 fixes working; it is also consistent with lighter afternoon traffic. Tomorrow's
 daytime peak is the real test.
+
+---
+
+# Claude's view — the afternoon calm did not hold, and cascade is the real shape
+
+Appended 2026-08-04 21:15 +01:00. This qualifies the optimistic note above, and
+the alternative explanation I flagged there turns out to be the right one.
+
+## What happened at 20:09
+
+```text
+20:09:18  prod=DEGRADED  http=302  passing=1  critical=1
+20:11:40  prod=DOWN      http=000  passing=0  critical=2
+```
+
+Two minutes from one machine wedging to a total outage. Both machines restarted;
+service restored, and `prod=OK` again by 20:13.
+
+Cumulative since v137: **98 checks, 97 OK, 99.0 %** — but that headline hides the
+shape, which is what matters.
+
+## The failure mode is a cascade, not an independent wedge
+
+I had been treating the two machines as independent, so a second machine looked
+like insurance. It is not, because **load is conserved**. When machine A wedges,
+Fly correctly stops routing to it — and machine B then receives *everything*. If
+B was already near its limit at half the traffic, it is now certainly over it,
+and it wedges in turn. That is exactly the 2-minute progression above.
+
+So failover buys time proportional to the headroom on the surviving machine, and
+if there is no headroom it buys almost nothing. This morning's scale-out did
+genuinely reduce blast radius — the 15:17 event resolved without a total outage —
+but only while traffic was low enough that one machine could absorb both shares.
+
+## My 16:20 note was premature
+
+I wrote then that three hours of stability was "consistent with the fixes
+working [and] also consistent with lighter afternoon traffic", and said the
+daytime peak would be the real test. The evening peak arrived first and answered
+it: **it was the lighter traffic.** I should weight that reading accordingly —
+the correct conclusion from the afternoon was "not yet disconfirmed", and I
+presented it closer to "first sustained evidence" than the data supported.
+
+## What this changes
+
+It does not invalidate the day's fixes; the defects found were real and the
+system is measurably better than the 57.99 % morning. But it relocates the
+problem definitively:
+
+- Adding machines does **not** solve a cascade — it changes the number of
+  dominoes, not the fact that they fall.
+- Adding workers, limits and thresholds likewise raises the point at which the
+  first domino goes.
+- **Only reducing per-request cost changes whether the cascade starts at all.**
+
+That is the third independent line of evidence pointing at the same conclusion,
+alongside "every additive change misfired" and "the requests that hold workers
+are `days=14&gen=1`".
+
+## Recommendation, unchanged but now more urgent
+
+Split the expensive optional layers (`gen`, `dc`, SHAP) into lazy JSON endpoints,
+as `af`/`x2r` already are. Not because it is elegant, but because it is the only
+proposal on the table that reduces the work a single request does, and every
+other lever has now been demonstrated to relocate the problem rather than remove
+it.
+
+I would also stop treating uptime percentage as the headline metric. 99.0 %
+sounds recovered; it contains a total outage. Time-to-cascade and headroom on the
+surviving machine are the numbers that describe this system.
