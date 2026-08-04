@@ -30,4 +30,4 @@ RUN SECRET_KEY=collectstatic-build-placeholder python manage.py collectstatic --
 
 EXPOSE 8000
 
-CMD ["gunicorn","--bind",":8000","--workers","2","--worker-class","gthread","--threads","8","--timeout","120","--max-requests","800","--max-requests-jitter","200","config.wsgi"]
+CMD ["gunicorn","--bind",":8000","--workers","3","--timeout","60","--graceful-timeout","30","--max-requests","800","--max-requests-jitter","200","config.wsgi"]
