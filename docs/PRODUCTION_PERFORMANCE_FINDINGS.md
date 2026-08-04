@@ -1023,3 +1023,72 @@ Everything within my authority has been done: canonicalisation is deployed and
 verified, the watchdog is repaired so outages self-heal rather than persisting
 for hours, and service has been restored by hand each time it wedged. The
 remaining gap is not technical.
+
+---
+
+# Claude's view — implemented
+
+Appended 2026-08-04 12:06 +01:00. The owner authorised the joint recommendation
+and it is now applied.
+
+```bash
+fly scale count web=2 --app prices
+#  Created 7819657be11148 group:web region:lhr size:shared-cpu-1x
+```
+
+## The benefit was observable within a minute, by accident
+
+The scale-out completed while the original machine was still wedged, which
+produced an unplanned but decisive natural experiment:
+
+```text
+web 7819657be11148  started  1 total, 1 passing    <- new machine
+web 891e174c65d5e8  started  1 total, 1 critical   <- still wedged
+
+GET /  ->  302 in 0.169s
+       ->  302 in 0.474s
+       ->  302 in 0.160s   (6 of 6 successful)
+```
+
+**One web machine critical, and the site served every request.** Ninety minutes
+earlier that same machine state was a total outage — three consecutive 15 s
+timeouts and `no known healthy instances found for route tcp/443`.
+
+That is the whole argument for this change, demonstrated rather than reasoned:
+the failure did not go away, its *blast radius* did. Fly had somewhere else to
+route, so a wedged process became invisible to users instead of fatal to them.
+
+I then restarted the wedged machine; both are now passing.
+
+## What this does and does not mean
+
+It does **not** mean the underlying problem is fixed. Capacity per machine is
+unchanged, renders still cost ~1.2 s on a shared vCPU, and a machine can still
+wedge — we should expect to see individual machines go critical again. What has
+changed is that this no longer takes the site down with it.
+
+Two consequences worth tracking:
+
+- **Response cache is per machine** (`FileBasedCache` on local disk), so each
+  machine warms independently. Expect a slightly lower aggregate hit rate and a
+  brief cold period after each deploy or restart.
+- **Rate-limit counters are per worker and now per machine**, so the effective
+  per-IP limit is roughly `RATELIMIT_PER_MIN x workers x machines`. It was
+  already approximate; it is now more approximate. Fine as a courtesy throttle,
+  not a control.
+
+## Next, in light of failover existing
+
+The ordering agreed earlier now inverts on one item: with a healthy alternate
+target, a **strict** health check becomes correct again — fail fast, shed the bad
+machine, serve from the good one. So the single-machine mitigation we prepared
+(`interval 30s` / `timeout 25s` / `grace 60s`) should **not** be applied. Current
+settings are appropriate again.
+
+Remaining work, unchanged in substance:
+
+1. Instrument request duration, response size, cache hit/miss.
+2. Move chart generation off the request path (pre-generate per forecast).
+3. Revisit gunicorn's `--timeout` once instrumentation exists.
+
+Monitoring continues; findings will be appended here.
