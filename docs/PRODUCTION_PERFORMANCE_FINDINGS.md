@@ -1778,3 +1778,84 @@ I would not make further production changes today without one of those two.
 
 Review welcome — particularly on whether the confounding argument above is too
 conservative, and on whether pre-generation or instrumentation should come first.
+
+---
+
+# Claude's view — is pre-generation actually practical?
+
+Appended 2026-08-04 13:12 +01:00. The owner asked whether pre-generating chart
+payloads is practical given how many options the chart has. Good challenge: in
+its naive form, no.
+
+## The option space
+
+Counted from the code rather than estimated:
+
+```text
+regions                                  16   (X, Z, A-P)
+days                                     14   (1-14 accepted; UI exposes 5)
+binary toggles                          256   (band, export, gen, fg, dc, af, x2r, overlap)
+forecast selections (1-5 of latest 8)   218
+                                     -------
+base combinations   16 x 14 x 256   =  57,344
+with fc selections                  =  12,500,992
+```
+
+So "pre-generate the chart" as a literal instruction is dead on arrival. Even
+restricting to the five day-options the UI exposes leaves 20,480 base variants.
+
+## But the combinatorics are in the *presentation*, not the *data*
+
+That is the part worth noticing. Almost every one of those 256 toggle
+combinations renders **the same underlying series**:
+
+- `band`, `overlap`, `export` are transformations or visibility changes over data
+  the view has already fetched;
+- `gen`, `dc` add series from rows already loaded for the same window;
+- `af`, `x2r` are *already* lazy JSON (`ext_forecast_json`) and cost the base
+  render nothing;
+- `fc` selects among forecasts already in the database.
+
+The expensive work — queries, pandas transforms, Plotly figure construction,
+~200 KB of HTML serialisation — is repeated per *option combination* despite the
+inputs being nearly identical. That is the actual waste, and it is why the
+combinatorics look terrifying while the underlying data is small.
+
+## Three practical shapes, in increasing order of work
+
+**1. Warm the defaults only (16 renders per update).** Most real traffic is a
+region with default options. After each update, request `/v2/<region>/` for the
+16 regions so the cache is hot before users arrive. Cheap and simple.
+*Caveat that makes this weaker than it looks:* the response cache is per machine
+and lives on local disk, so warming must be done via public HTTP and even then
+only probabilistically reaches both machines. It also does nothing for the exotic
+combinations crawlers generate. A band-aid, not a fix.
+
+**2. Make the expensive optional layers lazy (recommended).** Split the
+generation/dispatch subplots and the SHAP payload into their own JSON endpoints,
+exactly as `af`/`x2r` already are — that pattern is already in the codebase and
+proved itself this morning when live external calls came off the request path.
+Effect: the base page stops varying with 8 toggles, so its cache space collapses
+from `region x days x 256` to `region x days` (224 variants), and each overlay is
+separately cacheable at the same low cardinality. The heaviest observed request,
+`days=14&gen=1`, stops being one enormous render and becomes a small page plus a
+small async fetch.
+
+**3. Pre-generate per-region data, render in the browser.** One JSON payload per
+region per update (16 artefacts), with Plotly.js drawing client-side and every
+toggle becoming a client-side operation costing the server nothing. This
+genuinely collapses 12.5 M combinations to 16 artefacts, and much of the data is
+already exposed (`/api/<region>`, `ext-forecast`). It is also the largest change:
+a rewrite of the chart page rather than a refactor.
+
+## Recommendation
+
+**Option 2.** It has precedent in this codebase, it is incremental and
+reversible, and it directly targets the two requests that were observed holding
+workers to death (`days=14&gen=1`). Option 3 is the architecturally correct
+endpoint and worth doing eventually, but not as an emergency response to an
+ongoing incident. Option 1 is not worth doing given the per-machine cache
+problem.
+
+The framing I would keep: we are not trying to precompute 12 million pages. We
+are trying to stop recomputing the same data 256 different ways.
