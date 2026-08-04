@@ -1642,3 +1642,73 @@ payloads, shrink responses, move work off the request path — rather than addin
 further limits, pools or tiers.
 
 Monitoring continues; the next state change is the discriminating test.
+
+---
+
+# Claude's view — unrecognised regions were uncacheable full renders
+
+Appended 2026-08-04 13:06 +01:00.
+
+## How this was found
+
+The 11:55 outage took both machines down, and restarting them no longer restored
+service — it re-wedged immediately. Rather than restart again, I asked which
+requests were actually holding workers. Gunicorn logs the URL when it kills a
+timed-out worker:
+
+```text
+Error handling request /v2/s/?days=14&band=1&export=1&gen=1&x2r=1&overlap=1
+Error handling request /v2/N/?days=14&dc=1&export=1&gen=1&overlap=1&x2r=0
+```
+
+Both are `days=14&gen=1` — the largest chart the app can produce. And the first
+one is `/v2/s/`, where **`s` is not a region**.
+
+## The defect
+
+`GraphV2View` did this:
+
+```python
+region = self.kwargs.get("region", "X").upper()
+if region not in regions:
+    region = "X"
+```
+
+So *any* unrecognised region silently rendered the full national chart. Combined
+with a response-cache key that includes `request.path`, the consequence is worse
+than wasted work:
+
+- `/v2/s/`, `/v2/zzz/`, `/v2/foo/` each cost a full ~1.2 s render;
+- each is a **distinct cache key**, so none can ever be a hit;
+- a crawler walking `/v2/<anything>/` therefore generates **unlimited
+  uncacheable renders**, each able to hold a worker for up to 60 s.
+
+I canonicalised the *query string* earlier today and never questioned the
+*path*. The cache-busting hole was on the side I did not look at.
+
+## Fix (v137)
+
+Redirect in `dispatch()` before any work happens. Verified in production:
+
+```text
+/v2/zzz/  ->  302 in 0.158s  size=0        (was: full render)
+```
+
+Same destination for a human typo, a few bytes instead of a full page, and all
+such traffic collapses onto the single cached `/v2/X/` entry.
+
+## Status and honesty
+
+Service is restored on v137 with both machines serving at ~0.16 s. But the same
+caveat as every other change today applies: **the deploy restarted the machines,
+so I cannot yet separate the fix from the restart.** What is *directly* verified
+is the behaviour change — an unrecognised region no longer costs a render — not
+that outages have stopped.
+
+This is at least a change of the right shape. It removes work from the request
+path rather than adding a constraint to it, which is the only category that has
+helped today. It does not touch the remaining cost of legitimate
+`days=14&gen=1` requests, which were the other half of the evidence and are
+still the largest thing the app does.
+
+Monitoring continues.
