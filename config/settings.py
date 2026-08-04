@@ -261,7 +261,14 @@ DATABASES = {
 # removes that per-request cost; 16 gunicorn threads is well inside the
 # server's max_connections (300). CONN_HEALTH_CHECKS avoids handing a stale
 # connection to a request after an idle period.
-DATABASES["default"]["CONN_MAX_AGE"] = env.int("DB_CONN_MAX_AGE", default=60)
+# REVERTED to 0 (Django's default: new connection per request) on 2026-08-04.
+# Enabling persistence (60s) coincided with uptime falling 91% -> 55% and a
+# 6-hour outage overnight, with requests degrading gradually rather than
+# failing at once. Causation is unproven — the traceback showed threads stuck
+# in gunicorn's sendall to slow clients, which gthread cannot reap — but the
+# previous configuration measured better, so revert first and re-test this
+# separately. Set DB_CONN_MAX_AGE=60 to try again.
+DATABASES["default"]["CONN_MAX_AGE"] = env.int("DB_CONN_MAX_AGE", default=0)
 CONN_HEALTH_CHECKS = True
 # DATABASES = {
 #     "default": dj_database_url.config(  # Replace this value with your local database's connection string.

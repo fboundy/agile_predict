@@ -5,6 +5,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ROOT_DIR="$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)"
 LOG="${SCRIPT_DIR}/../logs/watchdog.log"
 APP="prices"
 URL="https://prices.fly.dev/"
@@ -12,6 +13,16 @@ MAX_ATTEMPTS=3
 CURL_TIMEOUT=25
 
 log() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >> "$LOG"; }
+
+# flyctl needs an API token: under cron there is no interactive CLI session,
+# and the CLI's own session token expires — which silently disabled this
+# watchdog and left a 6-hour outage unhealed on 2026-08-04. Take a long-lived
+# deploy-scoped token from .env (FLY_DEPLOY_TOKEN) so restarts always work.
+if [ -f "${ROOT_DIR}/.env" ]; then
+    _tok="$(grep -E '^FLY_DEPLOY_TOKEN=' "${ROOT_DIR}/.env" | head -1 | cut -d= -f2- | tr -d '"'"'"'')"
+    [ -n "${_tok:-}" ] && export FLY_API_TOKEN="$_tok"
+fi
+export PATH="$PATH:/home/agile/.fly/bin"
 
 http_code() {
     # -4 (IPv4-only): avoids the CT router's ~5s AAAA-lookup stall on sparse queries.
