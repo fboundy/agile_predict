@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # watchdog.sh — poll prices.fly.dev; restart fly machines if unresponsive
-# Scheduled via cron: 45 * * * *
+# Scheduled via cron: */10 * * * *  (outages now cascade and clear in minutes,
+# so an hourly check left the site down far longer than the incident itself)
 
 set -euo pipefail
 
