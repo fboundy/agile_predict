@@ -1459,3 +1459,122 @@ non-zero, or workers start being OOM-killed, drop to 3 workers. Until then this
 does not need attention.
 
 Nothing further from me unless the monitors report something.
+
+---
+
+# Claude's view — instrumentation design
+
+Appended 2026-08-04 12:41 +01:00, at the owner's request: what instrumentation
+would be useful, and would it cost us performance?
+
+The second half of that question matters more than usual here. This app's
+failure mode is *workers blocked on I/O*, and today we already made things worse
+twice by adding per-request work (`FileBasedCache` writes) and per-request
+concurrency (gthread). Instrumentation that adds per-request I/O would be the
+same mistake a third time. So the design below is organised by **where the cost
+lands**, not by what is interesting to collect.
+
+## Start from the questions we could not answer today
+
+| Question we actually had | How it got answered | Cost of having had it continuously |
+|---|---|---|
+| Is it CPU, disk, memory, or blocking? | `/proc/pressure/*`, manually over SSH mid-wedge | zero — out of band |
+| What are workers blocked *on*? | `wchan` + socket states, manually | zero — out of band |
+| Are clients abandoning responses? | `CLOSE_WAIT` counts, manually | zero — out of band |
+| Is the cache actually hitting? | inferred from `X-Response-Cache` on hand-made requests | small — in-request |
+| How long does a render take? | measured once, ad hoc (~1.2 s) | small — in-request |
+| How big are responses? | never measured, though central to the theory | small, with a caveat |
+| How often are workers being reaped? | inferred from `SystemExit` in logs | zero — already logged |
+
+The striking thing: **the measurements that actually cracked today's problems
+were all system-level and none of them touch the request path.** That inverts the
+usual instinct to reach for request tracing first.
+
+## Tier 1 — out-of-band, zero request-path cost (do this first)
+
+A token-authed `GET /metrics` (excluded from cache, rate limiter and blocklist)
+that reads and returns, per machine:
+
+- `/proc/pressure/{cpu,io,memory}` — the `total=` counters especially, which are
+  monotonic and so give rates between scrapes
+- socket census on :8000 — total, `ESTABLISHED`, `CLOSE_WAIT`, count with
+  `tx_queue > 10 KB`
+- gunicorn process count, per-worker RSS, and worker age (detects reaping/churn)
+- `MemAvailable`
+
+Scraped by the existing CT cron every 5 minutes, appended to a log next to
+`uptime_monitor.log`, and surfaced on `/v2/health/`.
+
+**Cost: effectively zero.** It runs only when scraped, reads a handful of
+`/proc` files, and touches no user request. This is the highest value-to-risk
+item by a wide margin — it is precisely the data I gathered by hand during each
+incident today, and having it as a time series would have distinguished the
+CPU-saturation mode from the blocking mode immediately rather than after several
+wrong deploys.
+
+## Tier 2 — in-request, but cheap and sampled
+
+A middleware recording per request: path template, status, total duration,
+response bytes, cache hit/miss.
+
+Costs and how to keep them small:
+
+- **Timing** — two `time.monotonic()` calls. Nanoseconds. Ignore.
+- **Cache hit/miss** — already computed; just needs recording. Free.
+- **Response size** — `len(response.content)` is free for normal responses but
+  **must not be called on a streaming response**, where it would force the whole
+  body into memory. There are no streaming responses in this codebase today
+  (checked), but the guard should be written anyway, because adding one later
+  would otherwise silently reintroduce a memory problem.
+- **Emission** — this is the only real risk, see below.
+
+**Sample rather than log everything:** 1-in-N ordinary requests, but *always*
+log slow ones (> 1 s) and errors. The tail is the signal here; the median is
+already known to be ~0.16 s and tells us nothing.
+
+## The emission risk, stated plainly
+
+Logging goes to stdout, which fly collects through a pipe. **If the collector is
+slow and the pipe buffer fills, a write to stdout blocks the worker.** In an app
+whose entire failure mode is blocked workers, per-request logging is not
+automatically safe — it is a new way to acquire exactly the disease we have.
+
+This is not theoretical hand-wringing; it is the same shape as the
+`FileBasedCache` mistake, where a per-request write to a slow medium wedged the
+machine. Mitigations, in order of preference:
+
+1. sample aggressively, so volume stays far below any backpressure threshold;
+2. keep lines short and single-line (no tracebacks, no JSON blobs);
+3. if volume ever needs to rise, move to an in-memory counter aggregate exposed
+   via Tier 1 rather than a line per request.
+
+## Tier 3 — what I would *not* add
+
+- **A hosted APM (Sentry Performance, Datadog, New Relic).** Every one adds a
+  network call or a background flush thread per process. On a memory-tight,
+  block-sensitive, 1 GB machine that is a poor trade, and it reintroduces an
+  external dependency on the request path — the thing we spent the morning
+  removing from the chart view.
+- **Prometheus client with multiprocess mode.** It works, but its multiprocess
+  collector writes per-process files to a shared directory and reads them on
+  scrape — file I/O proportional to worker count. We have already been burned
+  once by file-backed shared state.
+- **Per-request database query logging.** Useful in principle, but the database
+  has been demonstrably innocent all day (1 ms `SELECT 1`, no lock waits) and
+  `CONN_MAX_AGE=0` already means connection setup dominates any query cost.
+
+## Recommended order
+
+1. **Tier 1 `/metrics` + CT scrape.** Zero request-path cost, highest
+   diagnostic value, and it directly answers "is the wedging rate improving?" —
+   which we currently cannot tell, because failover now hides the symptom from
+   external probes.
+2. **Tier 2 sampled request log**, once Tier 1 confirms headroom.
+3. Only then consider aggregate counters if sampling proves too coarse.
+
+The per-worker caveat for any in-process counter: with 4 sync workers a scrape
+hits one worker, so counters are a 1-in-4 sample unless aggregated. Tier 1 avoids
+this entirely by reading kernel state, which is machine-wide.
+
+Nothing here is implemented yet; this is a design note for the owner to approve
+or redirect.
