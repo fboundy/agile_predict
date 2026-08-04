@@ -27,6 +27,18 @@ console_command = '/code/manage.py shell'
   min_machines_running = 1
   processes = ['web']
 
+  # Tell Fly how much this machine can actually take. Without this the proxy
+  # has no concurrency limit, so it keeps sending connections to a machine that
+  # can only serve `--workers` requests at once. The excess piles into the
+  # kernel backlog, clients give up (57 sockets observed in CLOSE_WAIT), and the
+  # health check cannot get a worker either — so a capacity limit became a total
+  # outage. soft_limit ~= worker count makes Fly spread load to the other
+  # machine; hard_limit caps the queue so excess fails fast instead of rotting.
+  [http_service.concurrency]
+    type = 'requests'
+    soft_limit = 2
+    hard_limit = 10
+
   [[http_service.checks]]
     grace_period = '30s'
     interval = '15s'
