@@ -1175,3 +1175,141 @@ metrics are the only way to see whether the underlying rate of wedging is
 improving or worsening from here.
 
 Monitoring continues.
+
+---
+
+# Codex's view
+
+Appended 2026-08-04 12:08:37 +01:00.
+
+New production evidence changes the post-scale interpretation. The first
+one-machine-degraded event was encouraging, but it did not hold. Shortly after
+that observation, both web machines were critical at the same time:
+
+```text
+web 7819657be11148  started  1 total, 1 critical
+web 891e174c65d5e8  started  1 total, 1 critical
+```
+
+External checks from here also failed:
+
+```text
+GET /         -> 8 consecutive 20s timeouts, 0 bytes received
+GET /healthz  -> 20s timeout, 0 bytes received
+```
+
+Fly logs at the same time again showed sync worker timeouts in `sock.sendall`
+on both machines, followed by proxy errors including `no known healthy instances
+found for route tcp/443`.
+
+So the second web machine reduced blast radius for isolated machine failures,
+but current traffic can still saturate or wedge both machines simultaneously.
+That means the latest working model is:
+
+- one wedged machine: now survivable;
+- both wedged machines: still total outage;
+- current production load can reach the second case.
+
+This does not invalidate the scale-out decision. It was still the right next
+step and produced a real improvement. It does prove that two shared-cpu-1x web
+machines are not enough margin under the current request pattern.
+
+The next decision should now be capacity plus request-path reduction, not more
+health-check tuning. Concretely, I would choose one immediate capacity action and
+one engineering action:
+
+1. Add more web headroom now: either a third shared-cpu-1x web machine or move
+   the two web machines to shared-cpu-2x.
+2. Start cutting request cost and response size immediately: pre-generated chart
+   payloads, lazy optional overlays, and instrumentation for request duration,
+   cache hit/miss, and response bytes.
+
+Without one of those, the app is still operating at the edge: it can now survive
+some individual-machine failures, but not a broad enough sweep to occupy both
+machines.
+
+---
+
+# Claude's view — Fly concurrency was never configured
+
+Appended 2026-08-04 12:19 +01:00. Prompted by the owner asking whether anything
+we are doing breaks Fly's machine model. It does, by omission, and this is the
+best explanation of the failure mode we have had all day.
+
+## The finding
+
+The service had **no concurrency configuration at all**:
+
+```text
+service port 8000  autostart True  autostop False  min_machines 1
+  concurrency: null
+```
+
+Fly's proxy uses `concurrency` to decide when a machine is *full* — it is the
+input to both load-balancing and autostart. With it unset, the proxy had no
+limit on how many requests it sent to a machine that can serve exactly
+`--workers` (2) at once.
+
+## Why this explains what we saw
+
+Everything measured on the wedged machine fits, including the parts that did not
+fit "the CPU is too small":
+
+| Observation | Explained by |
+|---|---|
+| 57 of 64 sockets in `CLOSE_WAIT` | connections queued in the kernel backlog; clients gave up waiting |
+| CPU pressure **0.04 %** | workers blocked on socket I/O, not computing |
+| I/O pressure 0.00 %, DB `SELECT 1` in 1 ms | neither disk nor database involved |
+| both workers in `wait_woken` | blocked in socket operations |
+| `/healthz` timing out | queued behind the same unbounded backlog |
+| **both machines wedging together** | neither was ever "full", so load was never spread |
+
+That last row is the one that matters. Adding a second machine reduced blast
+radius, but could not fix distribution, because Fly had no signal that machine
+one was saturated. Two machines with no concurrency limit are two machines being
+flooded equally, which is exactly what we then observed at 11:09.
+
+## Direct answer to the question asked
+
+Fly's "start machines as required" model works from concurrency limits:
+
+- `soft_limit` — above this, the proxy prefers other machines and will
+  **autostart stopped ones**;
+- `hard_limit` — above this, it stops sending to that machine entirely.
+
+Two consequences for this app:
+
+1. With `concurrency: null` there was no threshold, so the load-balancing and
+   autostart logic had nothing to act on. We were not using the model; we had
+   silently opted out of it.
+2. `auto_start_machines` only starts machines that **already exist and are
+   stopped** — it does not create new ones. With `auto_stop_machines = 'off'`
+   both of ours run permanently, so there was never any elastic behaviour to
+   observe either way.
+
+## Change applied
+
+```toml
+[http_service.concurrency]
+  type = 'requests'
+  soft_limit = 2      # ~= --workers, so Fly spreads load once a machine is busy
+  hard_limit = 10     # cap the queue; excess fails fast instead of rotting
+```
+
+Deployed as v134; both machines passing, serving at ~0.16 s.
+
+## Caveats, stated deliberately
+
+I have been confidently wrong several times today, so: this is a strong
+hypothesis with unusually good evidential fit, **not** a verified fix. What it
+predicts is that requests beyond capacity now receive a fast rejection instead of
+occupying a worker until abandoned — so `CLOSE_WAIT` accumulation should largely
+disappear, and machines should stop wedging in lockstep.
+
+It also introduces a new user-visible behaviour worth watching: under genuine
+overload, some requests will now be refused quickly rather than queued. That is
+the intended trade (fast failure for some beats timeouts for all), but if
+`hard_limit` proves too tight for normal bursts it will show up as errors during
+ordinary traffic, and 10 should be raised.
+
+Monitoring continues.
