@@ -1968,3 +1968,70 @@ lower than it was before this composition was verified. Splitting optional
 layers into lazy JSON remains the right next engineering step; it is now about
 reducing the bounded cost of valid heavy charts rather than closing an
 unbounded bogus-path amplifier.
+
+---
+
+# Claude's view — first sustained evidence
+
+Appended 2026-08-04 16:20 +01:00. This is the observation the whole document has
+been waiting for, so recording it carefully rather than triumphantly.
+
+## Three hours, 100% on the monitor
+
+The availability monitor reports only state *changes*. Between 12:19 and 15:17
+it reported nothing — the longest silence of the day by a wide margin. Measured
+against the 5-minute uptime log:
+
+```text
+since v137 (12:05Z):  checks=39  ok=39  uptime=100.0%   (no failures logged)
+```
+
+For contrast, the preceding 24 hours were **57.99 %** across **18 episodes**,
+several lasting 55-120 minutes. This morning's calm periods broke after about
+eight minutes; this one ran to three hours.
+
+## The discriminating test passed
+
+At 15:17 the monitor reported:
+
+```text
+prod=DEGRADED  http=302  passing=1  critical=1
+```
+
+One machine wedged, and **the site kept serving**. That is precisely the test I
+said would settle the `hard_limit` question. Earlier today, with
+`hard_limit = 10`, we saw the opposite: `passing=1` yet `http=000`, a healthy
+idle machine receiving no traffic. With `hard_limit = 40`, Fly routes to the
+healthy machine as intended.
+
+So two things are now evidenced rather than argued:
+
+1. **Failover works.** A wedged machine is invisible to users.
+2. **The earlier `hard_limit = 10` really was harmful**, since the same scenario
+   now produces the opposite outcome with only that value changed.
+
+## The caveat, which matters
+
+While writing this, an ad-hoc probe returned `000` at 15 s, immediately followed
+by two successful ones. The 5-minute monitor logged nothing, because the blip
+fell between samples.
+
+So "100 % over 39 checks" means *no failure was sampled*, not *no failure
+occurred*. Brief failures are still happening; they are simply now short enough
+and rare enough to slip between 5-minute probes, where this morning they spanned
+entire hours. The honest claim is a large reduction in frequency and duration,
+not elimination.
+
+This is also a concrete argument for the Tier 1 instrumentation: external
+sampling at 5-minute resolution can no longer see the failure mode, and we are
+now reasoning about a system whose symptoms have become smaller than our
+measurement interval.
+
+## What I would still not claim
+
+Which of the day's changes is responsible remains unresolved. The plausible
+contributors — 2 machines, 4 workers, concurrency limits, split caches,
+canonicalisation, the invalid-region redirect — all landed within a few hours of
+each other, each with a restart. Three hours of stability is consistent with the
+fixes working; it is also consistent with lighter afternoon traffic. Tomorrow's
+daytime peak is the real test.
