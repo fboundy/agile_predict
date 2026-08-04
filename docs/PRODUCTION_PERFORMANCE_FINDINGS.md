@@ -2178,3 +2178,78 @@ If the site cannot be left degraded overnight, the fastest interim lever is
 capping `days` for anonymous requests, which is reversible and would cut the
 largest renders substantially — but it removes a documented feature and is the
 owner's decision, not mine.
+
+---
+
+# Claude's view — the overnight failure is CPU, not blocking
+
+Appended 2026-08-05 00:33 +01:00.
+
+## Three hours down, and the signature has changed
+
+```text
+uptime, last 3 hours:  36 checks, 1 OK  ->  2.78%
+watchdog restarts:     72 (thrashing; machines re-wedge within a minute)
+```
+
+Captured on a wedged machine at **00:30, when traffic should be at its daily
+minimum**:
+
+```text
+cpu pressure : some avg10=97.80  avg60=95.09  avg300=56.27
+io  pressure : some avg10=2.82
+sockets :8000  total=73  ESTABLISHED=28  CLOSE_WAIT=13  txq>10KB=5
+workers      : 3 RUNNING (on CPU), 2 in wait_woken
+```
+
+This is **not** the pattern from earlier today. Every previous capture showed CPU
+pressure of 0.02-0.04 % with all workers parked in `wait_woken` — blocked on
+socket I/O, machine idle. This shows CPU pressure at **97.8 %** with most workers
+actually running, and 28 established connections being worked on.
+
+## What that means
+
+The two failure modes are distinct and I have now measured both:
+
+| | blocking mode (earlier today) | saturation mode (now) |
+|---|---|---|
+| CPU pressure | 0.02-0.04 % | **97.8 %** |
+| workers | all `wait_woken` | mostly RUNNING |
+| sockets | mostly `CLOSE_WAIT` | 28 `ESTABLISHED` |
+| cause | slow/abandoned clients holding workers | genuine work exceeding one shared vCPU |
+
+The blocking-mode fixes (concurrency limits, more workers, the invalid-region
+redirect) addressed the first. They cannot help the second: when the CPU is
+already at 97 %, adding workers only adds context switching, and limiting
+concurrency only changes who waits.
+
+Critically, this is happening at **midnight with 28 concurrent connections**.
+That is not a peak-traffic story, and it is not a crawler — the rate-limit log
+has seven lines, all blocklist refreshes, and no IP has come near the 60/min
+threshold. It is ordinary demand against a machine that cannot render fast
+enough.
+
+## This vindicates the original diagnosis, which I then talked myself out of
+
+My first assessment was CPU capacity. I abandoned it when `/proc/pressure/cpu`
+read 0.04 % during a wedge — correctly, because that measurement genuinely ruled
+out CPU *for that incident*. The error was concluding that CPU was therefore
+never the constraint, rather than that this system has **two** failure modes and
+I had sampled one of them. Both readings were right; my generalisation was wrong.
+
+## Options, none of which I am taking unilaterally
+
+The site has been effectively down for three hours and the watchdog is achieving
+nothing but churn.
+
+1. **`fly scale vm shared-cpu-2x`** — roughly +$2/month, one reversible command,
+   no feature change. Directly addresses a 97 % CPU constraint. This is the fix
+   the evidence points at.
+2. **Cap `days` for anonymous requests** — free, reversible, but removes a
+   documented feature. Offered earlier; the owner has not responded.
+3. **Leave it** — the watchdog will keep cycling; service stays intermittent.
+
+I said I would not make further production changes tonight without approval, and
+after three self-inflicted regressions today that commitment is worth keeping
+even at the cost of an overnight outage. Option 1 is one command whenever the
+owner wants it.
