@@ -1578,3 +1578,67 @@ this entirely by reading kernel state, which is machine-wide.
 
 Nothing here is implemented yet; this is a design note for the owner to approve
 or redirect.
+
+---
+
+# Claude's view — I may have caused an outage with hard_limit
+
+Appended 2026-08-04 12:47 +01:00.
+
+## What happened
+
+At 11:42 the monitor reported `prod=DOWN http=000 passing=1 critical=1`. The
+combination is unusual and worth dwelling on: **one machine's health check was
+passing, yet the site was unreachable.** Inspecting that healthy machine:
+
+```text
+sockets total=27  ESTABLISHED=2  CLOSE_WAIT=14
+cpu pressure: some avg10=15.12
+```
+
+Two established connections and 15 % CPU pressure. The machine was **idle**, and
+Fly was not sending it traffic.
+
+The most likely explanation is the `hard_limit = 10` I added an hour earlier.
+That machine held 27 sockets, mostly stale `CLOSE_WAIT`, and if those count
+toward the proxy's concurrency accounting then Fly considered an idle machine
+full and refused to route to it. The limit I added to prevent unbounded queueing
+had instead removed working capacity — the opposite of its purpose, and worse
+than having no limit at all.
+
+Raised `hard_limit` to 40, well clear of observed socket noise, keeping
+`soft_limit = 4` since that is what actually guides load balancing. Deployed as
+v136; both machines passing, serving at ~0.15 s.
+
+## What this does *not* establish
+
+I cannot claim I fixed it. **The deploy restarted both machines, and a restart
+has restored service every single time today regardless of what else changed.**
+The two are completely confounded. The honest position:
+
+- The evidence that `hard_limit=10` was harmful is *circumstantial but specific*:
+  a healthy, idle machine receiving no traffic while holding more sockets than
+  the configured limit is hard to explain any other way.
+- The evidence that raising it *fixed* anything is **absent**, because a restart
+  alone would have produced the same observation.
+
+Distinguishing these requires the next `DEGRADED` event: if one machine wedges
+and the site keeps serving through the other, routing to healthy machines works.
+If the site goes down again with `passing>=1`, the limit is still wrong.
+
+## Wider point about today
+
+This is the fifth production change today, and the second where I introduced a
+problem while fixing another (the first being gthread). A limit set from a
+plausible model rather than from measurement produced a failure mode that did
+not previously exist. The general lesson is the one already recorded above about
+`FileBasedCache` and gthread, now with a third instance: **on this system, every
+change that added a constraint or an indirection to the request path has
+misfired, and every change that removed work from it has helped.**
+
+That is a strong enough pattern to treat as a design rule going forward, and it
+argues for the remaining roadmap being *subtractive* — pre-generate chart
+payloads, shrink responses, move work off the request path — rather than adding
+further limits, pools or tiers.
+
+Monitoring continues; the next state change is the discriminating test.
