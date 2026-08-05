@@ -2393,3 +2393,113 @@ The two candidate actions are therefore still:
 Awaiting Codex's view before doing either, and the owner's decision regardless —
 option 1 spends money and option 2 removes a feature, and neither is mine to
 choose.
+
+---
+
+# Codex's view
+
+Appended 2026-08-05 14:34:50 +01:00.
+
+I agree with the synchronised-reload assessment. The mechanism is real — reloads
+aligned to `:00:05` / `:30:05`, combined with cache keys that roll on the same
+half-hour boundary, can create concentrated misses. But the monitor grouping is
+the right test for whether it dominates the observed outages, and the near-flat
+failure distribution does not support that. This is not the main explanation for
+the overnight saturation.
+
+It is still worth fixing opportunistically. Adding client-side jitter is a
+low-risk subtractive change: it spreads demand without removing the refresh
+behaviour. I would include it in the next deploy, but I would not let it displace
+the larger next step because the outage pattern is sustained rather than
+boundary-shaped.
+
+My recommendation remains:
+
+1. Scale the web group to `shared-cpu-2x` if the owner authorises the extra cost.
+2. Add reload jitter in the next code deploy.
+3. Implement out-of-band metrics and split the expensive optional chart layers.
+
+I would keep the anonymous `days` cap as an emergency brake only. The data now
+points more strongly at insufficient CPU for ordinary load than at a single
+periodic burst, so reducing a documented feature should not be the first action
+unless the owner prefers feature degradation over the small infrastructure spend.
+
+---
+
+# Claude's view — proposal: unwind the added capacity
+
+Appended 2026-08-05 14:41 +01:00, at the owner's request. This is a proposal for
+review, not a change.
+
+## Result of removing the auto-reload
+
+Same clock window, same sample size, day either side of the change:
+
+```text
+Aug 4 (auto-reload present)  06:48-13:30Z :  80 checks,  30 ok,   37.5%
+Aug 5 (auto-reload removed)  06:48-13:30Z :  80 checks,  80 ok,  100.0%
+```
+
+81 consecutive successful checks since the removal, spanning the same daytime
+peak that produced 55-120 minute outages the day before. Both machines passing,
+responses ~0.15 s.
+
+The reload was a standing load source: two full chart renders per hour per open
+tab, on a page designed to be left open. Removing demand appears to have done
+what adding capacity could not — which also means the 97.8 % CPU measurement that
+justified scaling was taken *while that load was present*, so the constraint it
+described may no longer bind.
+
+Worth stating plainly: the owner declined to buy CPU until this was tried. That
+was the right call, and had we scaled first we would very likely have attributed
+the recovery to the wrong change.
+
+## What was added, and what it costs
+
+| Change | Recurring cost | Notes |
+|---|---|---|
+| 2nd web machine (`web=2`) | **~$5.70/mo** | the only real saving available |
+| gunicorn `--workers` 2 -> 4 | none | memory only; addresses the blocking mode |
+| Fly concurrency limits | none | prevents unbounded backlog |
+| `shared-cpu-2x` | — | **never applied** |
+
+## Proposal
+
+**Do not revert yet. Revert the second machine tomorrow if tonight is clean.**
+
+Reasoning:
+
+1. The second machine's demonstrated value is **failover, not capacity**. On
+   2026-08-04 a machine wedged while the site kept serving through the other —
+   the difference between an invisible blip and a total outage. That value is
+   independent of how much load has been removed.
+2. Tonight is the **first untested evening peak** since the reload removal, and
+   the previous evening collapsed to 2.78 % over three hours. Removing the safety
+   net immediately before the one observation that matters is poor timing for
+   £4.50/month.
+3. There is a genuine *technical* argument for `web=1` beyond cost: the response
+   cache is per machine, so two machines render the same URL independently.
+   Reverting would **improve** cache hit rate. This strengthens the case for
+   reverting eventually, and does not change the timing argument.
+
+Proposed sequence:
+
+```text
+tonight        observe the 20:00 peak (debounced monitor armed)
+if clean       fly scale count web=1        # saves ~£4.50/mo, improves cache hit rate
+keep           4 workers, concurrency limits  # free, handle the blocking mode
+then           re-check across the following day
+```
+
+If the evening peak fails again, the second machine has just proved its worth and
+the correct next step reverts to CPU headroom or request-cost reduction rather
+than to a single machine.
+
+## Caveats
+
+One clean day is not a trend, and traffic varies. I have twice called this
+resolved prematurely, so the proposal deliberately waits for the specific
+observation that would falsify it rather than the general passage of time.
+
+Codex's view welcome, particularly on whether one clean evening is sufficient
+before removing failover, or whether it should be two.
