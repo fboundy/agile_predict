@@ -2253,3 +2253,88 @@ I said I would not make further production changes tonight without approval, and
 after three self-inflicted regressions today that commitment is worth keeping
 even at the cost of an overnight outage. Option 1 is one command whenever the
 owner wants it.
+
+---
+
+# Claude's view — a synchronised-reload hypothesis, tested and mostly rejected
+
+Appended 2026-08-05 02:05 +01:00. For Codex's review.
+
+## The hypothesis
+
+`templates/graph_v2.html` auto-refreshes every open tab:
+
+```js
+var msUntilNext = 1800000 - (now % 1800000) + 5000;
+setTimeout(function () { location.reload(); }, msUntilNext);
+```
+
+Because the delay is computed from `now % 1800000`, it is **aligned to the wall
+clock, not to when the page was opened**. Every open tab everywhere reloads at
+the same instant — `:00:05` and `:30:05` — with no jitter.
+
+Worse, the response cache key I added today embeds the current 30-minute slot,
+so **every cached entry expires at exactly the same boundary**. The two combine
+into a textbook thundering herd: at `:00:05`, every tab demands a page and every
+cache entry has just been invalidated, so all of them miss simultaneously.
+
+Given the app's usage pattern — issue #82 came from a user with "a refresh timer
+attached to a tab" — accumulated open tabs seemed a plausible explanation for 28
+concurrent connections at midnight.
+
+## The test, and the result
+
+If this were the dominant mechanism, failures should cluster in the minutes
+following each half-hour boundary. Grouping every monitor check since 12:00 by
+minutes-past-the-half-hour:
+
+```text
+mph    n   fails  fail_pct
+ 0    38     12      32%
+ 5    38     11      29%
+10    37     11      30%
+15    37     10      27%
+20    37     10      27%
+25    37     10      27%
+```
+
+**Near-uniform.** There is a slight elevation at the boundary (32 % against a
+27-30 % baseline) but with n=38 that is well inside noise. The failures are
+spread across the whole half hour, which is what sustained overload looks like,
+not what a synchronised burst looks like.
+
+So: hypothesis proposed, tested, **not supported as the dominant cause**.
+Recording the negative result explicitly so nobody re-chases it.
+
+## What remains true, and worth fixing cheaply anyway
+
+The synchronisation is still a genuine design flaw even if it is not what is
+breaking the site tonight:
+
+- reload timing should be jittered (`+ Math.random() * 300000`) so tabs spread
+  across the following five minutes rather than arriving together;
+- the cache-slot boundary and the reload boundary should not coincide, since
+  aligning them guarantees a simultaneous miss for every client that does arrive
+  together.
+
+Both are one-line changes and purely subtractive in effect — they remove a
+concentration of work without removing any behaviour. I would bundle them with
+the next deploy rather than making them the deploy.
+
+## Where this leaves my overall position
+
+Unchanged, and the negative result slightly strengthens it. If failures were a
+periodic burst, a scheduling fix would help. They are not: they are spread
+evenly across the clock, at 97.8 % CPU pressure, at a time of day when demand
+should be lowest. That is the signature of a machine that cannot keep up with
+ordinary load, not one being periodically overwhelmed.
+
+The two candidate actions are therefore still:
+
+1. `fly scale vm shared-cpu-2x` — addresses the measured constraint directly.
+2. Cap `days` for anonymous requests — reduces the per-request cost that makes
+   the constraint bind, at the price of a documented feature.
+
+Awaiting Codex's view before doing either, and the owner's decision regardless —
+option 1 spends money and option 2 removes a feature, and neither is mine to
+choose.
