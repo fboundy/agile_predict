@@ -714,6 +714,56 @@ class CanonicalCacheKeyTests(TestCase):
     def test_unparseable_days_falls_back_to_raw_query(self):
         self._diff("/v2/X/?days=abc", "/v2/X/?days=xyz")
 
+    # --- /v2/history/ has its own parameter set, not the chart's ---
+    # Regression: history shares the /v2/ prefix, so it fell through to the
+    # chart branch, which dropped all of these as unknown. Every history URL
+    # then shared one cache entry and the on-page controls did nothing.
+    def test_history_windows_differ(self):
+        self._diff("/v2/history/?window=last-week", "/v2/history/?window=last-month")
+        self._diff("/v2/history/?window=last-week", "/v2/history/?window=last-2-weeks")
+
+    def test_history_other_controls_differ(self):
+        self._diff("/v2/history/?offset_days=1", "/v2/history/?offset_days=3")
+        self._diff("/v2/history/?metric=mae", "/v2/history/?metric=rmse")
+        self._diff("/v2/history/?unit_mode=da", "/v2/history/?unit_mode=agile")
+        self._diff("/v2/history/?compare_x2r=1", "/v2/history/")
+        self._diff("/v2/history/?compare_agileforecast=1", "/v2/history/")
+
+    def test_history_does_not_collide_with_chart_params(self):
+        # A history URL must never key the same as the chart page's defaults.
+        self._diff("/v2/history/?window=last-week", "/v2/X/?days=5")
+
+    def test_history_defaults_collapse(self):
+        self._same(
+            "/v2/history/?window=last-2-weeks&offset_days=1&metric=mae&unit_mode=da",
+            "/v2/history/",
+        )
+        self._same("/v2/history/?utm_source=x", "/v2/history/")
+
+    def test_history_normalisation_mirrors_the_view(self):
+        # unknown window / metric / unit_mode fall back to the view's defaults
+        self._same("/v2/history/?window=bogus", "/v2/history/")
+        self._same("/v2/history/?metric=nonsense", "/v2/history/?metric=mae")
+        self._same("/v2/history/?unit_mode=nonsense", "/v2/history/?unit_mode=da")
+        # offset_days clamped to 0..14, and truthy spellings agree with _truthy
+        self._same("/v2/history/?offset_days=99", "/v2/history/?offset_days=14")
+        self._same("/v2/history/?offset_days=-5", "/v2/history/?offset_days=0")
+        self._same("/v2/history/?compare_x2r=YES", "/v2/history/?compare_x2r=on")
+
+    def test_history_custom_window_keys_on_dates(self):
+        base = "/v2/history/?window=custom&start_date=2026-01-01&end_date=2026-01-31"
+        self._diff(base, "/v2/history/?window=custom&start_date=2026-02-01&end_date=2026-02-28")
+        # Incomplete/reversed pairs fall back to last-2-weeks in the view, so
+        # they must key the same as that window rather than as separate entries.
+        self._same("/v2/history/?window=custom", "/v2/history/?window=last-2-weeks")
+        self._same(
+            "/v2/history/?window=custom&start_date=2026-03-10&end_date=2026-03-01",
+            "/v2/history/?window=last-2-weeks",
+        )
+
+    def test_history_region_path_still_separates(self):
+        self._diff("/v2/history/?window=last-week", "/v2/history/G/?window=last-week")
+
 
 class InvalidRegionTests(TestCase):
     """An unrecognised region must not cost a full chart render: it used to fall

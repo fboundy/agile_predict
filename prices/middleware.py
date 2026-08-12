@@ -5,6 +5,7 @@ from django.conf import settings
 from django.core.cache import cache, caches
 from django.http import HttpResponse
 from django.utils.cache import patch_response_headers
+from django.utils.dateparse import parse_date
 
 from . import blocklist
 
@@ -183,6 +184,9 @@ class RateLimitMiddleware:
 
 _TRUE_WORDS = {"1", "true", "yes", "on"}
 
+# Mirrors HistoryView.window_options keys.
+_HISTORY_WINDOWS = ("last-week", "last-2-weeks", "last-month", "custom")
+
 
 def _canonical_query(path, q):
     """Collapse query strings that produce identical output onto one cache key.
@@ -218,8 +222,61 @@ def _canonical_query(path, q):
                 parts.append(f"format={fmt}")  # DRF renderer — changes output
             return "&".join(parts)
 
+        if path.startswith("/v2/history/"):
+            # prices/views.py: HistoryView.get_date_window / get_context_data,
+            # plus HistoryV2View.get_context_data for metric + unit_mode.
+            #
+            # MUST stay ahead of the /v2/ branch below. The history page shares
+            # the /v2/ prefix but takes a completely different parameter set, so
+            # it used to fall through to the chart branch, which dropped every
+            # one of these as "unknown". Each history URL then canonicalised to
+            # the same chart-default string and they all shared ONE cache entry:
+            # whichever variant rendered first was served for every window,
+            # lead time, metric and unit toggle until the key rolled.
+            window = q.get("window", "last-2-weeks")
+            if window not in _HISTORY_WINDOWS:
+                window = "last-2-weeks"
+
+            date_parts = []
+            if window == "custom":
+                # get_date_window only honours custom dates when BOTH parse and
+                # are correctly ordered, and otherwise falls back to the
+                # 2-week window — so anything else must collapse onto that key.
+                start_date = parse_date(q.get("start_date", ""))
+                end_date = parse_date(q.get("end_date", ""))
+                if start_date and end_date and start_date <= end_date:
+                    date_parts = [
+                        f"start_date={start_date.isoformat()}",
+                        f"end_date={end_date.isoformat()}",
+                    ]
+                else:
+                    window = "last-2-weeks"
+
+            # HistoryView.max_offset_days is 14; mirrored here like the other
+            # view constants in this function.
+            offset_days = min(max(int(q.get("offset_days", 1)), 0), 14)
+            metric = str(q.get("metric", "mae")).lower()
+            if metric not in ("mae", "rmse"):
+                metric = "mae"
+            unit_mode = str(q.get("unit_mode", "da")).lower()
+            if unit_mode not in ("agile", "da"):
+                unit_mode = "da"
+            cmp_af = "1" if str(q.get("compare_agileforecast")).lower() in _TRUE_WORDS else "0"
+            cmp_x2r = "1" if str(q.get("compare_x2r")).lower() in _TRUE_WORDS else "0"
+
+            return "&".join(
+                [f"window={window}", *date_parts, f"offset_days={offset_days}",
+                 f"metric={metric}", f"unit_mode={unit_mode}",
+                 f"compare_agileforecast={cmp_af}", f"compare_x2r={cmp_x2r}"]
+            )
+
         if path.startswith("/v2/"):
             # prices/views.py: GraphV2View.get_context_data / ext_forecast_json
+            # Catch-all for the remaining /v2/ surfaces. Safe only because every
+            # other v2 page (stats, about, model, api_how_to, limitations)
+            # ignores the query string entirely. A NEW v2 page that reads its own
+            # parameters needs its own branch above, or its URLs will collapse
+            # together exactly as the history page's did.
             days = min(max(int(q.get("days", 5)), 1), 14)
             band = "0" if q.get("band", "1") == "0" else "1"
             export = "1" if q.get("export", "0") == "1" else "0"
