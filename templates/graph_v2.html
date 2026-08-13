@@ -623,13 +623,21 @@
   {% endif %}
   </div>
 
-  {# Auto-refresh removed 2026-08-05 while investigating sustained overload.
+  {% comment %}
+     Auto-refresh removed 2026-08-05 while investigating sustained overload.
      Every open tab reloaded on a wall-clock-aligned timer (:00:05 / :30:05), so
      it generated two full chart renders per hour per open tab forever, and all
      tabs arrived together with no jitter. Measured failure timing did not show
      the synchronised burst dominating, but the baseline volume is real and this
      page is designed to be left open. Restore only with jitter, and preferably
-     as a lightweight data refresh rather than a whole-page reload. #}
+     as a lightweight data refresh rather than a whole-page reload.
+
+     NB: the hash-brace comment form cannot span multiple lines — Django's lexer
+     only matches it on a single line, so a multi-line one is not recognised as a
+     comment at all and is emitted as literal page text. This block was written
+     that way on 2026-08-05 and printed on the live chart page until 2026-08-13.
+     Use this comment tag for anything multi-line.
+  {% endcomment %}
 
 </div>
 {% endblock content %}
