@@ -311,6 +311,7 @@ def run_feature_experiment(df, ff_all, prices, _logger=None, horizon_days=TRAIN_
     for set_name, candidate_features in EXPERIMENT_FEATURE_SETS.items():
         fold_scores = []
         fold_reports = []
+        fold_reports_prod = []
 
         for fold in range(N_FOLDS):
             end_idx   = total_days - fold * TEST_DAYS
@@ -398,6 +399,17 @@ def run_feature_experiment(df, ff_all, prices, _logger=None, horizon_days=TRAIN_
             fold_scores.append({"wmae": wmae, "wrmse": wrmse})
             fold_reports.append(forecast_report(ensemble[eval_mask], eval_y))
 
+            # The score above is computed on 1-3d only, which no longer matches
+            # the task: the model is served to 14 days and the under-dispersion
+            # defect lives beyond 2 days, where this mask cannot see it. Report
+            # production-style >=2d diagnostics beside it so a feature set cannot
+            # win on the near horizon while degrading the served one.
+            prod_mask = dt_vals >= 2
+            if prod_mask.sum() >= 50:
+                fold_reports_prod.append(
+                    forecast_report(ensemble[prod_mask], np.array(test_y)[prod_mask])
+                )
+
         if not fold_scores:
             continue
 
@@ -408,27 +420,42 @@ def run_feature_experiment(df, ff_all, prices, _logger=None, horizon_days=TRAIN_
         # Calibration/detection alongside the aggregate score. The aggregate is
         # dominated by mid-range slots, so on its own it cannot distinguish a
         # configuration that flags extremes from one that never does.
-        def _mean(path):
-            vals = [r[path] for r in fold_reports if np.isfinite(r[path])]
+        def _mean(reports, path):
+            vals = [r[path] for r in reports if np.isfinite(r[path])]
             return round(float(np.mean(vals)), 4) if vals else None
 
-        def _band_mean(band, key):
-            vals = [r["bands"][band][key] for r in fold_reports
+        def _band_mean(reports, band, key):
+            vals = [r["bands"][band][key] for r in reports
                     if np.isfinite(r["bands"][band][key])]
             return round(float(np.mean(vals)), 4) if vals else None
 
+        def _summary(reports):
+            if not reports:
+                return None
+            return {
+                "sd_ratio": _mean(reports, "sd_ratio"), "slope": _mean(reports, "slope"),
+                "rmse": _mean(reports, "rmse"), "mae": _mean(reports, "mae"),
+                "tail_rmse": _mean(reports, "tail_rmse"),
+                "low_bias": _mean(reports, "low_bias"), "high_bias": _mean(reports, "high_bias"),
+                "negative_recall": _band_mean(reports, "negative", "recall"),
+                "negative_precision": _band_mean(reports, "negative", "precision"),
+                "spike_recall": _band_mean(reports, "spike", "recall"),
+                "expensive_recall": _band_mean(reports, "expensive", "recall"),
+            }
+
+        prod = _summary(fold_reports_prod)
         results[set_name] = {
             "score": round(score, 4), "wmae": round(mean_wmae, 4), "wrmse": round(mean_wrmse, 4),
-            "sd_ratio": _mean("sd_ratio"), "slope": _mean("slope"),
-            "tail_rmse": _mean("tail_rmse"),
-            "low_bias": _mean("low_bias"), "high_bias": _mean("high_bias"),
-            "negative_recall": _band_mean("negative", "recall"),
-            "negative_precision": _band_mean("negative", "precision"),
-            "spike_recall": _band_mean("spike", "recall"),
+            "eval_1_3d": _summary(fold_reports),
+            # Production-style: the horizons the model is actually served at.
+            "eval_2d_plus": prod,
         }
         log(f"  {set_name:<20s}  score={score:.3f}  wmae={mean_wmae:.3f}  wrmse={mean_wrmse:.3f}  "
-            f"sd_ratio={results[set_name]['sd_ratio']}  slope={results[set_name]['slope']}  "
-            f"neg_recall={results[set_name]['negative_recall']}  ({len(fold_scores)} folds)")
+            f"({len(fold_scores)} folds)")
+        if prod:
+            log(f"  {'':<20s}  >=2d: sd_ratio={prod['sd_ratio']}  slope={prod['slope']}  "
+                f"rmse={prod['rmse']}  neg_recall={prod['negative_recall']}  "
+                f"spike_recall={prod['spike_recall']}")
 
     if not results:
         log("Feature experiment: no results, defaulting to 'generation'")
@@ -823,6 +850,17 @@ class Command(BaseCommand):
 
                         factor = GLOBAL_SETTINGS["REGIONS"]["X"]["factors"][0]
 
+                        # KNOWN DEFECT: this is not a true holdout. It excludes the
+                        # forecast *runs* used for training but not the target
+                        # *slots* — training keeps one run per day and this keeps
+                        # that day's other runs, so ~100% of these rows are scored
+                        # on half-hours whose settled price was in the training
+                        # set. Every error statistic and trend derived from
+                        # `results` below is therefore optimistic, including the
+                        # user-visible ones. Do not read it as out-of-sample; the
+                        # honest measurement is the published-forecast gate below.
+                        # Fixing this changes user-visible numbers and is tracked
+                        # as separate work — see docs/MODEL_DYNAMIC_RANGE.md.
                         logger.info(f"Predicting holdout/test dataset ({len(test_X)} rows)")
                         results = test_X[["dt", "day_ahead"]].copy()
                         results["pred"] = predict_day_ahead_ensemble(ensemble_models, test_X[features])
@@ -862,6 +900,21 @@ class Command(BaseCommand):
                                     _gate, f"(published forecasts vs settled prices, >=2d, "
                                            f"last {GATE_LOOKBACK_DAYS}d)"
                                 ))
+                                # Persist: this is the only genuinely
+                                # out-of-sample measurement the system has, and a
+                                # log line cannot show a trend across runs.
+                                _gate_job = UpdateJob.objects.filter(
+                                    job_type=UpdateJob.JOB_UPDATE,
+                                ).order_by("-requested_at").first()
+                                if _gate_job:
+                                    _gate_job.options["published_forecast_quality"] = {
+                                        "generated_at": pd.Timestamp.now(tz="UTC").isoformat(),
+                                        "lookback_days": GATE_LOOKBACK_DAYS,
+                                        "min_horizon_days": _gate.get("min_horizon_days"),
+                                        "train_horizon_days": train_horizon_days,
+                                        "report": _gate,
+                                    }
+                                    _gate_job.save(update_fields=["options"])
                         except Exception:
                             logger.exception("Forecast quality gate failed (non-fatal)")
 
