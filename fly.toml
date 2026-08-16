@@ -16,7 +16,9 @@ console_command = '/code/manage.py shell'
   PORT = '8000'
 
 [processes]
-  web = 'gunicorn --bind :8000 --workers 4 --timeout 60 --graceful-timeout 30 --max-requests 800 --max-requests-jitter 200 config.wsgi'
+  # nginx on :8000 buffering in front of gunicorn on a unix socket. The
+  # gunicorn flags live in the entrypoint so they are defined once.
+  web = '/code/deploy/web-entrypoint.sh'
   worker = 'python manage.py update_worker'
 
 [http_service]
@@ -34,6 +36,11 @@ console_command = '/code/manage.py shell'
   # health check cannot get a worker either — so a capacity limit became a total
   # outage. soft_limit ~= worker count makes Fly spread load to the other
   # machine; hard_limit caps the queue so excess fails fast instead of rotting.
+  #
+  # Deliberately UNCHANGED by the nginx proxy deploy. soft_limit = 4 describes
+  # gunicorn's capacity, not nginx's, so it is now wrong — but retuning it at
+  # the same time as the proxy would confound the one measurement that tells us
+  # whether the proxy worked. Retune after observing nginx-backed behaviour.
   [http_service.concurrency]
     type = 'requests'
     soft_limit = 4
