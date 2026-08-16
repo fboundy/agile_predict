@@ -192,6 +192,19 @@ RATELIMIT_PER_MIN = env.int("RATELIMIT_PER_MIN", default=60)  # requests/min/IP 
 RATELIMIT_BLOCK_THRESHOLD = env.int("RATELIMIT_BLOCK_THRESHOLD", default=5)  # over-limit windows before an escalated block
 RATELIMIT_BLOCK_SECONDS = env.int("RATELIMIT_BLOCK_SECONDS", default=600)  # length of the escalated block
 
+# Backstop for the external update trigger. Production forecasts are queued by
+# EasyCron (outside this repo) POSTing to /update at 05:15/10:15/15:15/21:15
+# UTC. It fires once and never retries, so an outage overlapping a slot loses
+# that whole forecast cycle silently — GH #104, where the site was wedged
+# through the 05:15 window and a user reported the gap three hours later.
+#
+# UPDATE_CATCHUP_HOURS must exceed the largest legitimate gap in that schedule.
+# The overnight gap (21:15 -> 05:15) is exactly 8h, so 8 leaves no margin at all
+# and would have the backstop pre-empting the scheduler rather than covering for
+# it. 9 gives an hour of headroom.
+UPDATE_CATCHUP_ENABLED = env.bool("UPDATE_CATCHUP_ENABLED", default=True)
+UPDATE_CATCHUP_HOURS = env.int("UPDATE_CATCHUP_HOURS", default=9)
+
 # Event-keyed response caching for anonymous GETs on the heavy chart/API paths.
 # The cache key embeds the latest forecast/price version and the current 30-min
 # slot, so entries live until the content actually changes; RESPONSE_CACHE_TTL

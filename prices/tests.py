@@ -22,7 +22,8 @@ from prices.external_forecasts import fetch_x2r
 from prices.forms import ForecastForm
 from prices.management.commands.update import Command as UpdateCommand
 from prices.management.commands.update import EXTRA_TREES_REGRESSOR_PARAMS, fit_day_ahead_ensemble, predict_day_ahead_ensemble
-from prices.models import AgileData, ExternalForecast, ForecastData, Forecasts, PriceHistory
+from prices.management.commands.update_worker import maybe_enqueue_catchup
+from prices.models import AgileData, ExternalForecast, ForecastData, Forecasts, PriceHistory, UpdateJob
 from prices.views import GraphFormView, _update_options
 
 
@@ -789,3 +790,88 @@ class InvalidRegionTests(TestCase):
         c = Client(raise_request_exception=False)
         self.assertNotEqual(c.get("/v2/G/").status_code, 302)
         self.assertNotEqual(c.get("/v2/g/").status_code, 302)
+
+
+class UpdateCatchupTests(TestCase):
+    """Backstop for the external (EasyCron) update trigger — see GH #104.
+
+    The scheduler fires once with no retry, so an outage overlapping one of its
+    slots loses that forecast cycle silently. These cover the conditions under
+    which the worker should and should not step in.
+    """
+
+    def _job(self, age_hours, status=UpdateJob.STATUS_COMPLETED, job_type=UpdateJob.JOB_UPDATE):
+        job = UpdateJob.objects.create(job_type=job_type, status=status)
+        # requested_at is auto_now_add, so it has to be rewritten after insert.
+        UpdateJob.objects.filter(pk=job.pk).update(
+            requested_at=timezone.now() - timedelta(hours=age_hours)
+        )
+        job.refresh_from_db()
+        return job
+
+    def test_no_catchup_when_recent(self):
+        self._job(age_hours=6)
+        self.assertIsNone(maybe_enqueue_catchup())
+        self.assertEqual(UpdateJob.objects.count(), 1)
+
+    def test_catchup_when_stale(self):
+        self._job(age_hours=10)
+        job = maybe_enqueue_catchup()
+        self.assertIsNotNone(job)
+        self.assertEqual(job.job_type, UpdateJob.JOB_UPDATE)
+        self.assertEqual(job.status, UpdateJob.STATUS_PENDING)
+
+    def test_overnight_gap_does_not_trigger(self):
+        """21:15 -> 05:15 is exactly 8h and is legitimate, not a missed cycle."""
+        self._job(age_hours=8)
+        self.assertIsNone(maybe_enqueue_catchup())
+
+    def test_options_match_the_scheduled_path(self):
+        """run_job passes options straight to call_command, so a stray key would
+        fail the very job the catch-up exists to rescue."""
+        self._job(age_hours=10)
+        job = maybe_enqueue_catchup()
+        self.assertEqual(job.options, {"skip_kde_plot": True})
+
+    def test_no_catchup_while_a_job_is_pending(self):
+        self._job(age_hours=10)
+        self._job(age_hours=9, status=UpdateJob.STATUS_PENDING)
+        self.assertIsNone(maybe_enqueue_catchup())
+
+    def test_no_catchup_while_a_job_is_running(self):
+        self._job(age_hours=10)
+        self._job(age_hours=9, status=UpdateJob.STATUS_RUNNING)
+        self.assertIsNone(maybe_enqueue_catchup())
+
+    def test_stale_failed_job_is_retried(self):
+        """A failed job means no forecast landed, so it still needs covering."""
+        self._job(age_hours=10, status=UpdateJob.STATUS_FAILED)
+        self.assertIsNotNone(maybe_enqueue_catchup())
+
+    def test_does_not_queue_twice(self):
+        """The queued job becomes both the newest and a pending one, so a second
+        pass must be a no-op — otherwise a stalled worker floods the queue."""
+        self._job(age_hours=10)
+        self.assertIsNotNone(maybe_enqueue_catchup())
+        self.assertIsNone(maybe_enqueue_catchup())
+        self.assertEqual(UpdateJob.objects.filter(status=UpdateJob.STATUS_PENDING).count(), 1)
+
+    def test_empty_database_is_left_alone(self):
+        self.assertIsNone(maybe_enqueue_catchup())
+        self.assertEqual(UpdateJob.objects.count(), 0)
+
+    def test_latest_agile_jobs_do_not_count(self):
+        """latest_agile runs afternoons only; it must not mask a missed update."""
+        self._job(age_hours=10)
+        self._job(age_hours=1, job_type=UpdateJob.JOB_LATEST_AGILE)
+        self.assertIsNotNone(maybe_enqueue_catchup())
+
+    @override_settings(UPDATE_CATCHUP_ENABLED=False)
+    def test_disabled_by_setting(self):
+        self._job(age_hours=48)
+        self.assertIsNone(maybe_enqueue_catchup())
+
+    @override_settings(UPDATE_CATCHUP_HOURS=0)
+    def test_zero_hours_disables(self):
+        self._job(age_hours=48)
+        self.assertIsNone(maybe_enqueue_catchup())

@@ -1,10 +1,12 @@
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import timedelta
 import logging
 import os
 from pathlib import Path
 import time
 import traceback
 
+from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import BaseCommand
 from django.db import DatabaseError, close_old_connections, transaction
@@ -21,6 +23,68 @@ COMMAND_BY_JOB_TYPE = {
     UpdateJob.JOB_LATEST_AGILE: "latest_agile",
 }
 
+# How often to evaluate whether a catch-up is due. This is not how often one can
+# be queued — that is bounded by UPDATE_CATCHUP_HOURS, because queueing resets
+# the very timestamp the check measures against.
+CATCHUP_CHECK_SECONDS = 600
+
+
+def maybe_enqueue_catchup(now=None):
+    """Queue an update job if the external scheduler has missed a cycle.
+
+    Production updates come from EasyCron, which lives outside this repo, fires
+    once and never retries. When the site is unreachable at the moment it fires,
+    the POST simply fails and that forecast cycle is lost with nothing to notice
+    it (GH #104). This is the backstop for that, and for EasyCron stopping
+    altogether — a failure that has previously gone unnoticed for three days.
+
+    Returns the queued job, or None when no catch-up is warranted.
+    """
+    if not getattr(settings, "UPDATE_CATCHUP_ENABLED", True):
+        return None
+
+    hours = getattr(settings, "UPDATE_CATCHUP_HOURS", 9)
+    if hours <= 0:
+        return None
+
+    now = now or timezone.now()
+
+    # A job already queued or running means the pipeline is moving; there is
+    # nothing to cover for, and enqueueing here would just duplicate work.
+    if UpdateJob.objects.filter(
+        job_type=UpdateJob.JOB_UPDATE,
+        status__in=[UpdateJob.STATUS_PENDING, UpdateJob.STATUS_RUNNING],
+    ).exists():
+        return None
+
+    latest = (
+        UpdateJob.objects.filter(job_type=UpdateJob.JOB_UPDATE)
+        .order_by("-requested_at")
+        .first()
+    )
+    # A database with no update history has no missed cadence to recover.
+    if latest is None:
+        return None
+
+    age = now - latest.requested_at
+    if age < timedelta(hours=hours):
+        return None
+
+    # Measuring requested_at rather than finished_at, and matching the options
+    # of the scheduled path exactly: run_job passes options straight into
+    # call_command, so an unrecognised key would fail the job it is rescuing.
+    job = UpdateJob.objects.create(
+        job_type=UpdateJob.JOB_UPDATE, options={"skip_kde_plot": True}
+    )
+    logger.warning(
+        "No update job for %.1fh (threshold %sh) — external scheduler appears to "
+        "have missed a cycle; queued catch-up job id=%s",
+        age.total_seconds() / 3600,
+        hours,
+        job.id,
+    )
+    return job
+
 
 class Command(BaseCommand):
     help = "Poll for pending update jobs and run them outside the web process."
@@ -35,8 +99,18 @@ class Command(BaseCommand):
 
         logger.info("Starting update worker")
         self.retry_database_operation(self.fail_interrupted_jobs, poll_interval, run_once)
+
+        # Deadline of 0 means the first pass checks immediately, so a worker
+        # coming back after an outage notices a missed cycle at once rather than
+        # ten minutes later.
+        next_catchup_check = 0.0
         while True:
             close_old_connections()
+
+            if time.monotonic() >= next_catchup_check:
+                next_catchup_check = time.monotonic() + CATCHUP_CHECK_SECONDS
+                self.retry_database_operation(maybe_enqueue_catchup, poll_interval, run_once)
+
             job = self.retry_database_operation(self.claim_job, poll_interval, run_once)
             if job is None:
                 if run_once:
