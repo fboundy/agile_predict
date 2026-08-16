@@ -2276,3 +2276,115 @@ comparison when it does: sd ratio **0.558**, slope **1.365**, negative-price rec
 3. Whether feature-experiment *selection* should move from the 1–3 d score to a
    ≥2 d objective. Diagnostics for both are now recorded; the decision needs its
    own evidence.
+
+---
+
+# Trial: the fix runs on dev only for a week, reviewed 2026-08-23
+
+Appended 2026-08-16 by Claude, at the owner's direction. This entry records the
+deployment decision and the review protocol, so the state is readable from this
+log rather than only from commit messages.
+
+## The decision
+
+The owner's call: **the dynamic-range fix runs on the dev server for one week
+before any production decision.** Nothing is deployed to fly.io.
+
+This is a deployment hold, not a retraction. Nothing in the findings above is
+withdrawn.
+
+## Branch state
+
+| | branch | contains | runs where |
+|---|---|---|---|
+| **new code** | `dev` @ `956cd23` | `TRAIN_HORIZON_DAYS = 14`, `prices/model_metrics.py`, the published-forecast gate, the feature-experiment changes, `compare_trial` | CT dev server (`/srv/agile_predict`, checked out on `dev`) |
+| **prod build** | `main` @ `7dbc093` | the pre-fix code — `build_training_data` still filters to `ag_start`..`ag_end`, no `model_metrics.py` | fly.io app `prices` |
+
+`main` was reverted by restoring the four code paths to their state at `33c5cf2`,
+**not** by reverting the three commits: `a2249e4` had swept a Codex entry of this
+document into its diff via `git add -A`, so a straight revert conflicted and would
+have deleted review text. The code is identical to the pre-fix build; the history
+is intact.
+
+**This document is deliberately kept on both branches.** It is a record rather than
+a functional change, and it describes two defects that are still live in the
+production build — `build_holdout_data` is not out of sample, and the feature
+experiment scores a horizon where the defect is invisible. Someone reading `main`
+needs to know that.
+
+Do not merge `dev` to `main`, deploy, or move the dev server off `dev`, until the
+review.
+
+## What the trial measures
+
+The dev server publishes forecasts on its own cron against its own SQLite
+database; production publishes against fly Postgres on the old code. After a week
+both have published forecasts whose prices have settled, which is the only
+genuinely out-of-sample comparison available.
+
+`manage.py compare_trial` (new, on `dev`) scores published forecasts against
+settled prices and can split before/after a date. Three cells matter:
+
+| cell | code | window | role |
+|---|---|---|---|
+| dev / before | old | pre-2026-08-16 | the dev box's own baseline |
+| dev / after | **new** | 2026-08-16 → | the trial |
+| **prod / after** | old | 2026-08-16 → | **the control** |
+
+The third cell is not optional. A before/after split on one box confounds the code
+change with the weather and price regime of two different weeks; the prod cell over
+the *same* window is what separates them. `compare_trial` prints that warning
+itself so it cannot be quietly skipped.
+
+## Baselines to beat
+
+Recorded today, so the comparison has something to be measured against:
+
+| | sd ratio | slope | negative recall | spike recall |
+|---|---|---|---|---|
+| production, direct measurement (≥2 d) | 0.559 | 1.377 | 0.000 | 0.000 |
+| dev box, all published forecasts pre-trial (≥2 d) | 0.659 | 1.078 | 0.014 | 0.000 |
+
+The dev box's own pre-trial figure is the fairer target, since it shares the
+database and data sources with the trial; the production figure is the number the
+investigation opened with.
+
+Offline reconstruction predicted sd ratio 0.563 → 0.884 and negative recall 0.000
+→ 0.219 for this change. **That prediction is now testable**, which is the point of
+the week.
+
+## Review
+
+Scheduled 2026-08-23 09:00 UTC (10:00 BST), routine
+`trig_01JmdnbmA8KH2k78gCTRpjfG`. It carries the protocol but **cannot gather the
+data** — a cloud agent reaches neither the CT nor fly.io — so the numbers must be
+run locally:
+
+```bash
+ssh agile@django 'cd /srv/agile_predict && .venv/bin/python manage.py compare_trial --split 2026-08-16'
+# and, as the regime control, the same over the trial window on prod:
+fly ssh console --app prices --machine <web> -C "python manage.py compare_trial --since 2026-08-16 --label prod"
+```
+
+`compare_trial` exists only on `dev`, so the prod run needs the file copied across.
+
+Also confirm at review time that the trial was actually in force all week — that
+the dev server is still on `dev` and that its cron kept publishing. A week of no
+forecasts would look like a week of no evidence.
+
+## What the review cannot settle
+
+- **One week, in summer.** Negative prices are seasonal and this is the season that
+  produces them; a good result is not proof the change holds in winter.
+- **The exponent is not part of this trial.** Heavier outlier weighting
+  (`max(1, |z|)²` or `³`) is the agreed *next* step once the window fix is
+  confirmed. Do not read this week as evidence about it either way.
+- **No holdout-derived number may be quoted**, including the site's error
+  statistics and trend plot, for the reason established two entries above.
+
+## Outstanding, unchanged by the trial
+
+1. The contaminated holdout still feeds user-visible statistics and the trend plot.
+2. `templates/stats_v2.html` describes a scoring method the code does not use.
+3. Whether feature-experiment *selection* should move from the 1–3 d score to a
+   ≥2 d objective.
