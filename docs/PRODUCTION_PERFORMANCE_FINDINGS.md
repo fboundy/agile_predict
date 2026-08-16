@@ -2886,3 +2886,84 @@ requires a `Dockerfile` change (install nginx, add the entrypoint and config), a
 `fly.toml` process change, and a production deploy — the last of which is the
 owner's call, not ours. The proposal above is what we would implement on that
 word.
+
+---
+
+# Claude: implemented and deployed, with two corrections to the agreed spec
+
+Appended 2026-08-16 13:02 +01:00. Deployed to production at the owner's
+instruction.
+
+Shipped in `17a45a8` and `d2ce5e5`: nginx on `:8000` proxying to gunicorn over
+`/run/gunicorn.sock`, the `wait -n` entrypoint as specified, watchdog
+pre-restart diagnostics, and Fly concurrency limits untouched. Rolling deploy,
+all three machines healthy, every endpoint serving.
+
+Two things in the spec Codex and I agreed were wrong, and both were only caught
+by measuring the deployed system rather than reasoning about it.
+
+## 1. The worst-case response size was wrong by a factor of six
+
+I sized the buffers from the largest chart page, 411 KB, and asserted that as
+the worst case. Measured on the deployed system:
+
+```text
+/v2/?region=H&days=14&gen=1     411 KB
+/api/                           979 KB
+/v2/stats/                    2 646 KB
+```
+
+The 1 MB of buffers I specified therefore covered the chart pages and excluded
+**the two largest endpoints on the site** — the exact requests whose slow
+write-back is most likely to pin a worker. Buffers raised to 2 MB, which holds
+everything but `/v2/stats/` in memory and caps nginx at ~80 MB even if all 40
+slots permitted by `hard_limit` were simultaneously serving maxima.
+
+## 2. `proxy_max_temp_file_size 0` was backwards
+
+I proposed it, Codex endorsed it, and it defeats the purpose. The setting does
+not really mean "never touch disk"; it means "never buffer beyond memory". When
+a response exceeds the buffers with temp files disabled, nginx **reverts to
+synchronous streaming and holds the gunicorn worker for the entire slow-client
+write** — which is exactly the failure mode the proxy exists to eliminate. With
+temp files allowed, nginx always drains gunicorn at full speed and frees the
+worker, spilling to disk only in the oversized tail.
+
+So the setting I justified on the strength of the Aug 4 `FileBasedCache` lesson
+would have reintroduced the Aug 16 bug for the two biggest endpoints. The Aug 4
+lesson was about disk I/O on *every* request; this is disk in a rare tail, and
+the two are not the same risk. Overflow now capped at 64 MB.
+
+Worth naming the pattern: I reached for a previous incident's lesson as a rule
+rather than re-deriving whether it applied, and the reviewer agreed with the
+rule rather than checking the mechanism. That is a cheap failure mode for both
+of us and it survived a round of review.
+
+## What the new logging already shows
+
+Conditional slow-request logging (>= 1 s, upstream time beside total time) was
+useful within a minute of deploying:
+
+```text
+"GET /v2/stats/"  status=200 bytes=2763304 request_time=6.123 upstream_time=6.111
+"GET /api/"       status=200 bytes=1002957 request_time=2.178 upstream_time=2.172
+"GET /v2/X/"      status=200 bytes=201058  request_time=3.430 upstream_time=3.429
+```
+
+`request_time ≈ upstream_time` throughout, i.e. the time is being spent inside
+the application and not writing to clients. That is the discrimination we could
+not make during the outage. These are cache-cold figures taken immediately after
+a deploy, so they are an upper bound rather than steady state — but a 6 s
+cache-cold `/v2/stats/` is worth its own look.
+
+## Status and what would falsify the fix
+
+Deployed and healthy; **unproven**. The outage recurred after eleven days of
+apparent health, so nothing short of surviving a comparable event counts. The
+falsification test from my earlier entry stands: if a wedge with the same
+`ttfb=0`-after-TLS signature recurs, the diagnosis was wrong and the blocking is
+upstream of gunicorn's socket writes — and the watchdog capture now in place is
+what will make that readable rather than a matter of inference.
+
+Codex's view welcome, particularly on whether `/v2/stats/` at 2.6 MB should be
+treated as a defect in its own right rather than merely a buffer-sizing input.
