@@ -338,7 +338,12 @@
             name: t.name,
             xaxis: 'x',
             yaxis: 'y',
-            hovertemplate: '%{x|%d %b %H:%M}<br><b>%{y:.2f} {{ shap_unit }}</b><extra>' + t.name + '</extra>',
+            {# Same rule as the server-side traces: no `%{x|...}` prefix, because
+               the figure uses hovermode "x unified" and already prints the
+               timestamp once as the popup header (issue #92). These external
+               traces join the same axes, so they share the same popup.
+               shap_unit is price_display["unit"] — the chart's price unit. #}
+            hovertemplate: '<b>%{y:.2f} {{ shap_unit }}</b><extra>' + t.name + '</extra>',
           });
         });
         (data.statuses || []).forEach(function (src) {

@@ -2921,8 +2921,13 @@ class GraphV2View(V2NavMixin, TemplateView):
                 _lo = low_s.reindex(primary_s.index).ffill().bfill().fillna(0)
                 _hi = high_s.reindex(primary_s.index).ffill().bfill().fillna(0)
                 fc_cd = [[float(lo), float(hi)] for lo, hi in zip(_lo.values, _hi.values)]
+                # No `%{x|...}` prefix on any trace in this figure: hovermode is
+                # "x unified", which already prints the timestamp once as the
+                # popup header, so a per-trace prefix repeats it on every row
+                # (issue #92). The p10/p90 line stays deliberately de-emphasised
+                # as secondary detail; the headline value is bold on every price
+                # trace so rows read consistently.
                 fc_hover = (
-                    f"%{{x|%d %b %H:%M}}<br>"
                     f"<b>%{{y:.2f}} {unit}</b><br>"
                     f"<span style='opacity:.65;font-size:.85em'>"
                     f"p10: %{{customdata[0]:.2f}} · p90: %{{customdata[1]:.2f}} {unit}"
@@ -2930,7 +2935,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 )
             else:
                 fc_cd = None
-                fc_hover = f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>Forecast</extra>"
+                fc_hover = f"<b>%{{y:.2f}} {unit}</b><extra>Forecast</extra>"
             add_price(go.Scatter(
                 x=primary_s.index,
                 y=primary_s.values,
@@ -2980,7 +2985,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 mode="lines",
                 line=dict(shape="hv", color=self._OLDER_COLORS[i % len(self._OLDER_COLORS)], width=1.5),
                 name=f"Forecast ({older_label})",
-                hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} {unit}<extra>{older_label}</extra>",
+                hovertemplate=f"<b>%{{y:.2f}} {unit}</b><extra>{older_label}</extra>",
             ))
 
         # Confirmed actuals — solid white step line, drawn LAST so it always sits
@@ -2992,7 +2997,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                 mode="lines",
                 line=dict(shape="hv", color="#ffffff", width=3.0),
                 name="Confirmed",
-                hovertemplate=f"%{{x|%d %b %H:%M}}<br><b>%{{y:.2f}} {unit}</b><extra>Confirmed</extra>",
+                hovertemplate=f"<b>%{{y:.2f}} {unit}</b><extra>Confirmed</extra>",
             ))
 
         # External forecasts (AgileForecast / X2R): fetched client-side via
@@ -3076,7 +3081,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                             mode="lines",
                             line=dict(color=color, width=1.5, dash="dot"),
                             name=f"Gen ({fc_label})",
-                            hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} GW<extra>Gen {fc_label}</extra>",
+                            hovertemplate=f"<b>%{{y:.2f}} GW</b><extra>Gen {fc_label}</extra>",
                         ))
                         add_gen(go.Scatter(
                             x=[r.date_time for r in fc_gen_rows],
@@ -3084,7 +3089,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                             mode="lines",
                             line=dict(color=color, width=1.5, dash="dot"),
                             name=f"Demand ({fc_label})",
-                            hovertemplate=f"%{{x|%d %b %H:%M}}<br>%{{y:.2f}} GW<extra>Demand {fc_label}</extra>",
+                            hovertemplate=f"<b>%{{y:.2f}} GW</b><extra>Demand {fc_label}</extra>",
                         ))
                 figure.update_yaxes(title_text="Power [GW]", fixedrange=True, row=_GEN_ROW, col=1)
 
@@ -3100,7 +3105,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                         line={"color": "#fd7e14", "width": 2, "shape": "hv"},
                         fillcolor="rgba(253,126,20,0.25)",
                         name="Dispatch capacity",
-                        hovertemplate="%{x|%d %b}<br><b>%{y:.0f} MW</b><extra>Dispatch capacity</extra>",
+                        hovertemplate="<b>%{y:.0f} MW</b><extra>Dispatch capacity</extra>",
                     ))
                 figure.update_yaxes(title_text="Dispatch capacity [MW]", fixedrange=True, row=_DC_ROW, col=1)
 
