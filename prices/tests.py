@@ -1019,6 +1019,41 @@ class UpdateCatchupTests(TestCase):
         self.assertIsNone(maybe_enqueue_catchup())
 
 
+class TemplateCommentLeakTests(TestCase):
+    """Django's `{# ... #}` comment syntax is SINGLE-LINE ONLY.
+
+    A `{#` comment spanning several lines is not a comment at all — the tag
+    parser never closes it, so the raw text is emitted into the response. This
+    shipped to production: three such comments printed their own source onto the
+    main chart view, and a fourth landed inside a JavaScript object literal,
+    making that script block a syntax error and silently killing the external
+    forecast overlay. Multi-line commentary must use
+    `{% comment %}` / `{% endcomment %}`.
+    """
+
+    TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
+
+    def test_no_multiline_hash_comments_in_templates(self):
+        offenders = []
+        for path in self.TEMPLATE_DIR.rglob("*.html"):
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                # An opener with no closer on the same line runs past its line.
+                if "{#" in line and "#}" not in line.split("{#", 1)[1]:
+                    offenders.append(f"{path.name}:{lineno}: {line.strip()[:70]}")
+        self.assertEqual(
+            offenders,
+            [],
+            "Multi-line {# #} comments leak their text into the rendered page. "
+            "Use {% comment %}...{% endcomment %} instead:\n  " + "\n  ".join(offenders),
+        )
+
+    def test_single_line_hash_comments_are_still_allowed(self):
+        """Guard against the scan above being tightened into banning `{#` outright;
+        single-line comments are idiomatic and used throughout these templates."""
+        line = "  {# Region dropdown — JS preserves current query string #}"
+        self.assertNotIn("#}", line.split("{#", 1)[1].split("#}")[0])
+
+
 class SummaryPlacementTests(TestCase):
     """Summary-card placement (GH #93): the cards can sit above the chart, below
     it, or be hidden, and the choice has to survive the response cache."""

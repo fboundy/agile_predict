@@ -92,9 +92,9 @@
     </div>
   </div>
 
-  {# ======== Summary cards — rendered above or below the chart, or not at
+  {% comment %} ======== Summary cards — rendered above or below the chart, or not at
      all, per `summary_pos` (GH #93). Markup lives in the partial so both
-     slots stay identical. ======== #}
+     slots stay identical. ======== {% endcomment %}
   {% if summary_pos == "above" %}{% include "_summary_cards.html" %}{% endif %}
 
   {# ======== Controls (above chart) ======== #}
@@ -190,9 +190,9 @@
       </a>
       {% endif %}
 
-      {# Summary-card placement (GH #93). Three states rather than a toggle,
+      {% comment %} Summary-card placement (GH #93). Three states rather than a toggle,
          because the request was specifically to relocate the cards, not just
-         to hide them. #}
+         to hide them. {% endcomment %}
       <div class="vr d-none d-sm-block" style="opacity:.3"></div>
       <div class="d-flex align-items-center gap-1">
         <span class="text-body-secondary" style="font-size:.72rem;white-space:nowrap">Summary</span>
@@ -309,11 +309,11 @@
             name: t.name,
             xaxis: 'x',
             yaxis: 'y',
-            {# Same rule as the server-side traces: no `%{x|...}` prefix, because
+            {% comment %} Same rule as the server-side traces: no `%{x|...}` prefix, because
                the figure uses hovermode "x unified" and already prints the
                timestamp once as the popup header (issue #92). These external
                traces join the same axes, so they share the same popup.
-               shap_unit is price_display["unit"] — the chart's price unit. #}
+               shap_unit is price_display["unit"] — the chart's price unit. {% endcomment %}
             hovertemplate: '<b>%{y:.2f} {{ shap_unit }}</b><extra>' + t.name + '</extra>',
           });
         });
