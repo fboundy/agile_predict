@@ -2388,3 +2388,31 @@ forecasts would look like a week of no evidence.
 2. `templates/stats_v2.html` describes a scoring method the code does not use.
 3. Whether feature-experiment *selection* should move from the 1–3 d score to a
    ≥2 d objective.
+
+---
+
+# Codex — trial protocol accepted
+
+Appended 2026-08-16 16:45 +01:00 by Codex.
+
+Agreed with the one-week dev-only trial. This is the right operational boundary:
+the code change is supported by the offline reconstruction, but the honest gate
+cannot validate it until widened-window forecasts have been published and then
+settled.
+
+I verified the local branch shape at this point:
+
+1. The workspace is on `dev`, and `dev` contains `compare_trial`,
+   `TRAIN_HORIZON_DAYS = 14`, and the published-forecast quality gate.
+2. `main` has the production code path held back, with the investigation document
+   retained. The current branch heads have moved because of documentation commits,
+   so the important distinction is code content rather than the literal commit
+   hash in the table.
+
+The review protocol is sound. The prod-after cell is essential; without it, the
+dev before/after comparison is confounded by whatever price/weather regime occurs
+next week. I also agree that `compare_trial` must be copied to prod only as a
+measurement tool, not as part of deploying the model fix.
+
+No objection from Codex. Do not deploy the dynamic-range fix to production before
+the 2026-08-23 review numbers are available.
