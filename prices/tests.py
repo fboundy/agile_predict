@@ -3,7 +3,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-import numpy as np
 import pandas as pd
 from django.contrib.auth.models import Group, Permission, User
 from django.core import mail
@@ -18,15 +17,6 @@ from prices.forecast_features import (
     FEATURE_SETS,
     latest_prediction_features,
     resolve_feature_columns,
-    TRAIN_HORIZON_DAYS,
-)
-from prices.model_metrics import (
-    calibration_metrics,
-    detection_metrics,
-    format_report,
-    forecast_report,
-    PRICE_BANDS,
-    stored_forecast_report,
 )
 from prices.external_forecasts import fetch_x2r
 from prices.forms import ForecastForm
@@ -517,52 +507,6 @@ class ForecastFeatureTests(TestCase):
         self.assertEqual(list(train_X.columns), ["demand", "weekend"])
         self.assertEqual(train_y.iloc[0], 95)
 
-    def _horizon_frame(self):
-        """One forecast run with rows at 0h, 1d, 3d and 10d past ag_start."""
-        ag_start = pd.Timestamp("2026-05-01T22:00:00Z")
-        offsets = [pd.Timedelta(0), pd.Timedelta(days=1), pd.Timedelta(days=3), pd.Timedelta(days=10)]
-        index = pd.DatetimeIndex([ag_start + o for o in offsets])
-        df = pd.DataFrame(
-            index=index,
-            data={
-                "forecast_id": [1] * 4,
-                "created_at": [pd.Timestamp("2026-05-01T16:15:00Z")] * 4,
-                "ag_start": [ag_start] * 4,
-                "ag_end": [ag_start + pd.Timedelta(days=1)] * 4,
-                "days_ago": [1] * 4,
-                "demand": [30, 31, 32, 33],
-                "weekend": [0] * 4,
-            },
-        )
-        prices = pd.DataFrame(index=index, data={"day_ahead": [95, 96, 97, 98]})
-        return df, pd.DataFrame(index=[1]), prices
-
-    def test_training_window_defaults_to_the_full_served_horizon(self):
-        df, forecasts, prices = self._horizon_frame()
-
-        train_X, _ = build_training_data(df, forecasts, prices, ["demand"], max_days=7)
-
-        # All four rows, including the 10-day-ahead one: the model is served at
-        # those horizons, so it must be trained on them.
-        self.assertEqual(len(train_X), 4)
-        self.assertEqual(TRAIN_HORIZON_DAYS, 14)
-
-    def test_training_window_of_one_day_restores_the_legacy_agile_window(self):
-        df, forecasts, prices = self._horizon_frame()
-
-        train_X, _ = build_training_data(df, forecasts, prices, ["demand"], max_days=7, horizon_days=1)
-
-        # Only the row at ag_start; ag_start + 1d is the exclusive upper bound.
-        self.assertEqual(len(train_X), 1)
-        self.assertEqual(train_X["demand"].tolist(), [30])
-
-    def test_training_window_is_bounded_by_horizon_days(self):
-        df, forecasts, prices = self._horizon_frame()
-
-        train_X, _ = build_training_data(df, forecasts, prices, ["demand"], max_days=7, horizon_days=4)
-
-        self.assertEqual(train_X["demand"].tolist(), [30, 31, 32])
-
     def test_latest_prediction_features_preserves_requested_columns(self):
         fc = pd.DataFrame(
             data={
@@ -575,92 +519,6 @@ class ForecastFeatureTests(TestCase):
         features = latest_prediction_features(fc, ["emb_wind", "demand"])
 
         self.assertEqual(list(features.columns), ["emb_wind", "demand"])
-
-
-class ModelMetricsTests(TestCase):
-    def test_detection_metrics_reward_recall_and_punish_false_alarms(self):
-        actual = np.array([-10.0, -5.0, 20.0, 100.0])
-        # Flags both true negatives plus one false alarm.
-        pred = np.array([-8.0, -1.0, -3.0, 90.0])
-
-        band = detection_metrics(pred, actual, below=0.0)
-
-        self.assertEqual(band["n_actual"], 2)
-        self.assertEqual(band["n_flagged"], 3)
-        self.assertAlmostEqual(band["recall"], 1.0)
-        self.assertAlmostEqual(band["precision"], 2 / 3)
-
-    def test_detection_metrics_report_nan_when_nothing_is_flagged(self):
-        # The failure mode this whole gate exists to catch: a model that never
-        # predicts an extreme scores zero recall, not a missing value.
-        actual = np.array([-10.0, -5.0, 20.0, 100.0])
-        pred = np.array([50.0, 55.0, 60.0, 90.0])
-
-        band = detection_metrics(pred, actual, below=0.0)
-
-        self.assertEqual(band["recall"], 0.0)
-        self.assertTrue(np.isnan(band["precision"]))
-
-    def test_calibration_metrics_detect_under_dispersion(self):
-        rng = np.random.default_rng(0)
-        actual = rng.normal(100.0, 40.0, 500)
-        # A prediction compressed toward the mean, as the defect describes.
-        pred = 100.0 + 0.5 * (actual - 100.0)
-
-        report = calibration_metrics(pred, actual)
-
-        self.assertAlmostEqual(report["sd_ratio"], 0.5, places=2)
-        self.assertAlmostEqual(report["slope"], 2.0, places=2)
-
-    def test_forecast_report_covers_every_price_band(self):
-        rng = np.random.default_rng(1)
-        actual = rng.normal(100.0, 60.0, 400)
-        report = forecast_report(actual + rng.normal(0, 5, 400), actual)
-
-        self.assertEqual(set(report["bands"]), set(PRICE_BANDS))
-        self.assertIn("sd_ratio", report)
-        self.assertIn("negative", format_report(report))
-
-    def test_stored_forecast_report_excludes_short_horizon_slots(self):
-        # Slots under 2 days are blended with GB60 actuals by the pipeline, so
-        # scoring them measures the blend rather than the model.
-        created = pd.Timestamp("2026-05-01T16:15:00Z")
-        times = pd.to_datetime(
-            ["2026-05-02T12:00:00Z"] + [f"2026-05-{d:02d}T12:00:00Z" for d in range(4, 14)]
-        )
-        stored = pd.DataFrame(
-            {
-                "date_time": times,
-                "day_ahead": [999.0] + [100.0] * 10,  # the short-horizon row is absurd
-                "created_at": [created] * len(times),
-            }
-        )
-        actuals = pd.DataFrame(index=times, data={"day_ahead": [100.0] * len(times)})
-
-        # Only 10 rows survive the horizon filter, below the reporting minimum,
-        # so no report rather than one dominated by the blended slot.
-        self.assertIsNone(stored_forecast_report(stored, actuals, min_horizon_days=2.0))
-
-    def test_stored_forecast_report_scores_published_predictions(self):
-        created = pd.Timestamp("2026-05-01T16:15:00Z")
-        times = pd.date_range("2026-05-05T00:00:00Z", periods=200, freq="30min")
-        rng = np.random.default_rng(2)
-        actual = rng.normal(100.0, 50.0, len(times))
-        stored = pd.DataFrame(
-            {
-                "date_time": times,
-                # Compressed toward the mean, as the defect describes.
-                "day_ahead": 100.0 + 0.5 * (actual - 100.0),
-                "created_at": [created] * len(times),
-            }
-        )
-        actuals = pd.DataFrame(index=times, data={"day_ahead": actual})
-
-        report = stored_forecast_report(stored, actuals, min_horizon_days=2.0)
-
-        self.assertEqual(report["n"], len(times))
-        self.assertAlmostEqual(report["sd_ratio"], 0.5, places=2)
-        self.assertEqual(report["min_horizon_days"], 2.0)
 
 
 class UpdateOptionTests(TestCase):

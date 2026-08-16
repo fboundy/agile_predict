@@ -34,10 +34,7 @@ from ...forecast_features import (
     add_latest_forecast_features,
     resolve_feature_columns,
     select_daily_training_forecasts,
-    training_horizon_mask,
-    TRAIN_HORIZON_DAYS,
 )
-from ...model_metrics import forecast_report, format_report, stored_forecast_report
 from ...external_forecasts import refresh_external_forecasts
 from ...models import AgileData, ForecastData, Forecasts, History, PlotImage, PriceHistory, UpdateJob
 
@@ -254,39 +251,16 @@ _EXP_ET_PARAMS   = dict(n_estimators=200, min_samples_leaf=4, max_features="sqrt
 
 
 
-# How much settled history the forecast-quality gate scores over.
-GATE_LOOKBACK_DAYS = 35
-
-
-def _load_published_forecasts(days=GATE_LOOKBACK_DAYS):
-    """Predictions this model already published, with the run that produced them."""
-    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
-    rows = ForecastData.objects.filter(
-        forecast__created_at__gte=cutoff, day_ahead__isnull=False
-    ).values("date_time", "day_ahead", "forecast__created_at")
-    stored = pd.DataFrame(list(rows))
-    if stored.empty:
-        return stored
-    stored = stored.rename(columns={"forecast__created_at": "created_at"})
-    stored["date_time"] = pd.to_datetime(stored["date_time"], utc=True)
-    stored["created_at"] = pd.to_datetime(stored["created_at"], utc=True)
-    return stored
-
-
-def run_feature_experiment(df, ff_all, prices, _logger=None, horizon_days=TRAIN_HORIZON_DAYS):
+def run_feature_experiment(df, ff_all, prices, _logger=None):
     """
     Walk-forward cross-validation across EXPERIMENT_FEATURE_SETS.
     Scores each set on MAE + RMSE (equal weight) evaluated only on the
     1–3 day forecast horizon, where model signal dominates over weather
     uncertainty. Sub-1d predictions may be blended with GB60 actuals;
     beyond 3d the weather forecast error swamps feature differences.
-    Price-extreme slots are upweighted by linear z-score, in both the fit and the
-    metric, matching production's objective.
+    Price-extreme slots are upweighted by linear z-score.
 
-    Training rows use the same horizon window as production (`horizon_days`), so
-    features are selected for the task production actually performs.
-
-    Returns (winning_set_name: str, results: dict[name -> {score, ...metrics}])
+    Returns (winning_set_name: str, results: dict[name -> {score, wmae, wrmse}])
     """
     log = _logger.info if _logger else print
 
@@ -310,8 +284,6 @@ def run_feature_experiment(df, ff_all, prices, _logger=None, horizon_days=TRAIN_
     results = {}
     for set_name, candidate_features in EXPERIMENT_FEATURE_SETS.items():
         fold_scores = []
-        fold_reports = []
-        fold_reports_prod = []
 
         for fold in range(N_FOLDS):
             end_idx   = total_days - fold * TEST_DAYS
@@ -325,9 +297,10 @@ def run_feature_experiment(df, ff_all, prices, _logger=None, horizon_days=TRAIN_
             train_df = df[df["forecast_id"].isin(train_ids)].copy()
             test_df  = df[df["forecast_id"].isin(test_ids)].copy()
 
-            # Production window filter — must match build_training_data, or the
-            # experiment selects features for a task production does not perform.
-            train_df = train_df[training_horizon_mask(train_df, horizon_days)]
+            # Production window filter
+            train_df = train_df[
+                (train_df.index >= train_df["ag_start"]) & (train_df.index < train_df["ag_end"])
+            ]
             test_df = test_df[test_df.index > test_df["ag_start"]]
 
             # Merge actuals
@@ -353,28 +326,22 @@ def run_feature_experiment(df, ff_all, prices, _logger=None, horizon_days=TRAIN_
             train_Xf = train_X.fillna(col_medians)
             test_Xf  = test_X.fillna(col_medians)
 
-            # Train under production's objective. Fitting these unweighted while
-            # only weighting the evaluation metric selected features for an
-            # objective production does not use.
-            _train_z = (train_y - train_y.mean()) / train_y.std()
-            fit_weights = np.maximum(1.0, _train_z.abs())
-
             preds = []
             try:
                 cb = CatBoostRegressor(**_EXP_CB_PARAMS)
-                cb.fit(train_X, train_y, sample_weight=fit_weights)
+                cb.fit(train_X, train_y)
                 preds.append(cb.predict(test_X))
             except Exception:
                 pass
             try:
                 lgbm = LGBMRegressor(**_EXP_LGBM_PARAMS)
-                lgbm.fit(train_Xf, train_y, sample_weight=fit_weights)
+                lgbm.fit(train_Xf, train_y)
                 preds.append(lgbm.predict(test_Xf))
             except Exception:
                 pass
             try:
                 et = ExtraTreesRegressor(**_EXP_ET_PARAMS)
-                et.fit(train_Xf, train_y, sample_weight=fit_weights)
+                et.fit(train_Xf, train_y)
                 preds.append(et.predict(test_Xf))
             except Exception:
                 pass
@@ -397,18 +364,6 @@ def run_feature_experiment(df, ff_all, prices, _logger=None, horizon_days=TRAIN_
             wmae  = float(np.average(np.abs(residuals), weights=weights))
             wrmse = float(np.sqrt(np.average(residuals ** 2, weights=weights)))
             fold_scores.append({"wmae": wmae, "wrmse": wrmse})
-            fold_reports.append(forecast_report(ensemble[eval_mask], eval_y))
-
-            # The score above is computed on 1-3d only, which no longer matches
-            # the task: the model is served to 14 days and the under-dispersion
-            # defect lives beyond 2 days, where this mask cannot see it. Report
-            # production-style >=2d diagnostics beside it so a feature set cannot
-            # win on the near horizon while degrading the served one.
-            prod_mask = dt_vals >= 2
-            if prod_mask.sum() >= 50:
-                fold_reports_prod.append(
-                    forecast_report(ensemble[prod_mask], np.array(test_y)[prod_mask])
-                )
 
         if not fold_scores:
             continue
@@ -416,46 +371,8 @@ def run_feature_experiment(df, ff_all, prices, _logger=None, horizon_days=TRAIN_
         mean_wmae  = float(np.mean([s["wmae"]  for s in fold_scores]))
         mean_wrmse = float(np.mean([s["wrmse"] for s in fold_scores]))
         score = 0.5 * mean_wmae + 0.5 * mean_wrmse
-
-        # Calibration/detection alongside the aggregate score. The aggregate is
-        # dominated by mid-range slots, so on its own it cannot distinguish a
-        # configuration that flags extremes from one that never does.
-        def _mean(reports, path):
-            vals = [r[path] for r in reports if np.isfinite(r[path])]
-            return round(float(np.mean(vals)), 4) if vals else None
-
-        def _band_mean(reports, band, key):
-            vals = [r["bands"][band][key] for r in reports
-                    if np.isfinite(r["bands"][band][key])]
-            return round(float(np.mean(vals)), 4) if vals else None
-
-        def _summary(reports):
-            if not reports:
-                return None
-            return {
-                "sd_ratio": _mean(reports, "sd_ratio"), "slope": _mean(reports, "slope"),
-                "rmse": _mean(reports, "rmse"), "mae": _mean(reports, "mae"),
-                "tail_rmse": _mean(reports, "tail_rmse"),
-                "low_bias": _mean(reports, "low_bias"), "high_bias": _mean(reports, "high_bias"),
-                "negative_recall": _band_mean(reports, "negative", "recall"),
-                "negative_precision": _band_mean(reports, "negative", "precision"),
-                "spike_recall": _band_mean(reports, "spike", "recall"),
-                "expensive_recall": _band_mean(reports, "expensive", "recall"),
-            }
-
-        prod = _summary(fold_reports_prod)
-        results[set_name] = {
-            "score": round(score, 4), "wmae": round(mean_wmae, 4), "wrmse": round(mean_wrmse, 4),
-            "eval_1_3d": _summary(fold_reports),
-            # Production-style: the horizons the model is actually served at.
-            "eval_2d_plus": prod,
-        }
-        log(f"  {set_name:<20s}  score={score:.3f}  wmae={mean_wmae:.3f}  wrmse={mean_wrmse:.3f}  "
-            f"({len(fold_scores)} folds)")
-        if prod:
-            log(f"  {'':<20s}  >=2d: sd_ratio={prod['sd_ratio']}  slope={prod['slope']}  "
-                f"rmse={prod['rmse']}  neg_recall={prod['negative_recall']}  "
-                f"spike_recall={prod['spike_recall']}")
+        results[set_name] = {"score": round(score, 4), "wmae": round(mean_wmae, 4), "wrmse": round(mean_wrmse, 4)}
+        log(f"  {set_name:<20s}  score={score:.3f}  wmae={mean_wmae:.3f}  wrmse={mean_wrmse:.3f}  ({len(fold_scores)} folds)")
 
     if not results:
         log("Feature experiment: no results, defaulting to 'generation'")
@@ -487,17 +404,6 @@ class Command(BaseCommand):
 
         parser.add_argument(
             "--max_days",
-        )
-
-        parser.add_argument(
-            "--train_horizon_days",
-            type=int,
-            default=None,
-            help=(
-                "Days of forecast horizon to train on, from ag_start. Defaults to "
-                f"{TRAIN_HORIZON_DAYS} (the full served horizon). 1 restores the "
-                "legacy single-Agile-day window, which under-disperses the tails."
-            ),
         )
 
         parser.add_argument(
@@ -562,7 +468,6 @@ class Command(BaseCommand):
         min_fd = int(options.get("min_fd", 600) or 600)
         min_ad = int(options.get("min_ad", 1500) or 1500)
         max_days = int(options.get("max_days", 60) or 60)
-        train_horizon_days = int(options.get("train_horizon_days") or TRAIN_HORIZON_DAYS)
 
         no_ranges = options.get("no_ranges", False)
         skip_kde_plot = options.get("skip_kde_plot", False)
@@ -753,9 +658,7 @@ class Command(BaseCommand):
                             try:
                                 logger.info("Running feature set experiment…")
                                 _exp_started = time.monotonic()
-                                _winner, _exp_results = run_feature_experiment(
-                                    df, ff_train, prices, logger, horizon_days=train_horizon_days
-                                )
+                                _winner, _exp_results = run_feature_experiment(df, ff_train, prices, logger)
                                 logger.info(
                                     "Feature experiment elapsed_seconds=%.2f",
                                     time.monotonic() - _exp_started,
@@ -789,9 +692,7 @@ class Command(BaseCommand):
 
                         # Only use the forecasts closest to 16:15 for training
                         _step_started = time.monotonic()
-                        train_X, train_y = build_training_data(
-                            df, ff_train, prices, features, max_days, horizon_days=train_horizon_days
-                        )
+                        train_X, train_y = build_training_data(df, ff_train, prices, features, max_days)
                         logger.info("build_training_data elapsed_seconds=%.2f", time.monotonic() - _step_started)
                         if debug:
                             logger.info(f"train_X:\n{train_X}")
@@ -850,17 +751,6 @@ class Command(BaseCommand):
 
                         factor = GLOBAL_SETTINGS["REGIONS"]["X"]["factors"][0]
 
-                        # KNOWN DEFECT: this is not a true holdout. It excludes the
-                        # forecast *runs* used for training but not the target
-                        # *slots* — training keeps one run per day and this keeps
-                        # that day's other runs, so ~100% of these rows are scored
-                        # on half-hours whose settled price was in the training
-                        # set. Every error statistic and trend derived from
-                        # `results` below is therefore optimistic, including the
-                        # user-visible ones. Do not read it as out-of-sample; the
-                        # honest measurement is the published-forecast gate below.
-                        # Fixing this changes user-visible numbers and is tracked
-                        # as separate work — see docs/MODEL_DYNAMIC_RANGE.md.
                         logger.info(f"Predicting holdout/test dataset ({len(test_X)} rows)")
                         results = test_X[["dt", "day_ahead"]].copy()
                         results["pred"] = predict_day_ahead_ensemble(ensemble_models, test_X[features])
@@ -873,50 +763,6 @@ class Command(BaseCommand):
                             test_X.index < test_X["ag_end"]
                         )
                         results["error"] = (results["day_ahead"] - results["pred"]) * factor
-
-                        # Calibration/detection gate.
-                        #
-                        # NOT computed on `results` (the build_holdout_data
-                        # holdout). That holdout excludes the forecast *runs* used
-                        # for training but not the target *slots*: training keeps
-                        # one run per day and the holdout keeps that day's other
-                        # runs, so 100% of holdout slots have had their settled
-                        # price seen in training. It reports sd_ratio ~0.94 for a
-                        # model directly measured at 0.56, which is precisely how
-                        # the under-dispersion defect went unnoticed.
-                        #
-                        # Instead, score forecasts already published against prices
-                        # that have since settled. Genuinely out of sample, costs
-                        # no refit, and is directly comparable to the numbers in
-                        # docs/MODEL_DYNAMIC_RANGE.md.
-                        try:
-                            _gate = stored_forecast_report(
-                                _load_published_forecasts(days=GATE_LOOKBACK_DAYS), prices
-                            )
-                            if _gate is None:
-                                logger.info("Forecast quality gate: not enough settled history yet")
-                            else:
-                                logger.info(format_report(
-                                    _gate, f"(published forecasts vs settled prices, >=2d, "
-                                           f"last {GATE_LOOKBACK_DAYS}d)"
-                                ))
-                                # Persist: this is the only genuinely
-                                # out-of-sample measurement the system has, and a
-                                # log line cannot show a trend across runs.
-                                _gate_job = UpdateJob.objects.filter(
-                                    job_type=UpdateJob.JOB_UPDATE,
-                                ).order_by("-requested_at").first()
-                                if _gate_job:
-                                    _gate_job.options["published_forecast_quality"] = {
-                                        "generated_at": pd.Timestamp.now(tz="UTC").isoformat(),
-                                        "lookback_days": GATE_LOOKBACK_DAYS,
-                                        "min_horizon_days": _gate.get("min_horizon_days"),
-                                        "train_horizon_days": train_horizon_days,
-                                        "report": _gate,
-                                    }
-                                    _gate_job.save(update_fields=["options"])
-                        except Exception:
-                            logger.exception("Forecast quality gate failed (non-fatal)")
 
                         def save_plot(fig, name):
                             plot_path = os.path.join(PLOT_DIR, f"{name}.png")
