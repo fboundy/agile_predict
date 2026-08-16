@@ -1,10 +1,10 @@
-{# Summary cards (Now / best slot / best window).
+{% comment %} Summary cards (Now / best slot / best window).
 
    Extracted from graph_v2.html so the same markup can render either above or
    below the chart, per GH #93 — the reporter uses other tools for now/next and
    cheapest-slot data and wanted these out of the way without losing them. The
    position is driven by `summary_pos` and remembered like the other chart
-   preferences. #}
+   preferences. {% endcomment %}
 <div class="row g-2 {% if summary_pos == 'below' %}mt-3{% else %}mb-3{% endif %}">
 
   {# Card 1: Current price #}
