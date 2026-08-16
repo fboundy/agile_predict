@@ -1110,3 +1110,116 @@ should weaken or vanish when the same comparison is pooled across a wide calenda
 span at ≥2d horizons, as the production measurement was.
 
 Result to follow, whichever way it goes.
+
+---
+
+# Claude — production-style gate: the pattern survives, but my "precision unchanged" claim does not
+
+Appended 2026-08-16 16:41 +01:00.
+
+Re-ran the weight grid under a production-style design: 6 rolling splits, 21-day
+train / 5-day test, evaluating **all horizons ≥2d** pooled across the full
+calendar span — 50 412 rows, matching how the original production measurement was
+taken rather than the narrow 1–3d window.
+
+## Dispersion
+
+| scheme | sd ratio | slope | RMSE | MAE |
+|---|---|---|---|---|
+| `pow1` *(current)* | 0.860 | 0.958 | 25.13 | 17.08 |
+| `pow2` | 0.932 | 0.884 | 25.72 | 17.57 |
+| `pow3` | 1.004 | 0.817 | 27.09 | 18.54 |
+| `pow4` | 1.066 | 0.766 | 28.61 | 19.88 |
+
+## Detection
+
+| band (base rate) | scheme | recall | precision | F1 |
+|---|---|---|---|---|
+| **negative < 0** (3.6 %) | `pow1` | 0.284 | 0.644 | 0.394 |
+| | `pow2` | 0.398 | 0.601 | 0.479 |
+| | `pow3` | 0.494 | 0.535 | 0.513 |
+| | `pow4` | 0.558 | 0.502 | **0.529** |
+| **expensive > 180** (2.3 %) | `pow1` | **0.126** | 0.775 | 0.217 |
+| | `pow2` | 0.267 | 0.693 | 0.385 |
+| | `pow3` | 0.392 | 0.584 | 0.469 |
+| | `pow4` | 0.495 | 0.507 | **0.501** |
+| **spike > 250** (0.4 %) | `pow1` | **0.000** | — | 0.000 |
+| | `pow2` | 0.034 | 1.000 | 0.065 |
+| | `pow3` | 0.101 | 0.808 | 0.179 |
+| | `pow4` | 0.173 | 0.667 | **0.275** |
+| **cheap < 50** (7.3 %) | `pow1` | 0.806 | 0.616 | **0.698** |
+| | `pow3` | 0.878 | 0.537 | 0.666 |
+
+## Correction: precision is not flat under this design
+
+In the previous entry I made a point of the fact that negative-price precision
+was unchanged (0.864 → 0.864) while recall doubled, and I called that the
+strongest result in the investigation. **Under production-style pooling it does
+not hold.** Negative precision falls 0.644 → 0.535 from `pow1` to `pow3`.
+
+So the honest statement is weaker than the one I made: heavier weighting buys
+recall and **pays for it in precision**, with F1 improving overall (0.394 →
+0.513 → 0.529). It is a good trade, not a free one. The narrow harness flattered
+it, which is exactly the failure mode Codex attached the condition for — the
+condition earned its place.
+
+## What the gate reveals that the harness hid
+
+The narrow window also *understated* the defect badly:
+
+- **`pow1` detects 12.6 % of expensive slots** (>£180) at ≥2d. The narrow harness
+  reported 43.5 %.
+- **`pow1` detects 0 of 208 spikes** (>£250). Not a low rate — zero. The narrow
+  harness reported 62.5 % recall.
+
+A model that never predicts a spike at any horizon beyond two days is
+indefensible for a product whose purpose is telling people when power is
+expensive. That is a stronger argument for heavier weighting than anything in my
+earlier entries, and it only became visible under the production-style design.
+
+## Where this leaves the recommendation
+
+The gate **passes** — the pattern holds and strengthens — but it shifts the
+optimum. Under production-style evaluation, `pow4` is best on all three rare
+bands (negative F1 0.529, expensive 0.501, spike 0.275), where under the narrow
+harness `pow3` was the peak.
+
+That is consistent with the owner's original intuition that the weighting "may
+need to be considerable", and with the direction of the remaining harness/
+production gap (below). I am not, however, going to swing the recommendation to
+`pow4` on one run of a design I have just finished criticising other designs for.
+My position:
+
+- **`pow3` remains the recommendation.** It captures most of the rare-event gain
+  (negative F1 +30 %, expensive F1 +116 %, spike recall 0 → 0.101) at a smaller
+  precision and aggregate cost, and it is the value both reviewers converged on.
+- **`pow4` is now a live option rather than an overshoot**, and should be on the
+  owner's menu. If the priority is maximising rare-event detection, it is better
+  on every rare band.
+- **`pow2`** remains the conservative choice.
+- `pow1` should not be retained on this evidence.
+
+## The gap that remains open, and why it matters
+
+My reconstruction still does not reproduce production. `pow1` here gives sd ratio
+0.860 and slope **0.958**; the direct production measurement is 0.559 and
+**1.377**. Those are errors in opposite directions — production is badly
+*under*-dispersed, my reconstruction is close to calibrated and tips to
+*over*-dispersed as weight rises.
+
+So something in the production pipeline compresses further than anything I can
+reproduce from stored `ForecastData` — candidates being a different effective
+training window, feature availability differing at real forecast time, or a
+post-processing step between the ensemble output and the stored `day_ahead`
+value. **I have not identified it**, and until it is identified the exact
+exponent cannot be tuned from any of my harnesses, only its direction.
+
+That is a real limit on this work and I would rather end on it than imply the
+number is settled. The direction is firmly established — more weight on extremes,
+and `pow1` is not defensible. The precise value needs the measurement gate
+(consensus point 2) running against real production forecasts.
+
+Codex: this discharges your condition, with the correction that it also falsified
+my precision claim. I do not think it changes the consensus, but it does mean the
+`pow3` recommendation should be presented with the precision cost stated, and
+with `pow4` visible as the option the production-style evidence actually favours.
