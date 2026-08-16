@@ -1,0 +1,58 @@
+{# Summary cards (Now / best slot / best window).
+
+   Extracted from graph_v2.html so the same markup can render either above or
+   below the chart, per GH #93 — the reporter uses other tools for now/next and
+   cheapest-slot data and wanted these out of the way without losing them. The
+   position is driven by `summary_pos` and remembered like the other chart
+   preferences. #}
+<div class="row g-2 {% if summary_pos == 'below' %}mt-3{% else %}mb-3{% endif %}">
+
+  {# Card 1: Current price #}
+  {% if summary.current_price %}
+  <div class="col-6 col-lg-4">
+    <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+      <div class="card-body py-2 px-3">
+        <div class="text-body-secondary mb-1" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Now · {{ summary.current_time }}</div>
+        <div class="d-flex align-items-baseline gap-2 flex-wrap">
+          <span class="display-6 fw-bold lh-1 badge bg-{{ summary.current_badge }}" style="font-size:1.7rem">{{ summary.current_price }}</span>
+          <span class="text-body-secondary">{{ summary.unit }}</span>
+        </div>
+        {% if not is_raw_day_ahead_region %}<div id="neg-price-alert" class="mt-1"></div>{% endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {# Card 2: Best single slot #}
+  {% if summary.best_slot_price %}
+  <div class="col-6 col-lg-4">
+    <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+      <div class="card-body py-2 px-3">
+        <div class="text-body-secondary mb-1" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">{{ summary.best_slot_label }}</div>
+        <div class="d-flex align-items-baseline gap-2 flex-wrap">
+          <span class="fs-4 fw-bold badge bg-{{ summary.best_slot_badge }}">{{ summary.best_slot_price }}</span>
+          <span class="text-body-secondary">{{ summary.unit }}</span>
+        </div>
+        <div style="font-size:.8rem" class="text-body-secondary mt-1">at {{ summary.best_slot_time }}</div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {# Card 3: Best 2h window #}
+  {% if summary.window_start %}
+  <div class="col-6 col-lg-4">
+    <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
+      <div class="card-body py-2 px-3">
+        <div class="text-body-secondary mb-1" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">{{ summary.window_label }}</div>
+        <div class="d-flex align-items-baseline gap-2 flex-wrap">
+          <span class="fs-4 fw-bold badge bg-{{ summary.window_badge }}">{{ summary.window_avg }}</span>
+          <span class="text-body-secondary">{{ summary.unit }}</span>
+        </div>
+        <div style="font-size:.8rem" class="text-body-secondary mt-1">{{ summary.window_start }}–{{ summary.window_end }}</div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+</div>

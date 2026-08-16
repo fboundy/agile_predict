@@ -286,11 +286,20 @@ def _canonical_query(path, q):
             af = "1" if str(q.get("af", "")).lower() in _TRUE_WORDS else "0"
             x2r = "1" if str(q.get("x2r", "")).lower() in _TRUE_WORDS else "0"
             overlap = "1" if q.get("overlap", "0") == "1" else "0"
+            # Summary-card placement (GH #93). It changes the rendered HTML, so
+            # it has to be in the key or all three positions collapse onto one
+            # cached entry. Mirrors GraphV2View's validation, including the
+            # fallback, so an unrecognised value shares the default's entry
+            # rather than minting a new one per junk string.
+            summary = q.get("summary", "above")
+            if summary not in ("above", "below", "off"):
+                summary = "above"
             # Forecast ids are used as an `id__in` filter, so order is irrelevant.
             fc = sorted({int(x) for x in q.getlist("fc") if str(x).strip()})
             parts = [
                 f"days={days}", f"band={band}", f"export={export}", f"gen={gen}",
                 f"fg={fg}", f"dc={dc}", f"af={af}", f"x2r={x2r}", f"overlap={overlap}",
+                f"summary={summary}",
             ]
             if fc:
                 parts.append("fc=" + ",".join(str(i) for i in fc))

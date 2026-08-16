@@ -2346,6 +2346,13 @@ class LimitationsView(V2NavMixin, TemplateView):
         return context
 
 
+# Summary-card placement for the v2 chart (GH #93). Mirrored in
+# middleware._canonical_query, which must key the response cache on this or the
+# three positions collapse onto one cached entry.
+_SUMMARY_POSITION_LABELS = (("above", "Above"), ("below", "Below"), ("off", "Off"))
+_SUMMARY_POSITIONS = tuple(pos for pos, _ in _SUMMARY_POSITION_LABELS)
+
+
 class GraphV2View(V2NavMixin, TemplateView):
     """Colour-coded bar chart UI — alternative to the accordion-sidebar GraphFormView."""
 
@@ -2390,6 +2397,12 @@ class GraphV2View(V2NavMixin, TemplateView):
         show_dc = self.request.GET.get("dc", "0") == "1"
         show_af = _truthy(self.request.GET.get("af", "")) and not raw
         show_x2r = _truthy(self.request.GET.get("x2r", "")) and not raw
+        # Summary-card placement (GH #93): above the chart, below it, or hidden.
+        # Anything unrecognised falls back to "above" so a mangled URL or a stale
+        # saved preference cannot silently blank the cards.
+        summary_pos = self.request.GET.get("summary", "above")
+        if summary_pos not in _SUMMARY_POSITIONS:
+            summary_pos = "above"
         # Draw forecasts for their full duration (back over the confirmed-price
         # region) instead of trimming them at the last confirmed slot — mirrors
         # v1's "Allow Forecast Overlap".
@@ -3223,6 +3236,8 @@ class GraphV2View(V2NavMixin, TemplateView):
                 "show_x2r": show_x2r,
                 "show_overlap": show_overlap,
                 "summary": summary,
+                "summary_pos": summary_pos,
+                "summary_pos_options": _SUMMARY_POSITION_LABELS,
                 "api_status": api_status,
                 "cheap_windows": cheap_windows,
                 "price_data_json": json.dumps(

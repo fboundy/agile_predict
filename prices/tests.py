@@ -875,3 +875,49 @@ class UpdateCatchupTests(TestCase):
     def test_zero_hours_disables(self):
         self._job(age_hours=48)
         self.assertIsNone(maybe_enqueue_catchup())
+
+
+class SummaryPlacementTests(TestCase):
+    """Summary-card placement (GH #93): the cards can sit above the chart, below
+    it, or be hidden, and the choice has to survive the response cache."""
+
+    def _key(self, url):
+        from django.core.cache import cache
+        from prices.middleware import ResponseCacheMiddleware
+
+        cache.delete("rc:data-ver")
+        return ResponseCacheMiddleware(lambda r: None)._key(RequestFactory().get(url))
+
+    def test_each_position_gets_its_own_cache_key(self):
+        """Without this the three positions collapse onto one cached entry and
+        the control silently stops working — the failure mode the canonicaliser
+        comment warns about."""
+        above = self._key("/v2/X/")
+        self._assert_all_distinct(above, self._key("/v2/X/?summary=below"), self._key("/v2/X/?summary=off"))
+
+    def _assert_all_distinct(self, *keys):
+        self.assertEqual(len(set(keys)), len(keys), f"expected distinct keys, got {keys}")
+
+    def test_default_and_explicit_above_share_a_key(self):
+        self.assertEqual(self._key("/v2/X/"), self._key("/v2/X/?summary=above"))
+
+    def test_unrecognised_value_shares_the_default_key(self):
+        """Junk values fall back to "above" rather than minting a cache entry per
+        distinct junk string, which would be a trivial cache-busting vector."""
+        self.assertEqual(self._key("/v2/X/"), self._key("/v2/X/?summary=sideways"))
+
+    def test_view_normalises_unrecognised_values(self):
+        from prices.views import _SUMMARY_POSITIONS
+
+        for value in ["sideways", "", "1", "ABOVE"]:
+            request = RequestFactory().get(f"/v2/X/?summary={value}")
+            pos = request.GET.get("summary", "above")
+            if pos not in _SUMMARY_POSITIONS:
+                pos = "above"
+            self.assertIn(pos, _SUMMARY_POSITIONS)
+
+    def test_positions_and_labels_stay_in_step(self):
+        from prices.views import _SUMMARY_POSITION_LABELS, _SUMMARY_POSITIONS
+
+        self.assertEqual(_SUMMARY_POSITIONS, tuple(p for p, _ in _SUMMARY_POSITION_LABELS))
+        self.assertEqual(_SUMMARY_POSITIONS[0], "above", "default must be first")

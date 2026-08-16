@@ -4,7 +4,7 @@
 <script>
 (function () {
   var KEY = 'ap_prefs_{{ region }}';
-  var PREF_KEYS = ['days','band','export','gen','dc','af','x2r','overlap'];
+  var PREF_KEYS = ['days','band','export','gen','dc','af','x2r','overlap','summary'];
   var params = new URLSearchParams(window.location.search);
   var hasPrefs = PREF_KEYS.some(function(k){ return params.has(k); });
   if (!hasPrefs) {
@@ -92,58 +92,10 @@
     </div>
   </div>
 
-  {# ======== Summary cards ======== #}
-  <div class="row g-2 mb-3">
-
-    {# Card 1: Current price #}
-    {% if summary.current_price %}
-    <div class="col-6 col-lg-4">
-      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
-        <div class="card-body py-2 px-3">
-          <div class="text-body-secondary mb-1" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Now · {{ summary.current_time }}</div>
-          <div class="d-flex align-items-baseline gap-2 flex-wrap">
-            <span class="display-6 fw-bold lh-1 badge bg-{{ summary.current_badge }}" style="font-size:1.7rem">{{ summary.current_price }}</span>
-            <span class="text-body-secondary">{{ summary.unit }}</span>
-          </div>
-          {% if not is_raw_day_ahead_region %}<div id="neg-price-alert" class="mt-1"></div>{% endif %}
-        </div>
-      </div>
-    </div>
-    {% endif %}
-
-    {# Card 2: Best single slot #}
-    {% if summary.best_slot_price %}
-    <div class="col-6 col-lg-4">
-      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
-        <div class="card-body py-2 px-3">
-          <div class="text-body-secondary mb-1" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">{{ summary.best_slot_label }}</div>
-          <div class="d-flex align-items-baseline gap-2 flex-wrap">
-            <span class="fs-4 fw-bold badge bg-{{ summary.best_slot_badge }}">{{ summary.best_slot_price }}</span>
-            <span class="text-body-secondary">{{ summary.unit }}</span>
-          </div>
-          <div style="font-size:.8rem" class="text-body-secondary mt-1">at {{ summary.best_slot_time }}</div>
-        </div>
-      </div>
-    </div>
-    {% endif %}
-
-    {# Card 3: Best 2h window #}
-    {% if summary.window_start %}
-    <div class="col-6 col-lg-4">
-      <div class="card border-0 shadow-sm h-100" style="background:#2a2d31">
-        <div class="card-body py-2 px-3">
-          <div class="text-body-secondary mb-1" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">{{ summary.window_label }}</div>
-          <div class="d-flex align-items-baseline gap-2 flex-wrap">
-            <span class="fs-4 fw-bold badge bg-{{ summary.window_badge }}">{{ summary.window_avg }}</span>
-            <span class="text-body-secondary">{{ summary.unit }}</span>
-          </div>
-          <div style="font-size:.8rem" class="text-body-secondary mt-1">{{ summary.window_start }}–{{ summary.window_end }}</div>
-        </div>
-      </div>
-    </div>
-    {% endif %}
-
-  </div>
+  {# ======== Summary cards — rendered above or below the chart, or not at
+     all, per `summary_pos` (GH #93). Markup lives in the partial so both
+     slots stay identical. ======== #}
+  {% if summary_pos == "above" %}{% include "_summary_cards.html" %}{% endif %}
 
   {# ======== Controls (above chart) ======== #}
 
@@ -170,7 +122,7 @@
       <span class="text-body-secondary" style="font-size:.72rem;white-space:nowrap">Period</span>
       <div class="btn-group btn-group-sm" role="group" aria-label="Days to show">
         {% for d in day_options %}
-        <a href="?days={{ d }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+        <a href="?days={{ d }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
            class="btn {% if days == d %}btn-primary{% else %}btn-outline-secondary{% endif %}">{{ d }}d</a>
         {% endfor %}
       </div>
@@ -194,11 +146,11 @@
 
       {# Toggles #}
       {% if not is_raw_day_ahead_region %}
-      <a href="?days={{ days }}&band={% if show_band %}0{% else %}1{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+      <a href="?days={{ days }}&band={% if show_band %}0{% else %}1{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
          class="btn btn-sm {% if show_band %}btn-outline-info active{% else %}btn-outline-secondary{% endif %}">
         Uncertainty band
       </a>
-      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}&export={% if show_export %}0{% else %}1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}&export={% if show_export %}0{% else %}1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
          class="btn btn-sm {% if show_export %}btn-outline-warning active{% else %}btn-outline-secondary{% endif %}">
         Export prices
       </a>
@@ -208,16 +160,16 @@
          title="Show each forecast for its full duration, including where a confirmed price now exists">
         Forecast overlap
       </a>
-      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}&gen={% if show_gen %}0{% else %}1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}&gen={% if show_gen %}0{% else %}1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
          class="btn btn-sm {% if show_gen %}btn-outline-success active{% else %}btn-outline-secondary{% endif %}">
         Gen &amp; demand
       </a>
-      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}&dc={% if show_dc %}0{% else %}1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}&dc={% if show_dc %}0{% else %}1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
          class="btn btn-sm {% if show_dc %}btn-outline-warning active{% else %}btn-outline-secondary{% endif %}">
         Dispatch capacity
       </a>
       {% if show_gen and selected_ids %}
-      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}&gen=1&fg={% if show_fc_gen %}0{% else %}1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}&gen=1&fg={% if show_fc_gen %}0{% else %}1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
          class="btn btn-sm {% if show_fc_gen %}btn-outline-success active{% else %}btn-outline-secondary{% endif %}">
         Forecast inputs
       </a>
@@ -226,17 +178,31 @@
       {# External forecast overlays #}
       {% if not is_raw_day_ahead_region %}
       <div class="vr d-none d-sm-block" style="opacity:.3"></div>
-      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}&af={% if show_af %}0{% else %}1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}&af={% if show_af %}0{% else %}1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
          class="btn btn-sm"
          style="border-color:#D55E00;{% if show_af %}background:#D55E00;color:#fff{% else %}color:#D55E00{% endif %}">
         AgileForecast
       </a>
-      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}&x2r={% if show_x2r %}0{% else %}1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}&x2r={% if show_x2r %}0{% else %}1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
          class="btn btn-sm"
          style="border-color:#009E73;{% if show_x2r %}background:#009E73;color:#fff{% else %}color:#009E73{% endif %}">
         X2R
       </a>
       {% endif %}
+
+      {# Summary-card placement (GH #93). Three states rather than a toggle,
+         because the request was specifically to relocate the cards, not just
+         to hide them. #}
+      <div class="vr d-none d-sm-block" style="opacity:.3"></div>
+      <div class="d-flex align-items-center gap-1">
+        <span class="text-body-secondary" style="font-size:.72rem;white-space:nowrap">Summary</span>
+        <div class="btn-group btn-group-sm" role="group" aria-label="Summary card placement">
+          {% for pos, label in summary_pos_options %}
+          <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if pos != "above" %}&summary={{ pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+             class="btn {% if summary_pos == pos %}btn-primary{% else %}btn-outline-secondary{% endif %}">{{ label }}</a>
+          {% endfor %}
+        </div>
+      </div>
 
     </div>
   </div>
@@ -257,6 +223,7 @@
         {% if show_dc %}<input type="hidden" name="dc" value="1">{% endif %}
         {% if show_af %}<input type="hidden" name="af" value="1">{% endif %}
         {% if show_x2r %}<input type="hidden" name="x2r" value="1">{% endif %}
+        {% if summary_pos != "above" %}<input type="hidden" name="summary" value="{{ summary_pos }}">{% endif %}
         {% if show_overlap %}<input type="hidden" name="overlap" value="1">{% endif %}
         {% for f in forecast_list %}
         <div class="form-check form-check-inline mb-0">
@@ -276,6 +243,10 @@
     <button id="legend-toggle" class="btn btn-sm btn-outline-secondary" style="font-size:.75rem">Legend</button>
   </div>
   <div class="mb-1">{{ graph|safe }}</div>
+
+  {# The "below" slot for the summary cards — see the note at the "above" slot. #}
+  {% if summary_pos == "below" %}{% include "_summary_cards.html" %}{% endif %}
+
   <script>
   (function () {
     if (window.innerWidth >= 576) return;
