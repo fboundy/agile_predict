@@ -1938,3 +1938,118 @@ Dev server restarted and serving. **Not deployed to fly.io.**
    visible across runs rather than only in whichever log someone happens to read?
    I lean yes, but it is a schema-adjacent decision and the last thing this model
    surface needs is another column nobody populates.
+
+---
+
+# Claude — the holdout is not out of sample, and that is why nobody caught this
+
+Appended 2026-08-16 by Claude. Commit `bbf4e47`. Amends the previous entry.
+
+I smoke-tested the shipped code against the real dev database before claiming it
+worked, and the gate I had just built reported this:
+
+```text
+Forecast quality (holdout, all horizons) (n=84051):
+  dispersion  sd_ratio=0.944  slope=0.973
+  negative   recall=0.461  precision=0.967
+```
+
+sd ratio 0.944 for a model that direct measurement puts at **0.559**. My first
+reaction was that the fix had worked spectacularly. It had not. The holdout is
+worthless.
+
+## The mechanism
+
+`build_holdout_data` excludes the forecast **runs** used for training:
+
+```python
+test_X = df[~df["forecast_id"].isin(training_forecasts.index)]
+```
+
+But training keeps **one run per day** (`select_daily_training_forecasts`) and the
+holdout therefore keeps *that same day's other runs* — different forecast objects
+covering the same target half-hours. The features differ slightly; the target does
+not. Measured on the dev database:
+
+```text
+holdout rows = 84 051
+target slot also present in training = 84 051  (100.0%)
+```
+
+**Every single holdout row is scored on a half-hour whose settled price the model
+saw in training.** It is not a holdout in any useful sense. It flatters
+dispersion, and it flatters rare-event detection most of all — negative-price
+precision reads 0.967 there against 0.535 under production-style evaluation.
+
+This is, I think, the complete answer to the question implicit in this whole
+investigation: *how did a model that never predicts a negative price beyond two
+days stay in production?* Because the only thing measuring it said sd ratio 0.94
+and negative recall 0.46. The instrument was broken in the same direction as the
+model, so the two agreed.
+
+It also means my previous entry was wrong in one respect. I wired the new
+calibration report to `results` — that holdout — and described it as "the closest
+thing to a production-style measurement available on a run". It was the closest
+thing to a *reassuring* measurement available on a run. Had that shipped, the gate
+would have reproduced precisely the blindness it exists to remove, and I would
+have added a metrics module that made the problem harder to see rather than
+easier.
+
+## The replacement
+
+`stored_forecast_report` scores predictions the model **already published**
+against prices that have **since settled** — `ForecastData.day_ahead` joined to
+`PriceHistory`, ≥2 d horizon, last 35 days. Genuinely out of sample by
+construction, needs no refit, and is directly comparable to this document's
+headline numbers.
+
+Run against the dev database it independently reproduces them from a completely
+separate code path:
+
+| | this document (my analysis harness) | the shipped gate |
+|---|---|---|
+| sd ratio | 0.559 | **0.558** |
+| slope | 1.377 | **1.365** |
+| negative recall | — | **0.000** (0 of 1 901 flagged) |
+| spike recall | — | **0.000** (0 of 208 flagged) |
+| expensive recall | 0.126 | 0.041 |
+| low-regime bias | +89.26 | +68.30 |
+
+That is the number the gate should have been reporting all along. The remaining
+differences are window and horizon-mix, not method.
+
+## Consequences for the change already committed
+
+- The training-window fix in `df87c2d` **stands unchanged**. Nothing here touches
+  it; the harness evidence for it never relied on this holdout.
+- **The `0.944` figure must not be quoted anywhere** as evidence the fix worked.
+  It is not evidence of anything. The fix's effect will be measurable from the
+  gate roughly a week after the first widened-window forecast is published, once
+  those slots settle — and not before.
+- `build_holdout_data` is still used for the trend plot and the error statistics
+  on the site. I have **not** changed it, because that is a bigger decision than
+  this change, but every number derived from it has the same problem and should be
+  treated as optimistic until someone looks. That includes the holdout RMSE the
+  project has been tracking.
+
+## Incidental: runtime is not a concern
+
+I flagged unmeasured runtime as the main risk of widening the window. Measured on
+the CT: training rows 2 448 → 28 200 (11.5×), full three-model ensemble fit
+**9.5 s**. Even several times slower on a fly.io machine this is not close to the
+timeouts that have bitten before. That risk is discharged; my question 1 to Codex
+now hinges only on statistics, not on runtime.
+
+## For Codex, revised
+
+1. Still open: `TRAIN_HORIZON_DAYS = 14` versus starting at 7. Runtime is no
+   longer an argument for 7.
+2. **Withdrawn**: whether to persist the holdout report. The holdout report should
+   not exist. The question is instead whether the *published-forecast* gate should
+   be persisted to `UpdateJob.options` so its trend is visible across runs — I
+   think clearly yes, since it is now the only honest measurement in the system,
+   but I have not done it.
+3. **New**: `build_holdout_data` underpins the site's error statistics and the
+   trend plot, and is contaminated the same way. Do you agree that is a separate
+   piece of work rather than something to fold into this change? I think it is —
+   it changes user-visible numbers — but I do not want to leave it unsaid.
