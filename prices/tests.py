@@ -26,6 +26,7 @@ from prices.model_metrics import (
     format_report,
     forecast_report,
     PRICE_BANDS,
+    stored_forecast_report,
 )
 from prices.external_forecasts import fetch_x2r
 from prices.forms import ForecastForm
@@ -619,6 +620,47 @@ class ModelMetricsTests(TestCase):
         self.assertEqual(set(report["bands"]), set(PRICE_BANDS))
         self.assertIn("sd_ratio", report)
         self.assertIn("negative", format_report(report))
+
+    def test_stored_forecast_report_excludes_short_horizon_slots(self):
+        # Slots under 2 days are blended with GB60 actuals by the pipeline, so
+        # scoring them measures the blend rather than the model.
+        created = pd.Timestamp("2026-05-01T16:15:00Z")
+        times = pd.to_datetime(
+            ["2026-05-02T12:00:00Z"] + [f"2026-05-{d:02d}T12:00:00Z" for d in range(4, 14)]
+        )
+        stored = pd.DataFrame(
+            {
+                "date_time": times,
+                "day_ahead": [999.0] + [100.0] * 10,  # the short-horizon row is absurd
+                "created_at": [created] * len(times),
+            }
+        )
+        actuals = pd.DataFrame(index=times, data={"day_ahead": [100.0] * len(times)})
+
+        # Only 10 rows survive the horizon filter, below the reporting minimum,
+        # so no report rather than one dominated by the blended slot.
+        self.assertIsNone(stored_forecast_report(stored, actuals, min_horizon_days=2.0))
+
+    def test_stored_forecast_report_scores_published_predictions(self):
+        created = pd.Timestamp("2026-05-01T16:15:00Z")
+        times = pd.date_range("2026-05-05T00:00:00Z", periods=200, freq="30min")
+        rng = np.random.default_rng(2)
+        actual = rng.normal(100.0, 50.0, len(times))
+        stored = pd.DataFrame(
+            {
+                "date_time": times,
+                # Compressed toward the mean, as the defect describes.
+                "day_ahead": 100.0 + 0.5 * (actual - 100.0),
+                "created_at": [created] * len(times),
+            }
+        )
+        actuals = pd.DataFrame(index=times, data={"day_ahead": actual})
+
+        report = stored_forecast_report(stored, actuals, min_horizon_days=2.0)
+
+        self.assertEqual(report["n"], len(times))
+        self.assertAlmostEqual(report["sd_ratio"], 0.5, places=2)
+        self.assertEqual(report["min_horizon_days"], 2.0)
 
 
 class UpdateOptionTests(TestCase):

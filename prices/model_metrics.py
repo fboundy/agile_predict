@@ -128,6 +128,36 @@ def forecast_report(pred, actual):
     return report
 
 
+def stored_forecast_report(stored, actuals, min_horizon_days=2.0):
+    """Report on forecasts this model already published, against settled prices.
+
+    This is the only genuinely out-of-sample gate available on a production run.
+    The `build_holdout_data` holdout is not one: it excludes the forecast *runs*
+    used for training but not the target *slots*, and since training keeps one run
+    per day while the holdout keeps that day's other runs, 100% of holdout slots
+    have had their settled price seen in training. That holdout reports sd_ratio
+    ~0.94 for a model directly measured at 0.56 — which is why the defect in
+    docs/MODEL_DYNAMIC_RANGE.md survived for months.
+
+    `stored` needs columns `date_time`, `day_ahead` (the published prediction) and
+    `created_at`; `actuals` is a `day_ahead`-indexed-by-datetime frame of settled
+    prices. Slots closer than `min_horizon_days` are excluded because the pipeline
+    blends GB60 actuals into them, so they measure the blend and not the model.
+    """
+    if stored is None or len(stored) == 0:
+        return None
+    merged = stored.merge(actuals, left_on="date_time", right_index=True, suffixes=("_pred", "_actual"))
+    if merged.empty:
+        return None
+    horizon = (merged["date_time"] - merged["created_at"]).dt.total_seconds() / 86400.0
+    merged = merged[horizon >= min_horizon_days]
+    if len(merged) < 50:
+        return None
+    report = forecast_report(merged["day_ahead_pred"], merged["day_ahead_actual"])
+    report["min_horizon_days"] = min_horizon_days
+    return report
+
+
 def format_report(report, label=""):
     """Render a report as a few aligned log lines."""
 

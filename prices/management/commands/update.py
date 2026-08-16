@@ -37,7 +37,7 @@ from ...forecast_features import (
     training_horizon_mask,
     TRAIN_HORIZON_DAYS,
 )
-from ...model_metrics import forecast_report, format_report
+from ...model_metrics import forecast_report, format_report, stored_forecast_report
 from ...external_forecasts import refresh_external_forecasts
 from ...models import AgileData, ForecastData, Forecasts, History, PlotImage, PriceHistory, UpdateJob
 
@@ -252,6 +252,25 @@ _EXP_CB_PARAMS   = dict(iterations=150, learning_rate=0.05, depth=6, l2_leaf_reg
 _EXP_LGBM_PARAMS = dict(n_estimators=150, learning_rate=0.05, num_leaves=31, random_state=42, verbose=-1, n_jobs=1)
 _EXP_ET_PARAMS   = dict(n_estimators=200, min_samples_leaf=4, max_features="sqrt", random_state=42, n_jobs=1)
 
+
+
+# How much settled history the forecast-quality gate scores over.
+GATE_LOOKBACK_DAYS = 35
+
+
+def _load_published_forecasts(days=GATE_LOOKBACK_DAYS):
+    """Predictions this model already published, with the run that produced them."""
+    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
+    rows = ForecastData.objects.filter(
+        forecast__created_at__gte=cutoff, day_ahead__isnull=False
+    ).values("date_time", "day_ahead", "forecast__created_at")
+    stored = pd.DataFrame(list(rows))
+    if stored.empty:
+        return stored
+    stored = stored.rename(columns={"forecast__created_at": "created_at"})
+    stored["date_time"] = pd.to_datetime(stored["date_time"], utc=True)
+    stored["created_at"] = pd.to_datetime(stored["created_at"], utc=True)
+    return stored
 
 
 def run_feature_experiment(df, ff_all, prices, _logger=None, horizon_days=TRAIN_HORIZON_DAYS):
@@ -817,24 +836,34 @@ class Command(BaseCommand):
                         )
                         results["error"] = (results["day_ahead"] - results["pred"]) * factor
 
-                        # Calibration/detection gate. The holdout spans every
-                        # horizon the model is served at, so this is the closest
-                        # thing to a production-style measurement available on a
-                        # run. Logged split by horizon because the defect this
-                        # exists to catch is horizon-dependent: it is invisible on
-                        # the next Agile day and severe beyond it.
-                        logger.info(format_report(
-                            forecast_report(results["pred"], results["day_ahead"]),
-                            "(holdout, all horizons)",
-                        ))
-                        _beyond = results["dt"] >= 2
-                        if _beyond.sum() > 50:
-                            logger.info(format_report(
-                                forecast_report(
-                                    results.loc[_beyond, "pred"], results.loc[_beyond, "day_ahead"]
-                                ),
-                                "(holdout, >=2d horizon)",
-                            ))
+                        # Calibration/detection gate.
+                        #
+                        # NOT computed on `results` (the build_holdout_data
+                        # holdout). That holdout excludes the forecast *runs* used
+                        # for training but not the target *slots*: training keeps
+                        # one run per day and the holdout keeps that day's other
+                        # runs, so 100% of holdout slots have had their settled
+                        # price seen in training. It reports sd_ratio ~0.94 for a
+                        # model directly measured at 0.56, which is precisely how
+                        # the under-dispersion defect went unnoticed.
+                        #
+                        # Instead, score forecasts already published against prices
+                        # that have since settled. Genuinely out of sample, costs
+                        # no refit, and is directly comparable to the numbers in
+                        # docs/MODEL_DYNAMIC_RANGE.md.
+                        try:
+                            _gate = stored_forecast_report(
+                                _load_published_forecasts(days=GATE_LOOKBACK_DAYS), prices
+                            )
+                            if _gate is None:
+                                logger.info("Forecast quality gate: not enough settled history yet")
+                            else:
+                                logger.info(format_report(
+                                    _gate, f"(published forecasts vs settled prices, >=2d, "
+                                           f"last {GATE_LOOKBACK_DAYS}d)"
+                                ))
+                        except Exception:
+                            logger.exception("Forecast quality gate failed (non-fatal)")
 
                         def save_plot(fig, name):
                             plot_path = os.path.join(PLOT_DIR, f"{name}.png")
