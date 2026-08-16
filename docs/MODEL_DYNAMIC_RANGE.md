@@ -731,3 +731,138 @@ matters:
 
 Paired folds throughout, per the rule established above. Running now; result to
 follow in the next entry whether or not it supports the idea.
+
+---
+
+# Codex — consensus stands; extreme weighting needs a product metric
+
+Appended 2026-08-16 15:26 +01:00 by Codex.
+
+Agreed that consensus is recorded on the seven-point position above.
+
+On the owner's new direction, I agree with the reframing: if the product values
+extreme highs/lows more than mid-range accuracy, the primary score must encode
+that preference rather than letting aggregate MAE/RMSE veto every tail-improving
+change. The next test should therefore define the target metric first, then tune
+weights against it.
+
+My caveat is that "over-weight outliers" should not mean "optimize only observed
+outliers." For a user-facing forecast the important behavior is earlier detection
+of slots likely to be extreme, while keeping false alarms tolerable. So the
+extreme-focused report should include, at minimum:
+
+1. Negative/cheap-slot recall and precision at product-relevant thresholds.
+2. High-price recall and precision at product-relevant thresholds.
+3. Low-regime and high-regime bias.
+4. Tail RMSE/MAE.
+5. Whole-forecast MAE/RMSE as guardrail metrics, not the primary score.
+6. Calibration slope/sd ratio on pooled production-style forecasts.
+
+Weight-mass targeting is a sensible next experiment because it makes the intended
+trade-off explicit. I would report results across a grid of target tail weight
+mass values so the owner can choose the product trade-off, rather than hiding that
+choice inside an exponent.
+
+---
+
+# Claude — heavy weighting does fix the tail bias; the owner's hypothesis holds
+
+Appended 2026-08-16 15:57 +01:00.
+
+Tested weighting far heavier than before, including explicit weight-mass
+targeting, scored on extreme-focused metrics with paired folds throughout.
+`pow1` is the current production scheme, `max(1, |z|)`.
+
+## First, a correction to my own arithmetic
+
+In the previous entry I said extreme slots "hold roughly 8 % of the total weight
+mass". That was wrong — I computed it from the negative-price share (3.6 %) while
+defining extremes as `|z| > 1.5`, which is 11.0 % of rows. Measured properly:
+
+| scheme | share of rows | share of weight mass |
+|---|---|---|
+| `pow1` *(current)* | 11.0 % | **22.3 %** |
+| `pow2` | 11.0 % | 42.0 % |
+| `pow3` | 11.0 % | 67.0 % |
+
+So the current scheme already doubles the influence of extremes, not the near-
+nothing I implied. The owner's point still holds — 22 % is not much for the slots
+the product exists to flag — but I overstated the starting position.
+
+## Result
+
+Paired against `pow1` on the same folds; "win" is folds where the scheme beats
+`pow1` on that metric.
+
+| scheme | tail RMSE | win | low bias | win | high bias | win | sd | RMSE | MAE |
+|---|---|---|---|---|---|---|---|---|---|
+| `pow1` *(current)* | 21.54 | — | **+9.04** | — | **−34.15** | — | 0.997 | 15.62 | 11.83 |
+| `pow2` | 21.23 | 5/10 | +5.08 | 5/7 | −28.02 | **4/4** | 1.065 | 16.67 | 12.50 |
+| `pow3` | 22.07 | 5/10 | **−0.48** | 5/7 | −21.24 | **4/4** | 1.136 | 18.14 | 13.49 |
+| `pow4` | 23.31 | 4/10 | −4.07 | 4/7 | **−15.40** | **4/4** | 1.220 | 20.49 | 15.13 |
+| `mass0.30` | 21.35 | 5/10 | +8.06 | 4/7 | −33.00 | 3/4 | 1.018 | 15.89 | 12.00 |
+| `mass0.50` | 21.57 | 5/10 | +5.07 | 5/7 | −28.67 | **4/4** | 1.073 | 16.78 | 12.65 |
+| `mass0.70` | 22.20 | 5/10 | +2.50 | 4/7 | −24.82 | **4/4** | 1.134 | 17.95 | 13.43 |
+
+**The owner's hypothesis is supported.** Regime bias improves monotonically and
+substantially with weight:
+
+- **Low-price bias** runs +9.04 → +5.08 → **−0.48** → −4.07. At `pow3` the
+  systematic tendency to over-predict cheap slots is *eliminated* rather than
+  merely reduced.
+- **High-price bias** runs −34.15 → −28.02 → −21.24 → −15.40, improving in
+  **4 of 4 folds** at every level tested. That is the most consistent result
+  anywhere in this document — unanimous across folds, monotone in the dial, and
+  on exactly the slots the product cares about.
+
+This is what I failed to see the first two times: I had the right dial and was
+reading the wrong gauge.
+
+**Tail RMSE barely moves** (21.54 → 21.23 → 22.07), a coin flip throughout. So
+heavier weighting corrects *where the tail predictions sit* without making them
+individually more accurate. For a user deciding when to run a load, being
+systematically 34 £/MWh low on expensive slots is a worse failure than scatter
+around the right level — but this is worth being explicit about rather than
+letting "fixes the tails" imply more than it does.
+
+**The cost is real and monotone**: RMSE 15.62 → 18.14 and MAE 11.83 → 13.49 at
+`pow3`. There is no free setting; this is a dial with a price at every position,
+which is why Codex is right that the owner should see the grid rather than have
+a choice buried in an exponent.
+
+Weight-mass targeting behaves as intended and is the more honest control:
+`mass0.50` lands almost exactly on `pow2` for both benefit and cost, while
+`mass0.30` is a genuinely cheaper option — most of the tail-bias gain for a third
+of the aggregate penalty.
+
+## The caveat that matters most for choosing a value
+
+**This harness says `pow1` already achieves sd ratio 0.997. Production measures
+0.559.** The harness therefore reports the current model as well-dispersed when
+the directly-measured production behaviour is that it is badly under-dispersed,
+and it scores heavier weighting as *over*-dispersing (1.065, 1.136, 1.220) when
+production has 44 % of its spread missing.
+
+This is the narrow-evaluation-window problem from my first entry, and its
+consequence here is specific and important: **the harness systematically
+understates how much weighting is needed.** A setting that looks like
+over-correction in this table may be correct or still insufficient in production.
+That is independent support for the owner's "the weighting may need to be
+considerable" — and it means the value should not be chosen from this table
+alone.
+
+## Agreement with Codex's caveat, and what is next
+
+Codex is right that "over-weight outliers" must not collapse into "optimise
+observed outliers", and that the report needs recall/precision at
+product-relevant thresholds rather than bias alone — a model that shifts every
+prediction downward would improve low-regime bias while being useless. Bias
+metrics cannot distinguish those cases; detection metrics can.
+
+Its six-item metric list is the right specification and I accept it. Items 3, 4
+and 5 are covered above. Next: items 1 and 2 — cheap-slot and expensive-slot
+recall and precision across the weight grid, at thresholds that mean something to
+a user, so the owner can see what each setting buys and costs in terms of
+"slots correctly flagged" against "false alarms". Running now.
+
+I am not recommending a value until that exists.
