@@ -2416,3 +2416,181 @@ measurement tool, not as part of deploying the model fix.
 
 No objection from Codex. Do not deploy the dynamic-range fix to production before
 the 2026-08-23 review numbers are available.
+
+---
+
+# Review 2026-08-23 (run 2026-08-25) — the trial is inconclusive; do not deploy
+
+Appended 2026-08-25 by Claude, executing the protocol recorded in the trial entry
+above. Run two days late, so the window is 9.5 days rather than 7 — more data than
+promised, and it does not change the conclusion.
+
+**Verdict: the trial neither confirms nor refutes the widened-window fix, because
+the trial week contained none of the events the fix exists to correct. Do not
+merge `dev` to `main` and do not deploy. The review protocol's stopping rule was
+wrong, and that is the main finding.**
+
+## Preconditions — the trial was in force
+
+| check | result |
+|---|---|
+| dev server branch | `dev` @ `00f77a7` |
+| widened window live | `TRAIN_HORIZON_DAYS = 14` in `prices/forecast_features.py:194` |
+| dev runs published 08-16 → 08-25 | **43** |
+| prod build | fly `prices` version 144, unchanged since 2026-08-16T21:56Z |
+| prod still pre-fix | confirmed — `TRAIN_HORIZON_DAYS` absent from `/code/prices/forecast_features.py` |
+| prod runs published, same window | **34** |
+
+One gap in dev publishing: nothing between 2026-08-16 10:15 and 2026-08-17 10:15
+(4 missed runs). Everything after that is the regular 5-per-day cadence. Not
+material to the result.
+
+## The finding that decides the review: the week had no extremes
+
+Settled GB day-ahead prices in the trial window against the 60 days before it:
+
+| window | n | sd | mean | min | max | `<0` | `<50` | `>180` | `>250` |
+|---|---|---|---|---|---|---|---|---|---|
+| 60 days before the trial | 2 880 | 42.84 | 101.52 | −32.05 | 383.35 | 113 | 251 | 66 | 13 |
+| **the trial window** | 476 | **24.43** | 133.99 | **+68.40** | 202.32 | **0** | **0** | 13 | **0** |
+
+The cheapest half-hour of the entire trial was **£68.40/MWh**. Price variance was
+43 % lower than the preceding two months.
+
+The fix's headline prediction was negative-price recall **0.000 → 0.219**. There
+were **zero** negative-price slots to detect, zero cheap slots and zero spikes.
+Three of the four product bands are not "unchanged" — they are **unmeasurable**.
+`compare_trial` reported them as `n/a`; it now prints an explicit warning so this
+cannot be misread as a null result (see fixes below).
+
+## The dev before/after split, and why it is worthless on its own
+
+```text
+dev, before 2026-08-16 (old code, n=98 899)   sd 0.681  slope 1.110  RMSE 26.20  MAE 18.44
+dev, from   2026-08-16 (NEW code, n=5 973)    sd 0.932  slope 0.927  RMSE 13.00  MAE 10.04
+```
+
+Taken alone that looks like a triumph: dispersion +0.25, RMSE halved. It is not.
+Prod ran the **old** code over the **same** window:
+
+```text
+prod, from  2026-08-16 (old code, n=4 560)    sd 0.904  slope 0.951  RMSE 12.95  MAE  9.79
+```
+
+The old code, untouched, also reaches sd ratio 0.904 and RMSE 12.95 in this week.
+Essentially the entire dev before/after movement is the price regime, not the
+change. This is exactly the confound the protocol predicted, and it is the reason
+the prod cell was made non-optional. It earned its place.
+
+## Difference-in-differences
+
+dev and prod differ as boxes (separate databases, ingestion, and cadence), so the
+raw dev-vs-prod gap is not the code effect. Measuring the box gap on a matched
+pre-trial window (2026-07-10 → 08-16) and subtracting it:
+
+| cell | n | runs | sd ratio | slope | RMSE | MAE | exp recall | exp prec | exp F1 |
+|---|---|---|---|---|---|---|---|---|---|
+| dev / before (old) | 70 293 | 131 | 0.607 | 1.249 | 26.96 | 18.54 | 0.083 | 0.478 | 0.142 |
+| **dev / after (NEW)** | 5 973 | 43 | 0.932 | 0.927 | 13.00 | 10.04 | 0.347 | 0.649 | 0.452 |
+| prod / before (old) | 50 180 | 94 | 0.639 | 1.211 | 26.24 | 18.40 | 0.118 | 0.434 | 0.186 |
+| **prod / after (old)** | 4 560 | 34 | 0.904 | 0.951 | 12.95 | 9.79 | 0.422 | 0.704 | 0.528 |
+
+| metric | box gap before | gap after | **DiD (code effect)** |
+|---|---|---|---|
+| sd ratio | −0.032 | +0.028 | **+0.060** |
+| slope | +0.038 | −0.024 | **−0.062** |
+| RMSE | +0.725 | +0.051 | **−0.674** |
+| MAE | +0.140 | +0.252 | **+0.112** |
+| expensive recall | −0.035 | −0.076 | **−0.041** |
+| expensive F1 | −0.044 | −0.076 | **−0.032** |
+
+Reading it honestly:
+
+- **Dispersion moves the right way, and by a fifth of what was predicted.** DiD
+  +0.060 against an offline prediction of +0.32 (0.563 → 0.884).
+- **Slope overshoots.** dev lands at 0.927 against the control's 0.951; |1−slope|
+  is *worse* for the new code (0.073 vs 0.049).
+- **Aggregate error is a wash.** RMSE −0.67 in favour, MAE +0.11 against, on
+  figures of 13 and 10.
+- **The one testable detection band went the wrong way.** Expensive slots (>£180)
+  were the only product band with events, and the new code is worse than the
+  control on both recall (0.347 vs 0.422) and precision (0.649 vs 0.704), DiD
+  −0.041 and −0.032. This is a small negative signal on a small sample, but it is
+  the only detection evidence the trial produced and it should not be buried.
+
+None of these effects is large enough to act on, in either direction, and the
+mixed signs are what a null looks like.
+
+## What the review can and cannot conclude
+
+**Cannot conclude:** whether the widened training window fixes the defect. The
+defect is under-prediction of extremes. There were no extremes. A week that never
+goes below £68 cannot distinguish a model that calls negative prices from one that
+never has.
+
+**Can conclude:** the offline reconstruction's *magnitude* is not reproduced in
+live publishing so far. Predicted +0.32 sd ratio, observed +0.06 net of control.
+That is not a refutation — the mechanism is tail-specific and the tails were
+absent — but it is the first live evidence and it is weaker than the offline work
+implied. Nothing above rehabilitates any previously rejected proposal.
+
+**Unchanged:** the original defect measurement (sd 0.559, slope 1.377, zero
+negative and spike recall over 52 598 pairs spanning a window that *did* contain
+extremes) stands. Nothing here touches it.
+
+## The protocol error, which is the durable finding
+
+The trial was given a **calendar** stopping rule — one week — for a hypothesis whose
+metrics are **event-driven**. Negative prices arrive in bursts tied to high solar
+and low demand; a fixed week is a coin flip on whether any occur, and this one came
+up empty. The same mistake would have been made by any 7-day window chosen in
+advance.
+
+The replacement rule should be an event budget, not a date: continue the trial
+until the settled trial window contains at least, say, 100 negative-price slots and
+20 spikes at ≥2 d horizon, then review. `compare_trial` already reports `n_actual`
+per band, so the gate is readable at any time.
+
+Two honest caveats on that: the season is turning away from the negative-price
+regime, so an event budget may take months to fill; and holding `dev`/`main`
+diverged that long has its own cost. If the owner wants a decision sooner, the
+alternative is to accept the offline reconstruction — which did reproduce
+production's compression to three significant figures — as the primary evidence and
+treat live publishing as monitoring rather than as the gate. That is a different
+risk posture, and it is the owner's call, not mine.
+
+## Fixes made to `compare_trial` during the review
+
+The command crashed partway through its own delta table, so the protocol as
+written could not have been completed:
+
+1. `ValueError: Invalid format specifier '>9+.2f'` — width was being concatenated
+   before the sign in the delta row formatter. Fixed by carrying complete format
+   specs (`>+9.2f`).
+2. The band delta loop formatted `recall`/`precision` unconditionally and would
+   have raised `TypeError` on any band with no events — i.e. on exactly the case
+   this trial produced. Now prints `n/a`.
+3. Added an explicit warning line when a band has zero events in the "after"
+   window, so an untestable band cannot be read as an unchanged one. That warning
+   is the single thing most likely to prevent this review being misread later.
+
+## Deviation from the protocol as written
+
+The protocol said to copy `compare_trial` onto a prod **web** machine and run it
+there. I did not, for two reasons: prod has a history of gunicorn worker
+exhaustion under load, and the review does not need any write to production. I
+instead ran read-only ORM queries on the prod **worker** machine, streamed the
+forecast/actual rows out as CSV, and scored them locally with the identical
+`stored_forecast_report`. No file was written to any prod machine and no prod code
+path changed. Recommend the protocol be amended to this method.
+
+## Recommendation
+
+1. **Do not merge or deploy.** Leave `main` on the pre-fix build and the dev box on
+   `dev`.
+2. **Replace the calendar stopping rule with an event budget**, and re-review when
+   it fills or when the owner decides to accept offline evidence instead.
+3. **Investigate the expensive-band regression** if it persists as events accrue.
+   On current n it is not actionable, but it is the only live detection signal and
+   it is negative.
+4. Everything in "Outstanding, unchanged by the trial" remains outstanding.

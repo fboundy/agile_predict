@@ -118,23 +118,31 @@ class Command(BaseCommand):
             self.stdout.write("")
             self.stdout.write("Delta (after - before):")
             rows = [
-                ("sd_ratio", "sd_ratio", ".3f"), ("slope", "slope", ".3f"),
-                ("rmse", "rmse", ".2f"), ("mae", "mae", ".2f"),
-                ("low_bias", "low_bias", "+.2f"), ("high_bias", "high_bias", "+.2f"),
+                ("sd_ratio", "sd_ratio", ">9.3f"), ("slope", "slope", ">9.3f"),
+                ("rmse", "rmse", ">9.2f"), ("mae", "mae", ">9.2f"),
+                ("low_bias", "low_bias", ">+9.2f"), ("high_bias", "high_bias", ">+9.2f"),
             ]
             for name, key, spec in rows:
                 b, a = before.get(key), after.get(key)
                 if b is None or a is None or pd.isna(b) or pd.isna(a):
                     continue
-                self.stdout.write(f"  {name:<12s} {b:>9{spec}} -> {a:>9{spec}}   ({a - b:+.3f})")
+                self.stdout.write(f"  {name:<12s} {b:{spec}} -> {a:{spec}}   ({a - b:+.3f})")
+            def num(v, spec=".3f"):
+                return "n/a" if v is None or pd.isna(v) else format(v, spec)
+
             for band in before.get("bands", {}):
                 b = before["bands"][band]
                 a = after["bands"][band]
                 self.stdout.write(
-                    f"  {band:<12s} recall {b['recall']:.3f} -> {a['recall']:.3f}   "
-                    f"precision {b['precision']:.3f} -> {a['precision']:.3f}   "
+                    f"  {band:<12s} recall {num(b['recall'])} -> {num(a['recall'])}   "
+                    f"precision {num(b['precision'])} -> {num(a['precision'])}   "
                     f"(n_actual {b['n_actual']} -> {a['n_actual']})"
                 )
+                if not a["n_actual"]:
+                    self.stdout.write(
+                        f"  {'':<12s} WARNING: no {band} events settled in the 'after' window — "
+                        "this band is untestable here, not unchanged."
+                    )
             self.stdout.write("")
             self.stdout.write(
                 "NOTE: a before/after split on one box confounds the code change with the\n"
