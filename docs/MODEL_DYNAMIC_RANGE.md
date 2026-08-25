@@ -2594,3 +2594,29 @@ path changed. Recommend the protocol be amended to this method.
    On current n it is not actionable, but it is the only live detection signal and
    it is negative.
 4. Everything in "Outstanding, unchanged by the trial" remains outstanding.
+
+## Re-review scheduled 2026-09-08
+
+Appended 2026-08-25. At the owner's direction the trial continues for a further
+two weeks. Routine `trig_0172ZjN4s4S8X9QJaGgW7Zy9`, one-shot at 2026-09-08 09:00
+UTC (10:00 BST). The 2026-08-23 routine (`trig_01JmdnbmA8KH2k78gCTRpjfG`) fired
+and auto-disabled.
+
+The new routine carries the protocol as amended by this review:
+
+1. **The event budget is checked first and gates everything else.** Read the
+   `n_actual` counts per band before running any comparison. If negative and spike
+   events are still near zero, the answer is "still inconclusive, do not deploy"
+   and the full analysis is not run — a dispersion number from an eventless window
+   is not evidence.
+2. **Four cells, not two**, with difference-in-differences against a matched
+   pre-trial window, because dev and prod differ as boxes.
+3. **The prod control is gathered read-only from the worker machine**, not by
+   copying `compare_trial` onto a web machine.
+4. If the budget is unfilled again, the decision is put to the owner explicitly:
+   keep waiting, accept the offline reconstruction as primary evidence and deploy
+   with live publishing as monitoring, or revert.
+
+Note that an unfilled budget is the *likely* outcome — the season is turning away
+from the negative-price regime. Two weeks is again a calendar interval, so this is
+a checkpoint rather than a stopping rule; the event budget remains the actual gate.
