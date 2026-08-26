@@ -626,13 +626,36 @@ def get_latest_history(start):
         return hist.astype(float).dropna(), missing_cols
 
 
-def _neso_csv_fallback(resource_id, date_col, cols, rename, tz="UTC"):
+# Minimum rows expected from a NESO source that publishes a full 14-day half-hourly
+# series (wind, solar, demand). Below this the source is treated as failed rather than
+# degraded: the CSV fallback is tried, and the status page reports it red. Day-ahead
+# sources (WINDFOR-DA, BMRS NDF) legitimately return far fewer rows and are exempt.
+NESO_MIN_FORECAST_ROWS = 200
+
+
+def _neso_csv_fallback(resource_id, spec):
     """
-    When the NESO CKAN datastore API returns empty, fetch the resource's CSV file
-    directly. Uses resource_show to get the canonical download URL so we don't
-    hard-code a path that can change.
+    When the NESO CKAN datastore API returns too little data, fetch the resource's
+    CSV file directly. Uses resource_show to get the canonical download URL so we
+    don't hard-code a path that can change.
+
+    `spec` is the same dataset definition the primary `DataSet` path uses, so the
+    fallback builds its index the same way. That matters: EMBSOLARFOR splits the
+    slot timestamp across DATE_GMT (always midnight) and TIME_GMT. An earlier
+    version of this function used date_col alone, so all 48 slots of a day
+    collapsed onto one timestamp and the de-duplication below silently discarded
+    47 of every 48 rows — a 14-day forecast arrived as 14 rows, the update aborted
+    on its own minimum-row guard, and the status page still reported "CSV backup"
+    as though the fallback had worked.
     """
     from io import StringIO
+
+    date_col = spec.get("date_col")
+    time_col = spec.get("time_col")
+    period_col = spec.get("period_col")
+    cols = spec.get("cols")
+    rename = spec.get("rename")
+    tz = spec.get("tz", "UTC")
 
     try:
         meta = requests.get(
@@ -658,6 +681,17 @@ def _neso_csv_fallback(resource_id, date_col, cols, rename, tz="UTC"):
         df.index = pd.to_datetime(df[date_col])
         if df.index.tzinfo is None:
             df.index = df.index.tz_localize(tz, ambiguous="infer")
+
+        # Add the intra-day offset, mirroring DataSet.download(). Without this a
+        # date-only column collapses every slot of a day onto midnight.
+        if time_col and time_col in df.columns:
+            df.index += (
+                pd.to_datetime(df[time_col].astype(str).str[:5], format="%H:%M")
+                - pd.Timestamp("1900-01-01")
+            )
+        elif period_col and period_col in df.columns:
+            df.index += (df[period_col].astype(int) - 1) * pd.Timedelta("30min")
+
         # Drop historical data we don't need — keep last 1 day + all future
         cutoff = pd.Timestamp.now(tz=tz) - pd.Timedelta("1D")
         df = df[df.index >= cutoff]
@@ -666,7 +700,16 @@ def _neso_csv_fallback(resource_id, date_col, cols, rename, tz="UTC"):
         if rename:
             df = df.set_axis(rename, axis=1)
         df = df.sort_index()
+        n_before_dedup = len(df)
         df = df[~df.index.duplicated()]
+        if n_before_dedup and len(df) < n_before_dedup / 2:
+            # Losing more than half the rows to duplicate timestamps means the index
+            # is not resolving to individual slots — the failure mode described above.
+            logger.warning(
+                "NESO CSV fallback: id=%s collapsed %s rows to %s unique timestamps — "
+                "check date_col/time_col for this resource",
+                resource_id, n_before_dedup, len(df),
+            )
         logger.info("NESO CSV fallback succeeded id=%s rows=%s", resource_id, len(df))
         return df, None
     except Exception as exc:
@@ -689,6 +732,7 @@ def get_latest_forecast():
             "cols": ["Wind_Forecast"],
             "rename": ["bm_wind"],
             "csv_fallback": "93c3048e-1dab-4057-a2a9-417540583929",
+            "min_rows": NESO_MIN_FORECAST_ROWS,
         },
         {
             "api_group": "neso_da_wind",
@@ -712,6 +756,7 @@ def get_latest_forecast():
             "date_col": "DATE_GMT",
             "time_col": "TIME_GMT",
             "csv_fallback": "db6c038f-98af-4570-ab60-24d71ebd0ae5",
+            "min_rows": NESO_MIN_FORECAST_ROWS,
         },
         {
             "api_group": "neso_demand",
@@ -722,6 +767,7 @@ def get_latest_forecast():
             "tz": "UTC",
             "cols": ["NATIONALDEMAND"],
             "csv_fallback": "7c0411cd-2714-4bb5-a408-adb065edf34d",
+            "min_rows": NESO_MIN_FORECAST_ROWS,
         },
         {
             "api_group": "openmeteo",
@@ -770,24 +816,31 @@ def get_latest_forecast():
         group = x.get("api_group", "other")
         label = x.get("label", group)
         csv_fallback_id = x.get("csv_fallback")
-        ds_kwargs = {k: v for k, v in x.items() if k not in ("api_group", "label", "csv_fallback")}
+        ds_kwargs = {
+            k: v for k, v in x.items()
+            if k not in ("api_group", "label", "csv_fallback", "min_rows")
+        }
         data, e = DataSet(**ds_kwargs).download()
         n = len(data)
 
-        # If the datastore API returned nothing, try CSV fallback
+        # If the datastore API returned nothing — or a short response, which is how a
+        # partial NESO outage presents — try the CSV fallback. `min_rows` is set only
+        # on the sources that are expected to carry a full 14-day half-hourly series;
+        # day-ahead sources legitimately return far fewer rows.
+        min_rows = x.get("min_rows", 0)
         used_csv_fallback = False
-        if n == 0 and csv_fallback_id:
-            logger.info("API returned no data for %s — trying CSV fallback", label)
-            data, e = _neso_csv_fallback(
-                csv_fallback_id,
-                ds_kwargs.get("date_col"),
-                ds_kwargs.get("cols"),
-                ds_kwargs.get("rename"),
-                ds_kwargs.get("tz", "UTC"),
+        if csv_fallback_id and n < max(min_rows, 1):
+            logger.info(
+                "API returned %s rows for %s (minimum %s) — trying CSV fallback",
+                n, label, max(min_rows, 1),
             )
-            n = len(data)
-            if n > 0:
+            fb_data, fb_e = _neso_csv_fallback(csv_fallback_id, ds_kwargs)
+            # Only take the fallback if it is actually better than what the API gave us.
+            if len(fb_data) > n:
+                data, e, n = fb_data, fb_e, len(fb_data)
                 used_csv_fallback = True
+            elif n == 0:
+                e = fb_e if fb_e is not None else e
 
         prev = source_details.get(group, {"label": label, "rows": 0, "error": None, "fallback": False})
         prev["rows"] += n
@@ -835,7 +888,7 @@ def get_latest_forecast():
     if len(gas_av) > 0:
         df["gas_availability"] = gas_av.reindex(df.index, method="ffill").bfill()
     else:
-        df["gas_availability"] = None
+        df["gas_availability"] = np.nan
 
     df["gas_ttf"] = gas_ttf_at(pd.Timestamp.now(tz="UTC"))
 
@@ -846,7 +899,7 @@ def get_latest_forecast():
         source_rows["rte_nuclear"] = int(fr_nuc.notna().sum())
         source_details["rte_nuclear"] = {"label": "ENTSO-E FR nuclear", "rows": source_rows["rte_nuclear"], "error": None, "fallback": False}
     else:
-        df["fr_nuclear"] = None
+        df["fr_nuclear"] = np.nan
         source_rows["rte_nuclear"] = 0
         source_details["rte_nuclear"] = {"label": "ENTSO-E FR nuclear", "rows": 0, "error": "no data", "fallback": False}
 
@@ -874,8 +927,8 @@ def get_latest_forecast():
         source_rows["neso_dc"]   = int(df["dispatchable_capacity"].notna().sum())
         source_details["neso_dc"] = {"label": "NESO Dispatch Cap.", "rows": source_rows["neso_dc"], "error": None, "fallback": False}
     else:
-        df["dispatchable_capacity"] = None
-        df["opmr_national_surplus"] = None
+        df["dispatchable_capacity"] = np.nan
+        df["opmr_national_surplus"] = np.nan
         source_rows["neso_dc"]   = 0
         source_details["neso_dc"] = {"label": "NESO Dispatch Cap.", "rows": 0, "error": "no data", "fallback": False}
 
@@ -888,7 +941,7 @@ def get_latest_forecast():
         source_rows["melngc"]   = int(df["melngc_margin"].notna().sum())
         source_details["melngc"] = {"label": "BMRS MELNGC", "rows": source_rows["melngc"], "error": None, "fallback": False}
     else:
-        df["melngc_margin"] = None
+        df["melngc_margin"] = np.nan
         source_rows["melngc"]   = 0
         source_details["melngc"] = {"label": "BMRS MELNGC", "rows": 0, "error": "no data", "fallback": False}
 
@@ -901,8 +954,8 @@ def get_latest_forecast():
         source_rows["openmeteo_fr"] = _fr_rows
         source_details["openmeteo_fr"] = {"label": "Open-Meteo FR", "rows": _fr_rows, "error": None, "fallback": False}
     else:
-        df["fr_wind"] = None
-        df["fr_rad"]  = None
+        df["fr_wind"] = np.nan
+        df["fr_rad"]  = np.nan
         source_rows["openmeteo_fr"] = 0
         source_details["openmeteo_fr"] = {"label": "Open-Meteo FR", "rows": 0, "error": "no data", "fallback": False}
 
