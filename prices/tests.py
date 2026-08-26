@@ -1098,3 +1098,136 @@ class SummaryPlacementTests(TestCase):
 
         self.assertEqual(_SUMMARY_POSITIONS, tuple(p for p, _ in _SUMMARY_POSITION_LABELS))
         self.assertEqual(_SUMMARY_POSITIONS[0], "above", "default must be first")
+
+
+class NesoCsvFallbackTests(TestCase):
+    """Regression tests for the 2026-08-25/26 production forecast failures.
+
+    Two independent defects took the forecast down on consecutive runs:
+      * EMBSOLARFOR's CSV fallback ignored TIME_GMT, so all 48 slots of a day
+        collapsed onto midnight and de-duplication discarded 47 of every 48 rows.
+        652 rows arrived as 14, and the update aborted on its minimum-row guard.
+      * When OPMR was unavailable, `dispatchable_capacity` was set to Python None,
+        producing an object-dtype column. LightGBM rejects those outright, so the
+        forecast died with an opaque dtype error instead of degrading.
+    """
+
+    def _csv_frame(self):
+        """Two days of half-hourly embedded forecast, shaped like the real CSV."""
+        rows = []
+        for day in ("2026-08-26", "2026-08-27"):
+            for slot in range(48):
+                hh, mm = divmod(slot * 30, 60)
+                rows.append({
+                    "DATE_GMT": f"{day}T00:00:00",
+                    "TIME_GMT": f"{hh:02d}:{mm:02d}",
+                    "EMBEDDED_SOLAR_FORECAST": 1000 + slot,
+                    "EMBEDDED_WIND_FORECAST": 500 + slot,
+                })
+        return pd.DataFrame(rows)
+
+    def _run_fallback(self, frame, spec):
+        from io import StringIO
+        from unittest.mock import MagicMock
+
+        import config.utils as utils
+
+        meta = MagicMock()
+        meta.json.return_value = {"result": {"url": "https://example.invalid/f.csv"}}
+        meta.raise_for_status.return_value = None
+        csv = MagicMock()
+        csv.text = frame.to_csv(index=False)
+        csv.raise_for_status.return_value = None
+
+        def _get(url, **kwargs):
+            return meta if "resource_show" in url else csv
+
+        with patch.object(utils, "requests") as req:
+            req.get.side_effect = _get
+            with patch.object(utils.pd.Timestamp, "now", return_value=pd.Timestamp("2026-08-26", tz="UTC")):
+                return utils._neso_csv_fallback("rid", spec)
+
+    def test_fallback_honours_time_col(self):
+        """The bug: without TIME_GMT the 96 rows collapse to 2 (one per day)."""
+        spec = {
+            "date_col": "DATE_GMT",
+            "time_col": "TIME_GMT",
+            "tz": "UTC",
+            "cols": ["EMBEDDED_SOLAR_FORECAST", "EMBEDDED_WIND_FORECAST"],
+            "rename": ["solar", "emb_wind"],
+        }
+        df, err = self._run_fallback(self._csv_frame(), spec)
+        self.assertIsNone(err)
+        self.assertEqual(len(df), 96, "every half-hourly slot must survive de-duplication")
+        self.assertEqual(list(df.columns), ["solar", "emb_wind"])
+        # Consecutive slots must be 30 minutes apart, not identical timestamps.
+        self.assertEqual((df.index[1] - df.index[0]), pd.Timedelta("30min"))
+
+    def test_fallback_without_time_col_is_unaffected(self):
+        """NATDEMAND carries a full timestamp in GDATETIME and must still work."""
+        frame = pd.DataFrame({
+            "GDATETIME": pd.date_range("2026-08-26", periods=48, freq="30min").strftime("%Y-%m-%dT%H:%M:%S"),
+            "NATIONALDEMAND": range(48),
+        })
+        df, err = self._run_fallback(frame, {"date_col": "GDATETIME", "tz": "UTC", "cols": ["NATIONALDEMAND"]})
+        self.assertIsNone(err)
+        self.assertEqual(len(df), 48)
+
+    def test_missing_optional_features_are_float_not_object(self):
+        """`= None` produces an object column that LightGBM refuses to predict on."""
+        import numpy as np
+
+        df = pd.DataFrame({"demand": [1.0, 2.0]})
+        df["dispatchable_capacity"] = np.nan
+        self.assertEqual(df["dispatchable_capacity"].dtype, float)
+
+        # The regression: the old code path used None.
+        legacy = pd.DataFrame({"demand": [1.0, 2.0]})
+        legacy["dispatchable_capacity"] = None
+        self.assertEqual(legacy["dispatchable_capacity"].dtype, object)
+
+    def test_ensemble_predicts_with_an_all_nan_feature(self):
+        """A missing optional feature must degrade, not crash the whole forecast."""
+        import numpy as np
+
+        cols = ["demand", "dispatchable_capacity"]
+        train_X = pd.DataFrame({"demand": np.arange(40.0), "dispatchable_capacity": np.arange(40.0) * 2})
+        train_y = pd.Series(np.arange(40.0) * 3)
+        models = fit_day_ahead_ensemble(train_X, train_y, np.ones(len(train_X)))
+
+        features = pd.DataFrame({"demand": [1.0, 2.0]})
+        features["dispatchable_capacity"] = np.nan
+        preds = predict_day_ahead_ensemble(models, features[cols])
+        self.assertEqual(len(preds), 2)
+        self.assertFalse(np.isnan(preds).any(), "ensemble must impute rather than emit NaN")
+
+
+class NesoSourceHealthTests(TestCase):
+    """A short response is a failure, not a degraded success."""
+
+    def _health(self, source_details):
+        from config.utils import NESO_MIN_FORECAST_ROWS
+
+        def _neso_sub_health(key):
+            d = source_details.get(key, {})
+            rows = d.get("rows", -1)
+            if rows < 0:
+                return "unknown"
+            if rows < NESO_MIN_FORECAST_ROWS:
+                return "fail"
+            return "warn" if d.get("fallback") else "ok"
+
+        return _neso_sub_health
+
+    def test_short_fallback_reports_fail_not_warn(self):
+        """The 14-row solar fallback previously showed amber 'CSV backup'."""
+        h = self._health({"neso_solar": {"rows": 14, "fallback": True}})
+        self.assertEqual(h("neso_solar"), "fail")
+
+    def test_full_fallback_still_reports_warn(self):
+        h = self._health({"neso_demand": {"rows": 624, "fallback": True}})
+        self.assertEqual(h("neso_demand"), "warn")
+
+    def test_full_direct_response_reports_ok(self):
+        h = self._health({"neso_wind": {"rows": 672, "fallback": False}})
+        self.assertEqual(h("neso_wind"), "ok")
