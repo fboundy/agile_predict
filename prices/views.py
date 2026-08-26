@@ -27,7 +27,7 @@ from django.views.generic import FormView, TemplateView
 from plotly.subplots import make_subplots
 
 from config.settings import GLOBAL_SETTINGS
-from config.utils import day_ahead_to_agile, import_agile_to_export_agile
+from config.utils import day_ahead_to_agile, import_agile_to_export_agile, NESO_MIN_FORECAST_ROWS
 
 from .external_forecasts import fetch_agileforecast, fetch_x2r, region_rows_from_g
 from .forms import ForecastForm, RegistrationForm
@@ -2582,7 +2582,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         # --- API / data-source health status (binary: ok / fail, no amber) ---
         # NESO: minimum across the three 14-day sub-sources; da_wind excluded (supplementary)
         # BMRS NDF: day-ahead only, threshold is much lower
-        _NESO_THRESHOLD = 200   # rows below this → red for any primary NESO sub-source
+        _NESO_THRESHOLD = NESO_MIN_FORECAST_ROWS   # rows below this → red for any primary NESO sub-source
         _BMRS_THRESHOLD = 40    # NDF is day-ahead only; 40 rows ≈ one full day
 
         # Read source-row counts from the most recent UpdateJob (written there to survive
@@ -2620,12 +2620,19 @@ class GraphV2View(V2NavMixin, TemplateView):
             return "ok" if rows >= threshold else "fail"
 
         def _neso_sub_health(key):
-            """ok / warn (CSV backup used) / fail for a single NESO sub-source."""
+            """ok / warn (CSV backup used) / fail for a single NESO sub-source.
+
+            A short response is a failure, not a degraded success. This previously
+            tested only `rows == 0`, so a source that returned a handful of rows —
+            which is what a broken CSV fallback produces — was reported green, or
+            amber "CSV backup", while the update was actually aborting on its own
+            minimum-row guard.
+            """
             d = source_details.get(key, {})
             rows = d.get("rows", -1)
             if rows < 0:
                 return "unknown"
-            if rows == 0:
+            if rows < _NESO_THRESHOLD:
                 return "fail"
             return "warn" if d.get("fallback") else "ok"
 
@@ -2671,10 +2678,17 @@ class GraphV2View(V2NavMixin, TemplateView):
             label = d.get("label", group)
             rows = d.get("rows", -1)
             error = d.get("error")
+            _primary_neso = group in ("neso_wind", "neso_solar", "neso_demand")
+            _short = _primary_neso and 0 <= rows < _NESO_THRESHOLD
             if d.get("fallback"):
+                # Don't claim the backup worked when it returned too little to use.
+                if _short:
+                    return f"{label}: CSV backup incomplete ({rows} rows)"
                 return f"{label}: CSV backup"
             if error and rows == 0:
                 return f"{label}: {error}"
+            if _short:
+                return f"{label}: only {rows} rows"
             if rows >= 0:
                 return f"{label}: {rows} rows"
             return "no data"
