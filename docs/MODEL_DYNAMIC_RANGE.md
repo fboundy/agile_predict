@@ -3023,3 +3023,93 @@ model correctly following its inputs rather than failing to.
    adding a model.
 4. Limitations unchanged and real: 7 of 13 folds contain any negatives, summer
    only, and none of this is tested in the live pipeline.
+
+---
+
+# Claude — calibration attempted; the blocker is data span, not technique
+
+Appended 2026-08-27. The owner asked, reasonably, why the classifier "can't" be
+regularised and calibrated. It can — my previous entry phrased those as the
+remaining routine steps. This entry reports actually doing them, and the result
+corrects that framing: **on the current data they do not produce trustworthy
+probabilities, and the reason is structural rather than methodological.**
+
+## Design
+
+Same 13 production-faithful folds. Within each training window, a chronological
+75/25 fit/calibration split; classifiers fitted on the early slice, isotonic
+calibration (Platt fallback for thin slices) on the late slice; scored on the
+out-of-time test fold. Three configurations spanning the regularisation range:
+heavy (8 leaves, min_child 80, L2 10), moderate (15 leaves, min_child 40, class
+weighting kept), and the previous entry's config refit on the fit slice.
+
+## Result 1: holding out a calibration slice costs most of the ranking skill
+
+| model | PR-AUC | ROC-AUC | Brier |
+|---|---|---|---|
+| raw (full window, uncalibrated) | **0.508** | **0.952** | **0.01468** |
+| heavy reg + calibrated | 0.231 | 0.889 | 0.02054 |
+| moderate + calibrated | 0.298 | 0.892 | 0.01865 |
+| raw config + calibrated | 0.247 | 0.885 | 0.01998 |
+| base-rate predictor | — | — | 0.01830 |
+
+Isotonic calibration is monotone, so it cannot itself reduce ranking. The drop
+from 0.95 to ~0.89 ROC is the cost of **fitting on 75 % of the window** — i.e.
+of giving up the most recent 25 % of a 21-day window to the calibrator. Recency
+dominates this problem; the freshest days are precisely the ones the calibration
+split takes away. With more history this cost shrinks; with 21 usable days it is
+severe.
+
+## Result 2: the calibrated probabilities are still not honest
+
+Reliability of the best candidates, out of time:
+
+```text
+moderate + calibrated:    says 70-100%  ->  observed 39.1%   (n=952)
+raw cfg  + calibrated:    says 70-100%  ->  observed 37.9%   (n=818)
+                          says 35-50%   ->  observed 16.3%
+```
+
+Overconfident by a factor of ~2.3 in the top bin, and non-monotone in the middle
+bins. Every calibrated variant has a **worse Brier score than predicting the base
+rate for every slot** (moderate: 0.01865 vs 0.01830). The isotonic mapping learned
+on one fortnight's regime does not describe the next fortnight: negative prices
+arrive in weather-regime bursts, so P(negative | score) is not stable across
+windows, and 6 of 13 folds had too few calibration-slice negatives for isotonic
+at all.
+
+An irony worth recording: the raw, memorising model has the **best** Brier score
+(0.01468, the only one beating base rate) — near-perfect ranking with extreme
+probabilities scores well on average even though its individual statements
+("P = 1.0000") are unusable. Brier rewards its ranking, not its honesty.
+
+## The corrected conclusion
+
+The obstacles are:
+
+1. **Recency**: an honest calibration set must be held out from training, and with
+   ~2 months of data the held-out slice is either too recent to spare or too stale
+   to trust.
+2. **Regime instability**: the score→probability mapping shifts with the weather
+   regime, so a mapping fitted on any single window is wrong for the next.
+3. **Scarcity**: ~250–350 negative training rows per window; several calibration
+   slices contained zero.
+
+None of these is a technique problem — sklearn does its job. All three are the
+same underlying fact: **the dataset spans one summer**, and calibrated tail
+probabilities need calibration data spanning multiple regimes. This is the same
+data constraint that made the trial review inconclusive, arriving by a third
+route.
+
+## What is honestly usable today
+
+- **The ranking** (PR-AUC 0.508, ROC 0.952 from the full-window model) is real and
+  survives out-of-fold. It supports **ordinal risk bands** — e.g. "negative-price
+  risk: low / elevated / high" cut at score quantiles — which claim only ordering,
+  not frequency.
+- **Numeric percentages are not supportable** and should not be shown to a user
+  until a calibration set spanning multiple regimes exists. Practically that means
+  autumn/winter data, i.e. the same wait as the trial's event budget.
+- If `plunge_probability` is populated in the meantime it should hold the raw
+  score with a comment that it is a ranking score, not a probability — or stay
+  NULL until it can mean what its name says.
