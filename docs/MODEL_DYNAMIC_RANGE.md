@@ -3234,3 +3234,121 @@ three runs), and with the correction being distributional rather than clairvoyan
    for this correction. It is the highest-value next task and it needs no new
    modelling.
 4. Nothing here is tested in the live pipeline, and all of it is summer data.
+
+---
+
+# Claude — History backfilled on dev: three years, four seasons, 629 non-summer negatives
+
+Appended 2026-08-27. At the owner's direction, and **dev only** — the data is held
+on the CT so production's database stays small.
+
+## What was wrong with the existing path
+
+`full_hist` calls `get_latest_history()`, which returned an empty frame for every
+start date tried. Two causes, both in the source list rather than the logic:
+
+1. **"Historic Demand Data" is published one resource per calendar year**, and only
+   the 2023 and 2024 ids are in the code. There is no 2025 or 2026 demand source,
+   so any window past 2024 loses demand entirely — and the function's closing
+   `dropna()` then empties the whole frame. The missing ids exist and are public:
+
+   | year | resource |
+   |---|---|
+   | 2025 | `b2bde559-3455-4021-b179-dfe60c0337b0` |
+   | 2026 | `8a4a771c-3929-4e56-93ad-cdf13219dea5` |
+
+2. **The NESO SQL endpoint truncates a single response** to a few thousand rows
+   regardless of the `LIMIT` requested — `LIMIT 20000` and `LIMIT 32000` both return
+   6 576 rows for the 2023 demand resource. A one-shot fetch therefore silently
+   loses most of its range.
+
+A hypothesis I raised and the data refuted: I suspected the generation-mix resource
+had dropped its `SOLAR` column, because a truncated key listing did not show it.
+The full field list does contain `SOLAR`; that was my error, not an upstream change.
+
+## What was built
+
+`prices/management/commands/backfill_history.py`, **on `dev` only**. It paginates
+with `LIMIT`/`OFFSET`, walks the per-year demand resources, and maps columns to the
+meanings the forecast features already use so historic rows are comparable with
+`ForecastData`:
+
+```text
+demand      ND                (per-year Historic Demand Data)
+solar       SOLAR             (Historic GB Generation Mix)
+bm_wind     WIND              (transmission-connected wind)
+total_wind  WIND + WIND_EMB   (so emb_wind = total_wind - bm_wind, as views.py derives it)
+nuclear     NUCLEAR
+temp_2m / wind_10m / rad      (Open-Meteo archive, resampled to 30 min)
+gas_ttf                       (existing get_gas_ttf_history)
+```
+
+One bug of mine worth recording because it is silent and easy to repeat: building
+`pd.DataFrame({"demand": series}, index=new_index)` where `series` still carries its
+original `RangeIndex` makes pandas **reindex it to all-NaN**. The first dry run
+reported "48 906 rows, 0 complete" for exactly that reason. `.to_numpy()` fixes it.
+
+## Result
+
+**48 906 rows, 2023-07-20 → 2026-08-06, joining 1:1 with settled prices.**
+Coverage 91.5 % of the half-hours in that span. Two known limits: the 2023 resource
+returns from 20 July rather than 1 July, and NESO's 2026 demand resource lags real
+time by about three weeks, so the table ends 6 August. Neither matters for the use
+this was built for.
+
+Negative-price slots now available, by year and season:
+
+| year | DJF | MAM | JJA | SON |
+|---|---|---|---|---|
+| 2023 | 70 | 0 | 10 | 24 |
+| 2024 | 33 | 86 | 136 | 64 |
+| 2025 | 11 | 84 | 106 | 98 |
+| 2026 | 0 | 159 | 145 | 0 |
+
+```text
+total negative slots   1 026
+total spikes (>£250)     140
+total cheap  (<£50)    5 775
+NON-SUMMER negatives     629      <- the gap that blocked calibration
+NON-SUMMER spikes        129
+```
+
+Note 1 026 here versus 1 307 in the fold harness: the harness counts each slot once
+per forecast run that covered it, so its figure is inflated by repeat counting.
+1 026 is the number of *distinct* negative half-hours in three years.
+
+## The relationship reproduces on actuals
+
+Midday, high solar, low demand — the 2026-08-31 cut — now measured on three years of
+actuals rather than two months of forecasts:
+
+| total wind | n | median price | negative |
+|---|---|---|---|
+| 0–4 000 | 104 | 70.50 | 0.0 % |
+| 4 000–8 000 | 146 | 50.25 | 6.2 % |
+| 8 000–12 000 | 76 | 2.30 | 38.2 % |
+| 12 000+ | 119 | −16.70 | **84.0 %** |
+
+Same monotone structure as the forecast-era analysis, less extreme at the top
+(96 %/100 % there) — expected, since this spans years with lower solar capacity and
+uses actuals rather than the forecasts the model sees.
+
+## What this unblocks
+
+1. **Classifier calibration.** The previous entry concluded that honest probabilities
+   were impossible on one summer, because the score→probability mapping shifts with
+   regime and several calibration slices held zero negatives. There are now 629
+   non-summer negatives across three winters, springs and autumns.
+2. **The quantile-mapping correction** can be fitted across regimes rather than on a
+   trailing fortnight.
+3. **A plunge/spike climatology** — the owner's first proposal — is now directly
+   computable.
+
+## Caveats
+
+- **Actuals, not forecasts.** `History` holds what happened; the model consumes
+  forecasts. Anything fitted on it must be checked for the vintage/causal-safety
+  problem that governs every feature in this document — a relationship that holds on
+  actuals need not hold on 4-day-ahead NWP output.
+- Not wired into any model path. `History` remains unread by the pipeline.
+- **Dev only, deliberately.** Not on `main`, not deployed.
