@@ -3565,3 +3565,104 @@ the ordering matches the climatology measured directly from `History`.
 - Solar and demand at ≥7 d come from the forecast, and the whole design rests on
   their skill holding (r 0.967 / 0.865) — measured on the same six weeks.
 - Not implemented in the pipeline. This is an offline evaluation.
+
+---
+
+# Claude — the owner's framing, tested: the concept holds, my implementation of it does not
+
+Appended 2026-08-27. The owner corrected a framing error of mine and the correction
+is recorded here first, because it is the more durable part of this entry.
+
+## The framing
+
+I had described long-horizon forecasting as a "forecast-of-a-forecast" needing a
+different estimator per horizon. That is wrong. The owner's correction:
+
+> 10 days out it's still the same forecast but there's more uncertainty. If the
+> inputs held to D-1 the forecast would remain unchanged. That's why D-1 should be
+> used for calibration.
+
+There is **one** response function — the auction's mapping from conditions to
+clearing price. Horizon does not change it; horizon changes only how well its
+arguments are known. The right place to *learn* it is the D-1 vintage, where the
+inputs are sharpest and least contaminated by forecast error. Input uncertainty
+then belongs in the **width** of the answer, not baked into a flattened point
+estimate.
+
+That cleanly separates two things this document had been conflating, and it
+correctly predicts something already on file: the pre-fix model trained on 22–46 h
+had *zero* negative recall not because its f was wrong, but because at long horizon
+its inputs never reach the region where plunges live (wind sd ratio 0.371 at 7–15 d).
+
+## The test
+
+Three configurations, 13 production-faithful folds, 70 107 rows, 1 307 negatives,
+all maps fitted on the training window only:
+
+| | training | inputs at inference |
+|---|---|---|
+| **A** sharp f | 22–46 h only (pre-fix production) | raw |
+| **B** blunt g | 22 h–14 d (the widened window on trial) | raw |
+| **C** sharp f + correction | 22–46 h only | each input quantile-mapped per horizon band onto the D-1 distribution |
+
+### Result
+
+| config | neg recall | neg prec | sd ratio | RMSE | MAE | sub-zero preds |
+|---|---|---|---|---|---|---|
+| A sharp f, raw inputs | **0.000** | — | 0.712 | 25.34 | 18.23 | 0 |
+| **B widened (on trial)** | **0.273** | 0.566 | **0.944** | **20.37** | **13.27** | 631 |
+| C sharp f + corrected inputs | **0.000** | 0.000 | 0.795 | 30.33 | 22.66 | 87 |
+
+By horizon, negative recall / RMSE:
+
+| band | n | negatives | A | B | C |
+|---|---|---|---|---|---|
+| 2–4 d | 14 320 | 319 | 0.000 / 23.5 | **0.282 / 15.8** | 0.000 / 24.4 |
+| 4–7 d | 19 881 | 547 | 0.000 / 24.7 | **0.380 / 17.8** | 0.000 / 27.3 |
+| 7–15 d | 35 906 | 441 | 0.000 / 26.3 | **0.134 / 23.1** | 0.000 / 33.9 |
+
+**C fails completely, and B wins on every axis including the tails.**
+
+The correction did what it was asked to do at the input: `emb_wind` spread at 7–15 d
+went from sd 287.9 to 863.7, three times wider. The inputs were duly pushed into the
+extreme region — and the model still predicted **zero** negative prices, while
+aggregate error got substantially worse (RMSE 25.34 → 30.33).
+
+## Why it failed, and why that does not refute the framing
+
+**Marginal quantile mapping destroys the joint structure.** A negative price requires
+a *conjunction* — high solar **and** high wind **and** low demand in the same slot.
+Mapping each feature's marginal distribution independently spreads each variable but
+manufactures no conjunctions; worse, it produces incoherent combinations (inflating
+embedded wind on a slot whose solar is low). The result is inputs that are more
+dispersed and less physically possible, which explains both the absent tails and the
+degraded RMSE.
+
+`_BASE` compounds this: it carries `emb_wind` but not transmission wind, so the
+variable most responsible for plunges is not even present to be corrected.
+
+So the negative result falls on **my implementation**, not on the owner's reasoning.
+"Restore the input distribution" was a crude proxy for what the framing actually
+calls for, which is to propagate input **uncertainty** — push a set of coherent joint
+scenarios through f and take the distribution of the outputs. Independent marginal
+mapping is the one way of doing that which guarantees incoherent scenarios.
+
+## What this does settle
+
+- **B, the widened window currently on trial, is the best configuration measured.**
+  It wins on tails *and* on aggregate error against both alternatives. My earlier
+  suggestion that it "improves accuracy by teaching the model to be blunt, which is
+  the wrong direction for tails" is not supported: it has the best negative recall of
+  the three, at every horizon band. I withdraw that reservation.
+- **A is confirmed as indefensible**: zero negative recall at *every* horizon band
+  including 2–4 days, corroborating the original defect measurement from a third
+  independent direction.
+
+## The direction this leaves open
+
+Scenario propagation rather than marginal correction: sample coherent joint input
+states — historical analogue days from the backfilled `History`, or the spread across
+successive forecast runs for the same target slot — push each through f, and read the
+tails off the resulting distribution. That preserves the conjunctions marginal mapping
+destroys, and it is the faithful implementation of "same function, more uncertainty".
+Untested.
