@@ -2620,3 +2620,156 @@ The new routine carries the protocol as amended by this review:
 Note that an unfilled budget is the *likely* outcome — the season is turning away
 from the negative-price regime. Two weeks is again a calendar interval, so this is
 a checkpoint rather than a stopping rule; the event budget remains the actual gate.
+
+---
+
+# Claude — a concrete miss (2026-08-31 midday) and what it says about the objective
+
+Appended 2026-08-27, prompted by the owner observing that supply/demand and history
+imply negative prices around noon on 2026-08-31 while neither forecast shows them.
+The owner's hypothesis was that a pre/post transform is needed for non-linear
+behaviour. The observation is confirmed; the hypothesis is half right, and the data
+points at a more specific version of it.
+
+## The slot
+
+Monday 31 August 2026, 12:00Z — the August bank holiday, and the `bank_holiday`
+flag is correctly set to 1.
+
+| | MW |
+|---|---|
+| solar | 9 491 |
+| embedded wind | 2 221 |
+| transmission (BM) wind | 9 613 |
+| **total renewables** | **21 325** |
+| transmission demand | 15 215 |
+| **surplus** | **+6 110** |
+
+Predictions: **prod +31.19**, **dev (widened window) +46.12**.
+
+## The historic record agrees with the owner
+
+Analogue set: for every past slot, the shortest-horizon stored `ForecastData` row
+(the sharpest available estimate of that slot's mix) joined to the settled price.
+2 887 slots, 2026-06-28 → 2026-08-27, 3.7 % negative overall.
+
+25 nearest analogues by (solar, emb_wind, bm_wind, demand):
+
+```text
+min -23.20   p10 -18.59   median -12.95   p90 +53.16   max +67.30
+negative 19/25 (76 %)     below £30  20/25 (80 %)
+```
+
+Cut a different way — midday, solar ≥ 8 000, demand ≤ 17 000, split by total wind:
+
+| total wind | n | median price | negative |
+|---|---|---|---|
+| 0–4 000 | 19 | 104.05 | 0.0 % |
+| 4 000–8 000 | 59 | 45.05 | 0.0 % |
+| **8 000–12 000** | 27 | **−13.65** | **96.3 %** |
+| 12 000+ | 29 | −17.75 | 100 % |
+
+The target slot sits at 11 834 MW total wind — inside the 96 %-negative bucket.
+**The owner's read is correct.**
+
+## It is not the training-window defect
+
+Worth stating clearly because it would have been the obvious suspect: the widened
+window makes this case **worse**, not better (+46.12 against prod's +31.19). Whatever
+is happening here is not what `TRAIN_HORIZON_DAYS` fixes, and this slot is not
+evidence for or against the trial.
+
+## Two separate gaps, and only one of them is a defect
+
+The 25 nearest analogues have
+
+```text
+mean    +1.21     ← what an MSE-trained model is supposed to aim at
+median -12.95     ← what "will it be negative?" actually asks
+P(negative) 76 %
+```
+
+So the outcome at these conditions is **wide and roughly bimodal**: mostly around
+−15, with a fat positive tail to +67. Its *mean* is approximately zero.
+
+- **Gap 1, £30–45: real under-prediction.** The model says +31/+46 where the
+  conditional mean is +1. That is the tail compression this document already
+  documents at length, showing up in a single slot.
+- **Gap 2, £14: not a defect at all.** Even a perfectly calibrated conditional-mean
+  predictor would print about **+1**, not −13. No amount of fixing Gap 1 makes an
+  MSE model say "negative" here, because the mean genuinely is not negative.
+
+That distinction matters for what to do next: closing Gap 1 is a calibration
+problem, closing Gap 2 requires changing **what is predicted**, not how well.
+
+## On the owner's transform hypothesis
+
+Right in direction. The most valuable version is a **feature** transform, and the
+data is unusually clear about which one. Ability of each variable, alone, to rank
+a negative-price slot above a non-negative one (AUC over the 2 887-slot set):
+
+| variable | AUC |
+|---|---|
+| **surplus = solar + total_wind − demand** | **0.976** |
+| emb_wind | 0.936 |
+| −demand | 0.928 |
+| total_wind | 0.898 |
+| bm_wind | 0.876 |
+| solar | 0.838 |
+
+A single derived surplus term separates negative prices better than any raw input
+by a wide margin. The model currently has `solar`, `emb_wind` and `demand` as
+separate columns and must approximate their difference through axis-aligned splits,
+which is exactly the case where a tree spends depth badly.
+
+**Why this is not just the already-rejected `residual_load`.** That feature was
+defined as `demand − solar − emb_wind` and it lost 8/10 paired folds. It **omits
+transmission wind**, which is 82 % of total wind. The surplus term above includes
+`bm_wind`, and that is where its separating power comes from. The earlier negative
+result does not carry over, and this specific formulation has never been tested.
+
+**A target transform (asinh and friends) is the weaker half of the idea.** It would
+help with skew and with spike scale, but it does not touch Gap 2 — transforming the
+target and inverting still estimates a conditional mean, and the inversion adds
+Jensen bias in exactly the tails we care about. Worth testing after the feature.
+
+## What would actually make the site say "negative"
+
+Gap 2 is a question about the *objective*, and there are two honest routes:
+
+1. **Predict a lower quantile as well as the mean.** A P30/median head would print
+   −13 here where the mean head prints +1, and the pair also gives the user a range
+   rather than a false point estimate.
+2. **An explicit negative-price classifier.** With P(negative) = 76 % for this slot,
+   "very likely negative" is a defensible and useful statement even when the
+   regression cannot produce the number.
+
+Note the schema **already has `plunge_probability` and `day_ahead_classified`**,
+both NULL for every row since they were added. They appear to have been designed
+for precisely this and never populated. That is now a third argument for populating
+them rather than dropping them.
+
+## A hypothesis of mine that the data killed
+
+I expected the cause to be that `_BASE` contains no transmission wind — the model
+sees `emb_wind` (2 221 MW) but not `bm_wind` (9 613 MW), and BM wind is the obvious
+physical driver. The AUC table refutes it: `emb_wind` alone (0.936) is a **better**
+negative-price discriminator than `bm_wind` (0.876) or `total_wind` (0.898), because
+embedded wind is a clean proxy for "windy everywhere" without carrying BM wind's
+curtailment and constraint noise. The original 2026-07-01 finding that demoted
+`bm_wind` in favour of `emb_wind` stands, and stands for a better reason than was
+recorded at the time. The value of `bm_wind` here is only inside the surplus
+combination, not as a feature in its own right.
+
+## Suggested next test
+
+Paired folds, production-faithful harness, on the widened window:
+
+1. `_BASE + surplus` where `surplus = solar + bm_wind + emb_wind − demand`.
+2. `_BASE + surplus + bm_wind`, to separate the combination's value from the raw column.
+3. Report the detection metrics (negative recall/precision), not the aggregate score
+   — per the lesson already established here, the aggregate will veto a tail-improving
+   change.
+
+Not run yet. Recording the observation and the AUC evidence now so the next round
+starts from measurement rather than from theory.
