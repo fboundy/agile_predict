@@ -3113,3 +3113,124 @@ route.
 - If `plunge_probability` is populated in the meantime it should hold the raw
   score with a comment that it is a ranking score, not a probability — or stay
   NULL until it can mean what its name says.
+
+---
+
+# Claude — the owner's output-correction idea works, and it retires the old affine proposal
+
+Appended 2026-08-27. The owner's intuition — that the model under-predicts plunges
+— is correct and remains correct after the window fix. Two routes were proposed:
+(1) track plunges and highs over a longer period to modify the core model, and
+(2) use forecast-vs-observed history to modify the output. Route 2 is testable on
+current data and it works. Route 1 is blocked on something specific and fixable.
+
+## Route 2: correcting the output from forecast-vs-observed history
+
+Out-of-fold predictions from the widened-window model (13 production-faithful
+folds), then corrections fitted **walk-forward** — for fold *k* the correction sees
+only folds 1..*k*-1. Scored on folds 2–13: 62 969 rows, 956 negatives.
+
+| method | neg recall | neg prec | neg F1 | sd ratio | slope | RMSE | MAE | preds < 0 |
+|---|---|---|---|---|---|---|---|---|
+| raw (no correction) | 0.163 | **0.821** | 0.272 | 0.921 | **0.919** | **19.75** | **12.93** | 190 |
+| **affine** | **0.008** | 1.000 | 0.017 | 0.829 | 1.014 | 19.63 | 12.82 | **8** |
+| quantile map, global | 0.343 | 0.522 | 0.414 | 1.068 | 0.763 | 23.14 | 14.27 | 628 |
+| **quantile map, hybrid** | **0.407** | 0.453 | **0.429** | 1.059 | 0.768 | 22.95 | 14.48 | 691 |
+
+"Hybrid" = a separate mapping per horizon band below 7 days, and the all-horizon
+mapping beyond. (A first attempt banded the 7–15 d range too and scored 0.056 there
+— that band alone has too few samples for a stable mapping. The corrected hybrid is
+the row above.)
+
+By horizon, negative recall / RMSE:
+
+| band | n | negatives | raw | global | **hybrid** |
+|---|---|---|---|---|---|
+| 2–4 d | 13 072 | 273 | 0.282 / 15.9 | 0.465 / 18.4 | **0.678 / 17.9** |
+| 4–7 d | 18 009 | 251 | 0.116 / 17.9 | 0.446 / 20.3 | **0.458 / 19.9** |
+| 7–15 d | 31 888 | 432 | 0.116 / 22.0 | **0.206 / 26.2** | 0.206 / 26.2 |
+
+**Negative recall goes 0.163 → 0.407, and at 2–4 days 0.282 → 0.678.** The cost is
+real and must be quoted with it: precision 0.821 → 0.453, RMSE +16 %, MAE +12 %.
+Roughly, the forecast moves from "rarely says negative but is usually right when it
+does" to "says negative twice as often and is right about half the time".
+
+Why this works where features and weighting did not: quantile mapping matches the
+whole predicted **distribution** to the observed one, so it restores dispersion by
+construction. It does not need the model to learn anything new — it is applied
+after the fact to output the model already produces.
+
+## The affine proposal is now actively harmful and should be withdrawn
+
+The 2026-08-16 entry measured affine recalibration at −5.0 % RMSE and kept it as a
+fallback. On the **widened-window** model it is the worst option tested for
+plunges: negative recall collapses 0.163 → **0.008**, and sub-zero predictions fall
+from 190 to **8**.
+
+The reason is clear in hindsight. Affine was fitted against a model that was badly
+under-dispersed (slope 1.377), so it stretched. The widened-window model is already
+near-calibrated in the mean (slope 0.919, sd ratio 0.921), so the same least-squares
+fit now *shrinks* — sd ratio 0.921 → 0.829 — and shrinking is precisely wrong for
+tails. **Affine recalibration should be struck from the fallback list**, not merely
+deprioritised: it optimises the mean, and the mean is not the problem.
+
+## Route 1: tracking plunges over a longer period — blocked, and fixable
+
+This is the better idea in principle, and it is blocked by a data gap rather than by
+method:
+
+- `PriceHistory` holds **55 486 rows back to 2023-06-29** — three years of settled
+  prices, on both dev and prod.
+- The `History` table, which holds the matching generation/weather features
+  (`total_wind`, `bm_wind`, `solar`, `demand`, `temp_2m`, …), is **empty — 0 rows on
+  both boxes**.
+- `ForecastData` — the only place features and prices currently meet — spans about
+  two months.
+
+So we have three years of *what happened* and two months of *why*. Every scarcity
+problem in this document traces to that: ~1 300 negative slots concentrated in 7 of
+13 folds, calibration slices with zero negatives, and a summer-only window.
+
+**`config/utils.py` already contains `get_historic_data()`**, which builds exactly
+that frame from the upstream APIs. Backfilling `History` for 2023→now is therefore
+an engineering task, not a research one, and it would supply:
+
+* a plunge/high climatology across three years and all four seasons;
+* enough negatives to calibrate the classifier probabilities honestly, which is
+  what the previous entry found impossible on one summer;
+* a fitting set for the quantile map spanning regimes, rather than the trailing
+  fortnight it uses now.
+
+I have not attempted the backfill. It needs its own check on API history limits and
+on whether historic values are reconstructible at the right vintage — the causal-
+safety question that governs every feature in this document.
+
+## Illustrative only: 2026-08-31
+
+Applying the hybrid map to the live forecast for the slot that started this
+(not evidence — the day has not settled):
+
+```text
+11:30Z  raw 43.12  ->  26.94
+12:00Z  raw 43.89  ->  28.74
+13:30Z  raw 41.47  ->  23.48
+```
+
+The correction pushes midday down about £15 but not below zero. Consistent with the
+inputs having weakened since the question was asked (surplus more than halved across
+three runs), and with the correction being distributional rather than clairvoyant.
+
+## Position
+
+1. **Quantile mapping, horizon-hybrid, is the strongest plunge intervention measured
+   anywhere in this document** — negative recall 0.163 → 0.407 overall and 0.282 →
+   0.678 at 2–4 days. It is a genuine product trade-off (precision and RMSE both
+   worsen) and belongs in front of the owner as one, alongside the weight-exponent
+   grid.
+2. **Withdraw affine recalibration.** It is not a neutral fallback any more; on the
+   fixed model it suppresses plunges almost completely.
+3. **Backfill `History` from `get_historic_data()`.** It is the common blocker
+   behind the classifier calibration, the trial's event budget and the fitting set
+   for this correction. It is the highest-value next task and it needs no new
+   modelling.
+4. Nothing here is tested in the live pipeline, and all of it is summer data.
