@@ -2773,3 +2773,104 @@ Paired folds, production-faithful harness, on the widened window:
 
 Not run yet. Recording the observation and the AUC evidence now so the next round
 starts from measurement rather than from theory.
+
+---
+
+# Claude — the surplus feature fails; AUC was the wrong instrument
+
+Appended 2026-08-27. Result of the test proposed in the entry above. It does not
+support the proposal, and the reason I gave for expecting it to work was wrong.
+
+## Setup
+
+Production-faithful: one training run per day, production `days_ago` handling
+(varying in training, 0 at inference), widened training window
+(`TRAIN_HORIZON_DAYS = 14`), production sample weights `max(1, |z|)`, evaluated at
+**≥2 d**. 13 rolling splits, 21-day train / 3-day test, 67 726 test rows,
+**1 307 negative slots**, 7 of 13 folds containing any negatives.
+
+Detection is reported pooled at **row level across identical folds** — every
+configuration sees exactly the same rows and the same actual vector, so this is a
+paired comparison, not the pooled-mean-across-different-fold-grids mistake the
+noise-floor entry warns about.
+
+`surplus = solar + bm_wind + emb_wind − demand`.
+
+## Result
+
+| set | neg recall | neg prec | neg F1 | cheap F1 | exp F1 | RMSE | sd ratio |
+|---|---|---|---|---|---|---|---|
+| **baseline `_BASE`** | **0.270** | 0.561 | **0.365** | 0.669 | 0.582 | 20.64 | 0.941 |
+| + `surplus` | 0.238 | 0.566 | 0.335 | **0.688** | 0.582 | **20.58** | 0.940 |
+| + `surplus` + `bm_wind` | 0.230 | 0.558 | 0.326 | 0.682 | 0.582 | 20.73 | 0.939 |
+| + `bm_wind` | 0.247 | 0.547 | 0.340 | 0.680 | 0.581 | 20.66 | 0.938 |
+
+Paired fold-win counts against baseline, on the 7 folds that contain negatives:
+
+```text
++surplus            neg recall 0/7    neg F1 1/7
++surplus +bm_wind   neg recall 2/7    neg F1 2/7
++bm_wind            neg recall 2/7    neg F1 2/7
+```
+
+**Every variant is worse than the baseline on negative-price detection**, on both
+the pooled row-level metric and the fold-win count. Aggregate error is unchanged
+to two decimal places. The only positive is a small cheap-band gain for `+surplus`
+(F1 0.669 → 0.688), which is not what the feature was proposed for.
+
+**The proposal is refuted.** I would not add `surplus`.
+
+## Why I was wrong, which is the useful part
+
+The entry above justified the test with an AUC table: `surplus` ranked
+negative-price slots at **0.976** against 0.936 for the best raw input. That number
+is correct and it did not predict anything.
+
+AUC measures whether a variable, **on its own**, ranks negatives above
+non-negatives. It says nothing about *incremental* value to a model that already
+holds the components. `surplus` is a linear combination of `solar`, `emb_wind`,
+`demand` and `bm_wind` — three of which are already in `_BASE`. A gradient-boosted
+ensemble with several hundred trees can approximate that combination, so handing it
+over pre-computed adds no information and costs a split dimension.
+
+The general lesson, which is worth more than the experiment: **univariate
+separation statistics are not evidence for feature addition.** They select for
+variables that are individually informative, which is precisely what an ensemble
+already extracts. The only honest test of a feature is the paired-fold one, and it
+should have been run before the AUC table was written up as motivating evidence.
+
+## And the residual-load precedent did carry over after all
+
+The previous entry argued that the rejected `residual_load` failed because it
+omitted transmission wind, and that including `bm_wind` would rescue the idea. It
+does not: `+surplus +bm_wind` is the *worst* variant tested on negative recall
+(0.230). The original 2026-07-01 conclusion — that difference-of-inputs features do
+not help this model — now has a third independent confirmation, under the corrected
+widened window and with transmission wind included. It should be treated as settled
+rather than re-litigated a fourth time.
+
+`bm_wind` as a raw column is also worse than baseline again (recall 0.247 vs 0.270,
+2/7 folds). Its July demotion stands.
+
+## What this leaves
+
+The baseline on the widened window reaches **negative recall 0.270 at ≥2 d**, against
+production's measured **0.000**. The window fix is doing its job; feature work is not
+the lever.
+
+The 2026-08-31 slot analysis separated two gaps. This experiment shows the first
+(under-prediction) will not close via features. The second — that the conditional
+mean at those conditions is **+1.21** while the median is **−12.95** — is untouched by
+anything tested in this document, because it is a property of the *objective*, not
+of the fit. A mean regressor is answering a different question from the one a user
+asks when they want to know whether power will be free.
+
+So the remaining candidates are the two named in the previous entry, and they are
+now the only ones standing:
+
+1. **A quantile head** (P30 or median) alongside the mean.
+2. **An explicit negative-price classifier** — `plunge_probability` and
+   `day_ahead_classified` already exist in the schema, NULL on every row.
+
+Neither is tested. Both change what is predicted rather than how well, which is
+why nothing in the feature or weighting families has been able to reach them.
