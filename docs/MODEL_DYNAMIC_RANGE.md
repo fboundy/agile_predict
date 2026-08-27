@@ -3352,3 +3352,102 @@ uses actuals rather than the forecasts the model sees.
   actuals need not hold on 4-day-ahead NWP output.
 - Not wired into any model path. `History` remains unread by the pipeline.
 - **Dev only, deliberately.** Not on `main`, not deployed.
+
+---
+
+# Claude — what the historic data is actually for: the input is compressed, not just the output
+
+Appended 2026-08-27. Before proposing uses for the backfill, the governing risk had
+to be measured: `History` holds **actuals**, the model consumes **forecasts**. On the
+overlap (69 964 rows, 2026-06-28 → 08-06) they can be compared directly for the
+first time. The answer reframes the whole defect.
+
+## Forecast inputs versus actuals, by horizon
+
+`r` / `sd(forecast)/sd(actual)`:
+
+| horizon | solar | bm_wind | emb_wind | demand |
+|---|---|---|---|---|
+| 0–2 d | 0.978 / 0.990 | 0.937 / 1.105 | 0.985 / 0.957 | 0.904 / 0.971 |
+| 2–4 d | 0.972 / 0.982 | 0.876 / 0.837 | 0.906 / 0.726 | 0.896 / 0.917 |
+| 4–7 d | 0.974 / 0.901 | 0.683 / 0.626 | 0.760 / 0.565 | 0.866 / 0.889 |
+| **7–15 d** | 0.967 / 0.828 | **0.290 / 0.371** | **0.380 / 0.329** | 0.865 / 0.877 |
+
+**Solar and demand are forecastable to a fortnight. Wind is not.** Beyond a week the
+transmission-wind forecast correlates 0.290 with what happens and carries 37 % of its
+variance. That is very nearly no information.
+
+Agreement on the wind band that separates negative prices (<8 GW / 8–12 GW / >12 GW):
+84.6 % at 0–2 d, 79.9 % at 2–4 d, 73.5 % at 4–7 d, 68.1 % at 7–15 d.
+
+## The rule transfers superbly — and then cannot fire
+
+Taking the climatology rule from the backfill (midday, solar ≥ 8 000, demand ≤ 17 000,
+total wind > 12 000 → 84 % negative on three years of actuals) and applying it to the
+model's **forecast** inputs:
+
+| horizon | times the rule fires | actually negative |
+|---|---|---|
+| 0–2 d | 153 | **95.4 %** |
+| 2–4 d | 73 | **94.5 %** |
+| 4–7 d | 10 | 100.0 % |
+| **7–15 d** | **0** | — |
+
+When the rule fires it is *more* precise on forecast inputs than the 84 % it scores on
+actuals. It simply stops firing: at 7–15 days the compressed wind forecast never
+reaches 12 GW, so no condition can trigger it.
+
+## This is the mechanism, and it is upstream of the price model
+
+The investigation has been treating under-predicted plunges as a property of the price
+model — first the training window, then features, weighting, the classifier, output
+recalibration. The measurement above says the dominant cause at long horizon is that
+**the wind input itself is compressed**. The price model is faithfully mapping blunt
+inputs to blunt outputs; sd(pred)/sd(actual) ≈ 0.37 going in largely explains
+sd(pred)/sd(actual) < 1 coming out.
+
+It also explains why the training-window fix helped but did not finish the job. That
+removed a train/serve *mismatch*. It could not remove the fact that the serving inputs
+carry less information than the training ones.
+
+## Consequence: the achievable target differs by horizon
+
+- **0–7 days.** Wind is genuinely forecastable (r 0.68–0.94). Plunge detection here is
+  achievable and already precise when conditions are met. This is where effort pays.
+- **7–15 days.** Wind is r = 0.29. **No model change and no recalibration can create
+  skill that the input does not contain.** Output quantile mapping (previous entry)
+  raised 7–15 d negative recall from 0.116 to 0.206, and that is close to the ceiling
+  — it is adding dispersion, not information, which is why its precision fell.
+
+The honest product answer beyond a week is a **climatological probability**, not a
+sharper point forecast. The backfill now supports exactly that, across three years and
+four seasons.
+
+## Proposed uses, in order
+
+1. **Quantile-map the wind input per horizon band**, using the three-year actual wind
+   distribution from `History` as the target. This attacks the cause rather than the
+   symptom, leaves the price model untouched, and is causal-safe (the mapping uses only
+   historical distributions). Expect it to restore dispersion at 2–7 days. Be explicit
+   about the trade: restoring variance without adding correlation *reduces* pointwise
+   accuracy — it buys tail behaviour with RMSE, the same bargain as everywhere else
+   here, but made at the input where it is cheaper.
+2. **Calibrate the plunge classifier** on the 629 non-summer negatives. The blocker
+   identified two entries ago was regime coverage; it no longer applies.
+3. **Publish a horizon-aware climatology beyond 7 days** — P(negative | month,
+   time-of-day, solar, demand) from three years of actuals, shown as a risk band rather
+   than a price. This is the only defensible long-horizon plunge statement.
+4. **Do not** spend further effort making the 7–15 d point forecast call plunges. The
+   input does not support it, and every intervention tried so far has been fighting
+   that.
+
+## Caveats
+
+- One overlap window, 2026-06-28 → 08-06, six weeks of summer. The wind-skill decay
+  curve is plausible and matches NWP behaviour generally, but it is measured on six
+  weeks.
+- `History` wind is actual generation; the forecast columns are NESO's day-ahead and
+  embedded forecasts. Comparing them is the right comparison for this purpose, but they
+  are not the same quantity, and some of the 0–2 d `bm_wind` sd ratio above 1 (1.105)
+  is likely definitional rather than genuine over-dispersion.
+- Nothing here is implemented.
