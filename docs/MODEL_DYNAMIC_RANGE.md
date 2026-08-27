@@ -3451,3 +3451,117 @@ four seasons.
   are not the same quantity, and some of the 0–2 d `bm_wind` sd ratio above 1 (1.105)
   is likely definitional rather than genuine over-dispersion.
 - Nothing here is implemented.
+
+---
+
+# Claude — how the four proposals relate, and #3 built: a long-horizon plunge climatology
+
+Appended 2026-08-27. The owner asked whether the four proposed uses of the backfill
+were alternatives. They are not, and the previous entry's numbered list invited that
+reading. Clarified here, then #3 is built and measured.
+
+## The four are not a menu
+
+- **#4 ("stop trying to make the 7–15 d point forecast call plunges") is not a work
+  item.** It is the conclusion that scopes the others — the reason long horizon gets
+  a probability instead of more modelling.
+- **#1 and #3 partition by horizon** and do not compete: #1 (input quantile mapping)
+  targets 0–7 d, where wind is forecastable; #3 (climatology) targets 7–15 d, where
+  it is not.
+- **#2 (classifier calibration) cuts across both.** It is a different *kind* of
+  output — a probability rather than a price — and can serve the short-horizon flag
+  and the long-horizon band alike.
+
+**The one genuine either/or is not in that list.** It is #1 versus the *output*
+quantile mapping measured two entries above (negative recall 0.163 → 0.407). Both
+restore dispersion, at opposite ends of the chain, and applying both naively would
+double-count: the output mapping is fitted against a model fed compressed inputs, so
+correcting the inputs invalidates it. Pick a correction point, or fix the input and
+refit the output map on top.
+
+Dependency: #1 changes the model's inputs, so #2 must be fitted after #1 lands. #3
+is independent of both — it touches no pipeline code.
+
+## #3, built
+
+Design follows directly from the transferability measurement. At ≥7 days the
+forecast carries solar (r 0.967) and demand (r 0.865) well and wind not at all
+(r 0.290), so the climatology conditions on **solar, demand and calendar** and
+deliberately **marginalises over wind**. The statement it makes is: *given this much
+sun and this little demand, at this time of year, prices settled negative X % of the
+time* — which is exactly what is knowable a fortnight out.
+
+Fitted on `History` actuals **strictly before 2026-06-28** (43 000-odd rows, three
+years), then scored on the model's own **≥7 d forecast inputs** for slots that later
+settled: 58 010 rows, 1 285 negative, base rate 2.22 %.
+
+### Ranking
+
+| scorer | PR-AUC | ROC-AUC |
+|---|---|---|
+| the model's own point forecast (−price) | 0.149 | 0.877 |
+| **climatology, logistic** | **0.201** | 0.916 |
+| climatology, LightGBM | 0.180 | 0.925 |
+
+The comparison is more lopsided than the table suggests: **at ≥7 d the point forecast
+flags zero slots.** Its recall is 0.000. Anything with signal beats it.
+
+### Probabilities
+
+| | Brier (lower better) |
+|---|---|
+| constant base rate | 0.02166 |
+| **climatology, logistic** | **0.01886** |
+| climatology, LightGBM | 0.01953 |
+
+Reliability, out of sample on forecast inputs:
+
+| predicted | n | mean predicted | observed |
+|---|---|---|---|
+| 0–1 % | 33 689 | 0.003 | 0.002 |
+| 1–3 % | 15 521 | 0.018 | 0.014 |
+| 3–7 % | 3 772 | 0.046 | 0.018 |
+| 7–15 % | 3 329 | 0.108 | 0.146 |
+| 15–30 % | 1 699 | 0.184 | **0.274** |
+
+Broadly honest, over-stating slightly in the 3–7 % bin and **under**-stating at the
+top — the safer direction for a warning. This is the first probability in this
+document that beats a constant base rate.
+
+An error of mine on the way, worth recording because it is the third time this
+family of mistake has appeared here: the first fit used
+`class_weight="balanced"`, which for a 2 % base rate inflates outputs enormously —
+Brier 0.175, predicting 60 % where reality was 4.8 %. Ranking was unaffected
+(PR-AUC 0.201 either way); only the numbers were nonsense. Class weighting is for
+ranking, never for probabilities.
+
+### As a product surface
+
+Cutting the score at its 90th and 98th percentiles:
+
+| band | slots | observed negative | share of all negatives captured |
+|---|---|---|---|
+| low | 52 209 | 0.6 % | 24.4 % |
+| **elevated** | 4 640 | **13.9 %** | 50.2 % |
+| **high** | 1 161 | **28.2 %** | 25.4 % |
+
+**10 % of slots carry 76 % of the negatives.** "Roughly a 1-in-4 chance" is a modest
+claim, but it is a true one, and it is available a fortnight ahead where the point
+forecast currently says nothing at all.
+
+### Physics check
+
+Standardised logistic coefficients: `demand −4.14`, `solar +1.86`,
+`solar/demand −1.55`, `doy_cos +0.98`, `weekend +0.18`. Low demand dominates, high
+solar next, with a seasonal term and a weekend effect. The signs are all correct and
+the ordering matches the climatology measured directly from `History`.
+
+## Limitations
+
+- The fit spans three years but the **evaluation window is six weeks of summer**
+  (2026-06-28 →), so the out-of-sample test is seasonally narrow even though the
+  training data is not.
+- Calibration is imperfect in the middle bins; the 3–7 % band over-states by ~2.5×.
+- Solar and demand at ≥7 d come from the forecast, and the whole design rests on
+  their skill holding (r 0.967 / 0.865) — measured on the same six weeks.
+- Not implemented in the pipeline. This is an offline evaluation.
