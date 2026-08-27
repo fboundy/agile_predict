@@ -2874,3 +2874,152 @@ now the only ones standing:
 
 Neither is tested. Both change what is predicted rather than how well, which is
 why nothing in the feature or weighting families has been able to reach them.
+
+---
+
+# Claude — the plunge classifier: a real ranker, uncalibrated probabilities, and an old question answered
+
+Appended 2026-08-27, at the owner's request to re-visit the classifier.
+
+## It was never rejected — it was dropped in a refactor
+
+`plunge_probability` and `day_ahead_classified` were added in **`9ac9b15`
+(2026-05-05, "Classified forecasts")**. The design was a mixture of experts:
+
+* an XGBoost binary classifier on `day_ahead <= 34.1893`, with
+  `scale_pos_weight = normal/plunge * 2`;
+* separate "plunge" and "normal" regressors fitted to the two subsets;
+* blended output `p * plunge_pred + (1 - p) * normal_pred`.
+
+It was removed in **`e4b582c` (2026-06-21, "Claud updates to model")**, the commit
+that replaced XGBoost with the CatBoost/LightGBM/ExtraTrees ensemble. That commit
+carries no rationale and removed 236 lines wholesale. **There is no record of the
+classifier being evaluated and found wanting; it appears to have been collateral of
+the base-learner change.** Confirmed: 0 of 147 394 stored rows have ever had these
+columns populated.
+
+## Harness
+
+As the surplus test: production-faithful, widened window, `_BASE` features,
+production sample weights, ≥2 d evaluation, 13 rolling folds, 67 726 test rows,
+**1 307 negative slots**, detection pooled at row level across identical folds.
+Operating points chosen on **training data only**.
+
+## A. As a detector it genuinely beats the regressor
+
+Threshold-free, so this cannot be an artefact of tuning a cut:
+
+| target | scorer | PR-AUC | ROC-AUC |
+|---|---|---|---|
+| **negative** (base rate 0.019) | ensemble regression (−pred) | 0.426 | 0.968 |
+| | **dedicated classifier** | **0.521** | 0.955 |
+| cheap (base rate 0.041) | ensemble regression (−pred) | 0.676 | 0.972 |
+| | dedicated classifier | 0.682 | 0.967 |
+
+At a training-chosen operating point:
+
+| target | model | recall | precision | F1 |
+|---|---|---|---|---|
+| negative | ensemble regression | 0.270 | 0.561 | 0.365 |
+| negative | **classifier** | **0.772** | 0.446 | **0.565** |
+| cheap | ensemble regression | 0.713 | 0.630 | 0.669 |
+| cheap | classifier | 0.880 | 0.548 | 0.675 |
+
+**+22 % PR-AUC on negatives**, and the advantage is specific to the rare band —
+on the cheap band (4.1 % base rate) it is a tie. That is the scarcity mechanism the
+owner identified long ago, showing up cleanly: a dedicated, class-weighted
+objective spends capacity on the rare class that MSE regression will not.
+
+## B. The mixture helps, but most of the gain is the base learner
+
+The first run of this test compared a 3-model ensemble against a 2×LightGBM
+mixture, which confounds the mixture with the base learner. Adding the missing
+control changes the reading:
+
+| model | RMSE | MAE | sd ratio | neg recall | neg F1 | preds < 0 |
+|---|---|---|---|---|---|---|
+| ensemble (incumbent, 3 models) | **20.64** | **13.45** | 0.941 | 0.270 | 0.365 | 629 |
+| single LGBM (control) | 21.40 | 13.81 | 0.961 | 0.451 | 0.493 | 1 087 |
+| mixture (2 LGBM + classifier) | 21.47 | 13.52 | **0.981** | **0.533** | **0.526** | 1 345 |
+
+Decomposed: 3-model ensemble → single LGBM buys **+0.181** negative recall for
+0.76 RMSE. Single LGBM → mixture buys a further **+0.082** for 0.07 RMSE. The
+mixture is real but it is the smaller half, and the honest headline is elsewhere.
+
+## The old question, finally answered: ensemble averaging suppresses the tails
+
+The first entry in this document asked whether averaging three models causes the
+compression, and could not test it because `day_ahead_extra_trees` is NULL for
+every row. The control above answers it from a different direction:
+
+```text
+sub-zero predictions:  3-model average 629   single LGBM 1 087   mixture 1 345
+minimum prediction:    3-model −21.84        single −29.66       mixture −31.01
+```
+
+**Averaging costs 40 % of the model's sub-zero predictions.** This is the expected
+behaviour of averaging — the mean of three estimates is less extreme than the most
+extreme of them — but it had not been measured here, and it is a larger effect on
+negative detection than anything in the feature or weighting families. It also
+costs nothing to test further, which the exponent and feature work did not.
+
+## The caveat that stops this shipping as-is
+
+The classifier's **probabilities are not usable as probabilities**. On training
+data:
+
+```text
+true negatives    : median P = 1.0000   (p10 0.9998)
+true non-negatives: median P = 0.000000
+```
+
+That is memorisation — 400 unregularised trees on 29 460 rows separating a 2.6 %
+class perfectly. The out-of-fold *ranking* survives this (PR-AUC 0.521 is honest),
+but the numbers themselves are near-0/near-1 and mean nothing. It is why the
+training-chosen operating point collapsed to the grid floor (0.01) in both runs.
+
+**So "76 % likely negative" cannot be shown to a user from this model.** Surfacing
+`plunge_probability` requires regularisation and explicit calibration (isotonic or
+Platt on held-out folds), neither of which is done here.
+
+## And it does not flag 2026-08-31
+
+The slot that prompted this line of work. Trained on all available data and scored
+on the live forecast:
+
+```text
+2026-08-31 09:00Z-15:00Z, from run 2026-08-27 10:16Z (~4.1 d ahead)
+P(negative) min 0.000000  max 0.000001
+```
+
+For context, the same model scores stored rows at ~4 d that *did* settle negative
+at a median P of only 0.0001. So at four days out the classifier barely separates
+anything in absolute terms — its skill is ordinal, not absolute — and 31 August
+sits below even that.
+
+Part of this is that the case has genuinely weakened since the question was asked.
+Tracking the same slot across runs:
+
+| run | bm_wind | demand | surplus | predicted |
+|---|---|---|---|---|
+| 2026-08-26 21:15Z | 11 540 | 15 215 | 9 071 | 32.45 |
+| 2026-08-27 03:15Z | 9 613 | 15 215 | 6 110 | 46.12 |
+| 2026-08-27 10:16Z | 9 240 | 16 663 | 4 186 | 58.88 |
+
+The wind forecast has fallen 2.3 GW and demand risen 1.4 GW in a day; the surplus
+has more than halved. The negative-price case for 31 August is materially weaker
+now than when it was raised, and the forecast rising from £32 to £59 is partly the
+model correctly following its inputs rather than failing to.
+
+## Position
+
+1. **The classifier deserves reinstatement as a ranker**, not as a probability. It
+   is the best negative-price detector measured in this document, and it was
+   removed without evaluation.
+2. **Before it can be surfaced it needs regularisation and calibration.** Untested.
+3. **The ensemble-averaging finding is the cheaper and possibly larger lever** and
+   should be quantified properly next: averaging is costing 40 % of sub-zero
+   predictions, and dropping or re-weighting a member is a smaller change than
+   adding a model.
+4. Limitations unchanged and real: 7 of 13 folds contain any negatives, summer
+   only, and none of this is tested in the live pipeline.
