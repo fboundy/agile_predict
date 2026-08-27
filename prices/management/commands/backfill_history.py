@@ -37,6 +37,7 @@ import requests
 from django.core.management.base import BaseCommand
 
 from config.utils import get_gas_ttf_history
+from prices.environment import require_non_production
 from prices.models import History
 
 SQL_URL = "https://api.neso.energy/api/3/action/datastore_search_sql"
@@ -91,6 +92,10 @@ class Command(BaseCommand):
                             help="fetch and report coverage without writing")
 
     def handle(self, *args, **options):
+        # Before any network call: nothing is downloaded on production, let alone
+        # stored. --dry-run is blocked too, since it still performs the fetch.
+        require_non_production("Backfilling History")
+
         start = pd.Timestamp(options["start"], tz="UTC")
         end = (pd.Timestamp(options["end"], tz="UTC") if options["end"]
                else pd.Timestamp.now(tz="UTC"))
