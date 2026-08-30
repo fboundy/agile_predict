@@ -33,7 +33,7 @@ from prices.forms import ForecastForm
 from prices.management.commands.update import Command as UpdateCommand
 from prices.management.commands.update import EXTRA_TREES_REGRESSOR_PARAMS, fit_day_ahead_ensemble, predict_day_ahead_ensemble
 from prices.management.commands.update_worker import maybe_enqueue_catchup
-from prices.models import AgileData, ExternalForecast, ForecastData, Forecasts, PriceHistory, UpdateJob
+from prices.models import AgileData, DayAheadCalibration, ExternalForecast, ForecastData, Forecasts, PriceHistory, UpdateJob
 from prices.views import GraphFormView, _update_options
 
 
@@ -1269,3 +1269,215 @@ class DockerignoreGuardTests(TestCase):
             if entry.endswith("backfill_history.py") and not target.exists():
                 continue  # dev-only command; absent on main, where the entry is still wanted
             self.assertTrue(target.exists(), f"{entry} is listed but does not exist")
+
+
+class DayAheadCorrectionTests(TestCase):
+    """The post-processed day-ahead: bivariate fit on (prediction, surplus) with the
+    spread restored. See prices/postprocess.py and docs/MODEL_DYNAMIC_RANGE.md."""
+
+    def _pairs(self, n=1200, seed=0):
+        """Synthetic stored forecasts whose actuals depend on surplus, and whose
+        predictions are deliberately under-dispersed — the defect being corrected."""
+        import numpy as np
+
+        rng = np.random.default_rng(seed)
+        idx = pd.date_range("2026-06-01", periods=n, freq="30min", tz="UTC")
+        surplus_mw = rng.normal(6000, 6000, n)
+        actual = 100 + 0.9 * (surplus_mw / 1000.0) * 8 + rng.normal(0, 8, n)
+        pred = actual.mean() + 0.6 * (actual - actual.mean()) + rng.normal(0, 5, n)
+        stored = pd.DataFrame({
+            "date_time": idx,
+            "created_at": idx - pd.Timedelta(hours=30),   # inside the D-1 fit window
+            "day_ahead": pred,
+            "demand": 25000.0 + surplus_mw,
+            "bm_wind": np.full(n, 8000.0),
+            "emb_wind": np.full(n, 2000.0),
+            "solar": np.full(n, 5000.0),
+            "nuclear": np.full(n, 5000.0),
+        })
+        actuals = pd.DataFrame({"day_ahead": actual}, index=idx)
+        return stored, actuals
+
+    def test_surplus_matches_the_documented_formula(self):
+        from prices.postprocess import surplus_gw
+
+        df = pd.DataFrame({"demand": [30000.0], "bm_wind": [8000.0], "emb_wind": [2000.0],
+                           "solar": [5000.0], "nuclear": [5000.0]})
+        self.assertAlmostEqual(float(surplus_gw(df).iloc[0]), 10.0)
+
+    def test_missing_nuclear_is_treated_as_zero(self):
+        from prices.postprocess import surplus_gw
+
+        df = pd.DataFrame({"demand": [30000.0], "bm_wind": [8000.0], "emb_wind": [2000.0],
+                           "solar": [5000.0], "nuclear": [None]})
+        self.assertAlmostEqual(float(surplus_gw(df).iloc[0]), 15.0)
+
+    def test_correction_restores_the_missing_spread(self):
+        import numpy as np
+
+        from prices.postprocess import fit_correction, surplus_gw
+
+        stored, actuals = self._pairs()
+        corr = fit_correction(stored, actuals)
+        self.assertIsNotNone(corr)
+        out = corr(stored["day_ahead"].to_numpy(float), surplus_gw(stored).to_numpy(float))
+        actual = actuals["day_ahead"].to_numpy(float)
+        before = stored["day_ahead"].std() / actual.std()
+        after = out.std() / actual.std()
+        self.assertLess(before, 0.8, "fixture should start under-dispersed")
+        self.assertGreater(after, 0.9, "correction should restore the spread")
+        self.assertLess(abs(after - 1.0), abs(before - 1.0))
+
+    def test_correction_reduces_error_on_this_fixture(self):
+        import numpy as np
+
+        from prices.postprocess import fit_correction, surplus_gw
+
+        stored, actuals = self._pairs()
+        corr = fit_correction(stored, actuals)
+        actual = actuals["day_ahead"].to_numpy(float)
+        raw = stored["day_ahead"].to_numpy(float)
+        out = corr(raw, surplus_gw(stored).to_numpy(float))
+        self.assertLess(float(np.sqrt(np.mean((out - actual) ** 2))),
+                        float(np.sqrt(np.mean((raw - actual) ** 2))))
+
+    def test_returns_none_when_too_few_pairs(self):
+        from prices.postprocess import fit_correction
+
+        stored, actuals = self._pairs(n=50)
+        self.assertIsNone(fit_correction(stored, actuals))
+
+    def test_gb60_passthrough_rows_are_excluded_from_the_fit(self):
+        """Rows where the stored prediction equals the settled price are Nord Pool
+        pass-through, not model output, and must not train the correction."""
+        from prices.postprocess import fit_correction
+
+        stored, actuals = self._pairs()
+        stored = stored.copy()
+        stored["day_ahead"] = actuals["day_ahead"].to_numpy()   # all identical
+        self.assertIsNone(fit_correction(stored, actuals))
+
+    def test_rows_outside_the_d1_window_are_excluded(self):
+        from prices.postprocess import fit_correction
+
+        stored, actuals = self._pairs()
+        stored = stored.copy()
+        stored["created_at"] = stored["date_time"] - pd.Timedelta(days=9)
+        self.assertIsNone(fit_correction(stored, actuals))
+
+    def test_output_is_clipped_to_a_sane_range(self):
+        import numpy as np
+
+        from prices.postprocess import fit_correction
+
+        stored, actuals = self._pairs()
+        corr = fit_correction(stored, actuals)
+        wild = corr(np.array([-5000.0, 5000.0]), np.array([-500.0, 500.0]))
+        self.assertTrue(np.all(wild >= corr.lo) and np.all(wild <= corr.hi))
+
+    def test_forecastdata_has_the_column(self):
+        self.assertTrue(hasattr(ForecastData(), "day_ahead_corrected"))
+
+
+class CalibrationTableTests(TestCase):
+    """The calibration table is the durable record the correction is fitted from.
+
+    It exists so a year of fit data costs ~17k rows rather than ~1M ForecastData rows
+    (and, through AgileData's per-region fan-out, several GB). Retention of the bulk
+    tables is therefore left alone.
+    """
+
+    def _stored(self, n=800, seed=1):
+        import numpy as np
+
+        rng = np.random.default_rng(seed)
+        idx = pd.date_range("2026-06-01", periods=n, freq="30min", tz="UTC")
+        sur_mw = rng.normal(6000, 6000, n)
+        actual = 100 + 7.0 * (sur_mw / 1000.0) + rng.normal(0, 8, n)
+        pred = actual.mean() + 0.6 * (actual - actual.mean()) + rng.normal(0, 5, n)
+        stored = pd.DataFrame({
+            "date_time": idx,
+            "created_at": idx - pd.Timedelta(hours=30),
+            "day_ahead": pred,
+            "demand": 25000.0 + sur_mw,
+            "bm_wind": np.full(n, 8000.0), "emb_wind": np.full(n, 2000.0),
+            "solar": np.full(n, 5000.0), "nuclear": np.full(n, 5000.0),
+        })
+        return stored, pd.DataFrame({"day_ahead": actual}, index=idx)
+
+    def test_harvest_records_one_row_per_slot(self):
+        from prices.postprocess import harvest_calibration
+
+        stored, actuals = self._stored()
+        written = harvest_calibration(stored, actuals)
+        self.assertEqual(written, len(stored))
+        self.assertEqual(DayAheadCalibration.objects.count(), len(stored))
+
+    def test_harvest_is_idempotent(self):
+        from prices.postprocess import harvest_calibration
+
+        stored, actuals = self._stored()
+        harvest_calibration(stored, actuals)
+        again = harvest_calibration(stored, actuals)
+        self.assertEqual(again, 0)
+        self.assertEqual(DayAheadCalibration.objects.count(), len(stored))
+
+    def test_harvest_keeps_the_freshest_qualifying_run(self):
+        """Two runs cover the same slot; the fresher one still >=24h out is kept.
+
+        Note 24-48h is a horizon band, not the 16:15 auction vintage: for a midday
+        slot the 16:15 run on D-1 is only ~21h ahead and falls outside it entirely.
+        """
+        from prices.postprocess import harvest_calibration
+
+        slot = pd.Timestamp("2026-06-02 12:00", tz="UTC")
+        rows = pd.DataFrame({
+            "date_time": [slot, slot],
+            # 16:15 GB on the previous day, versus 04:15 GB
+            # 26h ahead (kept) versus 44h ahead — both inside the 24-48h band
+            "created_at": [pd.Timestamp("2026-06-01 10:00", tz="UTC"),
+                           pd.Timestamp("2026-05-31 16:00", tz="UTC")],
+            "day_ahead": [111.0, 222.0],
+            "demand": [25000.0, 25000.0], "bm_wind": [8000.0, 8000.0],
+            "emb_wind": [2000.0, 2000.0], "solar": [5000.0, 5000.0],
+            "nuclear": [5000.0, 5000.0],
+        })
+        actuals = pd.DataFrame({"day_ahead": [100.0]}, index=[slot])
+        harvest_calibration(rows, actuals)
+        self.assertEqual(DayAheadCalibration.objects.count(), 1)
+        self.assertAlmostEqual(DayAheadCalibration.objects.get().predicted, 111.0)
+
+    def test_harvest_skips_gb60_passthrough(self):
+        from prices.postprocess import harvest_calibration
+
+        stored, actuals = self._stored()
+        stored = stored.copy()
+        stored["day_ahead"] = actuals["day_ahead"].to_numpy()
+        self.assertEqual(harvest_calibration(stored, actuals), 0)
+
+    def test_fit_from_table_needs_enough_rows(self):
+        from prices.postprocess import fit_from_calibration, harvest_calibration
+
+        stored, actuals = self._stored(n=100)
+        harvest_calibration(stored, actuals)
+        self.assertIsNone(fit_from_calibration())
+
+    def test_fit_from_table_restores_spread(self):
+        import numpy as np
+
+        from prices.postprocess import fit_from_calibration, harvest_calibration
+
+        stored, actuals = self._stored()
+        harvest_calibration(stored, actuals)
+        corr = fit_from_calibration()
+        self.assertIsNotNone(corr)
+        rows = pd.DataFrame(list(DayAheadCalibration.objects.values()))
+        out = corr(rows["predicted"].to_numpy(float), rows["surplus"].to_numpy(float))
+        a = rows["actual"].to_numpy(float)
+        self.assertLess(rows["predicted"].std() / a.std(), 0.8)
+        self.assertGreater(out.std() / a.std(), 0.9)
+
+    def test_a_year_of_pairs_is_a_small_table(self):
+        """Sanity on the premise: ~48 slots a day, so a year is tens of thousands of
+        rows, not the ~1M ForecastData rows retaining the bulk data would need."""
+        self.assertLess(48 * 366, 20000)

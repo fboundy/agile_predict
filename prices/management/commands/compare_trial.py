@@ -31,16 +31,16 @@ from prices.models import ForecastData, PriceHistory
 from prices.model_metrics import format_report, stored_forecast_report
 
 
-def _load(since=None, until=None):
-    qs = ForecastData.objects.filter(day_ahead__isnull=False)
+def _load(since=None, until=None, column="day_ahead"):
+    qs = ForecastData.objects.filter(**{f"{column}__isnull": False})
     if since is not None:
         qs = qs.filter(forecast__created_at__gte=since)
     if until is not None:
         qs = qs.filter(forecast__created_at__lt=until)
-    stored = pd.DataFrame(list(qs.values("date_time", "day_ahead", "forecast__created_at")))
+    stored = pd.DataFrame(list(qs.values("date_time", column, "forecast__created_at")))
     if stored.empty:
         return stored
-    stored = stored.rename(columns={"forecast__created_at": "created_at"})
+    stored = stored.rename(columns={"forecast__created_at": "created_at", column: "day_ahead"})
     stored["date_time"] = pd.to_datetime(stored["date_time"], utc=True)
     stored["created_at"] = pd.to_datetime(stored["created_at"], utc=True)
     return stored
@@ -69,15 +69,22 @@ class Command(BaseCommand):
             help="Minimum forecast horizon in days (default 2; below that the pipeline blends GB60 actuals).",
         )
         parser.add_argument("--label", default="", help="Label for the output, e.g. 'prod'.")
+        parser.add_argument(
+            "--column", default="day_ahead",
+            choices=["day_ahead", "day_ahead_corrected"],
+            help="Which stored series to score. day_ahead_corrected is the "
+                 "post-processed forecast (see prices/postprocess.py).",
+        )
         parser.add_argument("--json", action="store_true", help="Emit JSON instead of a formatted report.")
 
     def handle(self, *args, **options):
         prices = _settled_prices()
         min_horizon = options["min_horizon"]
         label = options["label"]
+        column = options["column"]
 
         def report(since, until, name):
-            stored = _load(since, until)
+            stored = _load(since, until, column)
             if stored.empty:
                 self.stdout.write(f"{name}: no published forecasts in window")
                 return None
@@ -111,7 +118,7 @@ class Command(BaseCommand):
         for rep in results:
             suffix = f" {label}" if label else ""
             self.stdout.write("")
-            self.stdout.write(format_report(rep, f"[{rep['window']}{suffix}, >={min_horizon}d]"))
+            self.stdout.write(format_report(rep, f"[{rep['window']}{suffix}, >={min_horizon}d, {column}]"))
 
         if len(results) == 2:
             before, after = results

@@ -128,11 +128,51 @@ class History(models.Model):
     # intercon_capacity = models.FloatField()
 
 
+class DayAheadCalibration(models.Model):
+    """One settled D-1 forecast/actual pair, kept for fitting the post-processing
+    correction (prices/postprocess.py).
+
+    Why a separate table rather than retaining `ForecastData`: the fit needs only
+    three numbers per settlement slot, whereas keeping a year of forecasts would mean
+    ~1M ForecastData rows and, through AgileData's one-row-per-region fan-out, several
+    GB. This holds roughly 48 rows per day — about 17k a year — so a long history is
+    cheap, and `ForecastData`/`AgileData` retention is left alone.
+
+    One row per settlement slot, from the freshest run that is still at least 24 h
+    ahead. That band is where the correction was validated and it sits clear of the
+    GB60 blend, which reaches to about 36 h; GB60 pass-through slots, where the stored
+    prediction is the settled price rather than model output, are never harvested.
+
+    It is worth being precise that 24-48 h is a horizon band, not a publication
+    vintage: for a midday slot the 16:15 run on the preceding day is only about 21 h
+    ahead, so this band actually mixes the D-1 run for late slots with the D-2 run for
+    early ones.
+    """
+
+    date_time = models.DateTimeField(unique=True)
+    created_at = models.DateTimeField()
+    horizon_h = models.FloatField()
+    predicted = models.FloatField()
+    actual = models.FloatField()
+    surplus = models.FloatField()
+
+    class Meta:
+        indexes = [models.Index(fields=["date_time"])]
+
+    def __str__(self):
+        return f"{self.date_time:%Y-%m-%d %H:%M} pred={self.predicted:.1f} actual={self.actual:.1f}"
+
+
 class ForecastData(models.Model):
     forecast = models.ForeignKey(Forecasts, related_name="data", on_delete=models.CASCADE)
     date_time = models.DateTimeField()
     day_ahead = models.FloatField(null=True)
     day_ahead_classified = models.FloatField(null=True, blank=True)
+    # Post-processed day-ahead: the bivariate (prediction, surplus) correction
+    # with the spread restored. Stored alongside `day_ahead`, never instead of
+    # it, so the two can be scored against each other. See prices/postprocess.py
+    # and docs/MODEL_DYNAMIC_RANGE.md.
+    day_ahead_corrected = models.FloatField(null=True, blank=True)
     day_ahead_extra_trees = models.FloatField(null=True, blank=True)
     plunge_probability = models.FloatField(null=True, blank=True)
     bm_wind = models.FloatField()

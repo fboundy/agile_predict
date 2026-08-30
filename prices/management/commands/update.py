@@ -40,6 +40,7 @@ from ...forecast_features import (
 from ...model_metrics import forecast_report, format_report, stored_forecast_report
 from ...external_forecasts import refresh_external_forecasts
 from ...models import AgileData, ForecastData, Forecasts, History, PlotImage, PriceHistory, UpdateJob
+from ...postprocess import fit_from_calibration, harvest_calibration, surplus_gw
 
 from config.utils import *
 from config.settings import GLOBAL_SETTINGS
@@ -1139,6 +1140,33 @@ class Command(BaseCommand):
                         fc["day_ahead_extra_trees"] = np.nan
                         fc["plunge_probability"] = np.nan
 
+                        # Post-processed day-ahead. Computed here, from the RAW model
+                        # output, deliberately BEFORE the GB60 blend below: the
+                        # correction is fitted on model predictions, so applying it
+                        # after the blend would "correct" known Nord Pool prices. The
+                        # blend is then applied to this column too, so inside the GB60
+                        # window the two series agree and they diverge only where the
+                        # model is genuinely forecasting. See prices/postprocess.py.
+                        fc["day_ahead_corrected"] = np.nan
+                        try:
+                            # Harvest newly-settled D-1 pairs into the calibration
+                            # table first, then fit from it. The table is the durable
+                            # record: it holds three numbers per settlement slot, so a
+                            # long history costs little, and ForecastData retention is
+                            # left untouched.
+                            _fit_rows = fd.merge(
+                                ff[["created_at"]], left_on="forecast_id", right_index=True
+                            )
+                            harvest_calibration(_fit_rows, prices)
+                            _correction = fit_from_calibration()
+                            if _correction is not None:
+                                fc["day_ahead_corrected"] = _correction(
+                                    fc["day_ahead"].to_numpy(float),
+                                    surplus_gw(fc).to_numpy(float),
+                                )
+                        except Exception:
+                            logger.exception("Day-ahead correction failed; storing nulls")
+
                         if (len(test_X) > 10) and (not no_ranges):
                             interval_started = time.monotonic()
 
@@ -1205,6 +1233,7 @@ class Command(BaseCommand):
 
                     else:
                         fc["day_ahead"] = None
+                        fc["day_ahead_corrected"] = np.nan
                         fc["day_ahead_classified"] = None
                         fc["day_ahead_extra_trees"] = None
                         fc["plunge_probability"] = None
@@ -1260,6 +1289,13 @@ class Command(BaseCommand):
                     fc["day_ahead"] = fc["day_ahead"] * scale_factors["mult"] + scale_factors["day_ahead"] * (
                         1 - scale_factors["mult"]
                     )
+                    # Same blend for the corrected series: inside the GB60 window the
+                    # settled price is known, so both columns should show it.
+                    if "day_ahead_corrected" in fc.columns:
+                        fc["day_ahead_corrected"] = (
+                            fc["day_ahead_corrected"] * scale_factors["mult"]
+                            + scale_factors["day_ahead"] * (1 - scale_factors["mult"])
+                        )
                     fc["day_ahead_low"] = (
                         fc["day_ahead_low"] * scale_factors["mult"]
                         + scale_factors["day_ahead"] * (1 - scale_factors["mult"])
@@ -1320,6 +1356,7 @@ class Command(BaseCommand):
                             "rad",
                             "demand",
                             "day_ahead",
+                            "day_ahead_corrected",
                             "day_ahead_classified",
                             "day_ahead_extra_trees",
                             "plunge_probability",
