@@ -1,10 +1,13 @@
 """Backfill the `History` table from NESO/Open-Meteo archives.
 
-DEV ONLY — deliberately not merged to `main`. The owner's decision (2026-08-27) is
-to hold this data on the dev box so production's database stays small. `History` is
-not read by the forecast pipeline; it exists so that plunge/spike behaviour can be
-studied across seasons rather than the two months of `ForecastData` we currently
-have. See docs/MODEL_DYNAMIC_RANGE.md.
+DEV ONLY. The owner's decision (2026-08-27) is to hold this data on the dev box so
+production's database stays small. `History` is not read by the forecast pipeline;
+it exists so that plunge/spike behaviour can be studied across seasons rather than
+the two months of `ForecastData` we currently have. See docs/MODEL_DYNAMIC_RANGE.md.
+
+The guard is `.dockerignore`: this file is excluded from the build context, so it
+is simply not present in the production image and cannot be run there by any route.
+`prices/tests.py::DockerignoreGuardTests` asserts that entry survives.
 
 Why a new command rather than `full_hist`:
 
@@ -37,7 +40,6 @@ import requests
 from django.core.management.base import BaseCommand
 
 from config.utils import get_gas_ttf_history
-from prices.environment import require_non_production
 from prices.models import History
 
 SQL_URL = "https://api.neso.energy/api/3/action/datastore_search_sql"
@@ -92,10 +94,6 @@ class Command(BaseCommand):
                             help="fetch and report coverage without writing")
 
     def handle(self, *args, **options):
-        # Before any network call: nothing is downloaded on production, let alone
-        # stored. --dry-run is blocked too, since it still performs the fetch.
-        require_non_production("Backfilling History")
-
         start = pd.Timestamp(options["start"], tz="UTC")
         end = (pd.Timestamp(options["end"], tz="UTC") if options["end"]
                else pd.Timestamp.now(tz="UTC"))
