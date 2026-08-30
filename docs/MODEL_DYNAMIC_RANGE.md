@@ -3666,3 +3666,106 @@ successive forecast runs for the same target slot — push each through f, and r
 tails off the resulting distribution. That preserves the conjunctions marginal mapping
 destroys, and it is the faithful implementation of "same function, more uncertainty".
 Untested.
+
+---
+
+# Claude — post-processed day-ahead implemented on dev, review 2026-09-06
+
+Appended 2026-08-30. Implements the correction the D-1 scatter work arrived at, at
+the owner's direction. Running on the dev server only; nothing deployed.
+
+## Where this came from
+
+Plotting D-1 (24–48 h) predicted against settled price and colouring by surplus
+(`demand − bm_wind − emb_wind − solar − nuclear`) showed the residual is structured
+by surplus: oversupply sits below the line, high residual demand above. The owner's
+suggestion was a bivariate regression of settled on (predicted, surplus).
+
+Tested on held-out days — fit on 60 % of days, score on the rest, five splits, since
+a chronological split puts every negative-price day in one half:
+
+| model | neg recall | neg prec | neg F1 | RMSE | RMSE<£25 | RMSE>£180 | sd ratio |
+|---|---|---|---|---|---|---|---|
+| raw | 0.009 | 0.818 | 0.086 | 18.09 | 53.17 | 33.05 | 0.785 |
+| RMA line (pred only) | 0.197 | **0.995** | 0.321 | 18.01 | 43.37 | **25.54** | 0.954 |
+| OLS pred | 0.131 | 0.973 | 0.230 | 17.89 | 49.97 | 29.12 | 0.847 |
+| OLS pred + surplus | 0.141 | 0.987 | 0.247 | 17.41 | 46.75 | 29.93 | 0.863 |
+| OLS pred + surplus + sur² | 0.189 | 0.994 | 0.312 | **16.99** | 41.39 | 32.98 | 0.866 |
+| **↑ + variance restored** | **0.273** | 0.832 | **0.407** | 17.12 | **35.93** | 28.68 | **0.965** |
+
+Two separable effects. **Surplus carries information the model has not absorbed** —
+adding it drops RMSE 17.89 → 16.99, with a coefficient of about **+£0.74/MWh per GW**
+of residual demand while the prediction coefficient stays at 0.972, so it is largely
+orthogonal. And **least squares still compresses**, because it fits a conditional
+mean; rescaling the fitted values so their spread matches the actuals lifts negative
+F1 to 0.407 and cuts RMSE below £25 from 53.17 to 35.93.
+
+The cost is real: precision falls 0.995 → 0.832 and the corrected series reaches
+−£38 against an observed minimum of −£25.3.
+
+Worth noting against the earlier feature work: a **surplus feature** was refuted on
+paired folds, while surplus as a **correction** helps. That difference is not yet
+explained and is a reason for caution rather than confidence.
+
+## What was built
+
+* `prices/postprocess.py` — the fit and its application.
+* `ForecastData.day_ahead_corrected` — stored **beside** `day_ahead`, never instead
+  of it, so the two can be scored against each other.
+* `DayAheadCalibration` — the durable fit record.
+* `compare_trial --column` — scores either series.
+
+**Applied before the GB60 blend.** The correction is fitted on model predictions, so
+applying it afterwards would "correct" known Nord Pool prices. The blend is then
+applied to both columns, so inside the blend window the two series agree and diverge
+only where the model is genuinely forecasting. Verified on the live run: mean
+absolute difference **0.03 below 36 h** and **3.93 beyond**.
+
+**A small table, not longer retention.** The obvious way to keep the fit data would
+have been to retain `ForecastData` for a year, but that is ~1M rows, and `AgileData`
+fans out per region — it is 2.3M rows and **243 MB of the 489 MB** dev database. The
+calibration table holds three numbers per settlement slot, about 48 rows a day, so a
+year costs ~17k rows. `ForecastData`/`AgileData` retention is untouched. Harvest runs
+before the purge and is idempotent.
+
+## A design error a test caught
+
+The first version claimed to select "the run closest to 16:15 local on D-1 — the
+auction vintage". It does not, and cannot: for a midday slot the 16:15 run on D-1 is
+only about **21 hours** ahead, outside the 24–48 h window entirely. The band actually
+mixes the D-1 run for late-evening slots with the D-2 run for early ones. Selection
+is now simply the freshest run still ≥24 h out, and the docstrings say so. The 24–48 h
+band is kept because it is what the correction was validated on and it sits clear of
+the GB60 blend — but it is a horizon band, not a publication vintage, and the auction
+-vintage question remains open.
+
+## Live on dev
+
+First run: 2 545 calibration pairs harvested (2026-07-02 → 08-31, horizons
+24.2–47.8 h), all 650 slots of forecast `2026-08-30 11:47` carrying a corrected
+value. Corrected sd is 1.077× the raw, as intended.
+
+An operational note that cost time: **`update_worker` is a long-running process that
+caches imported command modules**. It had been up since 13 August, so the first run
+after deploying this silently executed the old code. It must be restarted for any
+change to a management command to take effect on dev.
+
+## Review 2026-09-06
+
+A week of published forecasts, then compare the two series over the same slots:
+
+```bash
+ssh agile@django 'cd /srv/agile_predict && .venv/bin/python manage.py compare_trial --since 2026-08-30'
+ssh agile@django 'cd /srv/agile_predict && .venv/bin/python manage.py compare_trial --since 2026-08-30 --column day_ahead_corrected'
+```
+
+Both read the same slots, so this is paired at row level and needs no separate
+control — unlike the dynamic-range trial, the comparison is within one box and one
+code path.
+
+**What the week cannot settle.** The correction targets plunges, and the negative
+band has been empty on this box since 2026-08-16. If the week is calm again the
+detection columns will be `n/a` and the honest answer will be "not yet testable" — the
+same event-scarcity that made the 2026-08-23 review inconclusive. The dispersion and
+aggregate-error columns will still be readable. Judge it on the bands that have
+events, and do not read an empty negative band as a null result.
