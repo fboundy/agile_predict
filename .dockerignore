@@ -23,3 +23,12 @@ catboost_info/
 
 # Local Django file cache (never ship into the image)
 .django_cache/
+
+# Dev-only: the History backfill. `History` holds three years of generation and
+# weather actuals, kept on the CT dev box so production's database stays small
+# (see docs/MODEL_DYNAMIC_RANGE.md). Excluding the commands from the image is the
+# guard: absent code cannot be run by any route — management command, import or
+# shell — on any branch, including a dev branch deployed by accident.
+# prices/tests.py asserts these entries are still here.
+prices/management/commands/backfill_history.py
+prices/management/commands/full_hist.py

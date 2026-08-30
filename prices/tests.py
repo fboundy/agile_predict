@@ -1089,3 +1089,41 @@ class NesoSourceHealthTests(TestCase):
     def test_full_direct_response_reports_ok(self):
         h = self._health({"neso_wind": {"rows": 672, "fallback": False}})
         self.assertEqual(h("neso_wind"), "ok")
+
+
+class DockerignoreGuardTests(TestCase):
+    """`History` is dev-only data. The guard that actually protects production is
+    absence: the commands that download it are excluded from the image, so they
+    cannot run there by any route, on any branch. That is a build-time mechanism
+    and easy to undo silently in an edit, so it is asserted here."""
+
+    EXCLUDED = [
+        "prices/management/commands/backfill_history.py",
+        "prices/management/commands/full_hist.py",
+    ]
+
+    def _dockerignore(self):
+        from django.conf import settings
+
+        path = Path(settings.BASE_DIR) / ".dockerignore"
+        self.assertTrue(path.exists(), ".dockerignore is missing")
+        return [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines()]
+
+    def test_history_commands_are_excluded_from_the_image(self):
+        lines = self._dockerignore()
+        for entry in self.EXCLUDED:
+            self.assertIn(
+                entry, lines,
+                f"{entry} must stay in .dockerignore — it downloads History, which is "
+                "dev-only data (see docs/MODEL_DYNAMIC_RANGE.md)",
+            )
+
+    def test_excluded_paths_match_real_command_names(self):
+        """A stale path would exclude nothing and fail silently."""
+        from django.conf import settings
+
+        for entry in self.EXCLUDED:
+            target = Path(settings.BASE_DIR) / entry
+            if entry.endswith("backfill_history.py") and not target.exists():
+                continue  # dev-only command; absent on main, where the entry is still wanted
+            self.assertTrue(target.exists(), f"{entry} is listed but does not exist")
