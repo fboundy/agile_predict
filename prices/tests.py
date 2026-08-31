@@ -1166,7 +1166,11 @@ class NginxScannerShieldTests(TestCase):
 
         conf = (Path(settings.BASE_DIR) / "deploy" / "nginx.conf").read_text(encoding="utf-8")
         for needle in ["limit_req_zone", "limit_conn_zone", "$is_exploit_probe",
-                       "return 444", "$limit_key", "$client_ip"]:
+                       "return 403", "$limit_key", "$client_ip"]:
             self.assertIn(needle, conf, f"nginx.conf lost {needle}")
         self.assertIn("$http_fly_client_ip", conf,
                       "rate limiting must key on the real client IP, not the Fly proxy")
+        self.assertNotIn("return 444", conf,
+                         "444 closes without responding, which Fly's proxy renders as a "
+                         "502 plus its own error line — 10-17 of them a second under a "
+                         "scan, burying real errors. Use 403.")
