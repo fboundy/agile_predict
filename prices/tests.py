@@ -1089,3 +1089,84 @@ class NesoSourceHealthTests(TestCase):
     def test_full_direct_response_reports_ok(self):
         h = self._health({"neso_wind": {"rows": 672, "fallback": False}})
         self.assertEqual(h("neso_wind"), "ok")
+
+
+class NginxScannerShieldTests(TestCase):
+    """The nginx-level shield added after the 2026-08-31 outage.
+
+    A single IP ran a WordPress/Laravel exploit scan at 10-17 req/s. Every request
+    was denied, but by Django middleware, so each one still consumed a gunicorn
+    worker to produce its 403 — enough to saturate one shared vCPU. nginx now
+    answers those paths with 444 and rate-limits per client IP, so the load never
+    reaches a worker.
+
+    These tests mirror the nginx regexes in Python. They cannot prove nginx's
+    matching, but they do catch the dangerous mistake: a pattern broad enough to
+    swallow a route this application actually serves.
+    """
+
+    import re as _re
+
+    EXPLOIT_PATTERNS = [
+        _re.compile(r"^/+(?:[^/]+/)?wp-(?:json|admin|content|includes|login)", _re.I),
+        _re.compile(r"^/+(?:index|xmlrpc|wlwmanifest|shell|eval|config)\.php", _re.I),
+        _re.compile(r"^/+livewire/", _re.I),
+        _re.compile(r"^/+\.(?:env|git)", _re.I),
+        _re.compile(r"^/+(?:vendor|autoload|phpunit)/", _re.I),
+    ]
+    NEVER_LIMITED = [
+        _re.compile(r"^/healthz"),
+        _re.compile(r"^/update"),
+        _re.compile(r"^/webhooks/"),
+    ]
+
+    def _blocked(self, path):
+        return any(p.search(path) for p in self.EXPLOIT_PATTERNS)
+
+    def _exempt(self, path):
+        return any(p.search(path) for p in self.NEVER_LIMITED)
+
+    def test_blocks_the_paths_actually_seen_in_the_attack(self):
+        for path in [
+            "/wp-json/batch/v1", "/wp-json/Batch/v1", "//wp-json/batch/v1",
+            "/wp-json/batch/v1/", "/blog/wp-json/batch/v1",
+            "/wp-json/gravitysmtp/v1/tests/mock-data",
+            "/index.php", "/livewire/update",
+            "/wp-admin/admin-ajax.php", "/.env", "/.git/config",
+            "/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php",
+        ]:
+            self.assertTrue(self._blocked(path), f"{path} should be shed by nginx")
+
+    def test_never_blocks_a_route_this_site_serves(self):
+        for path in [
+            "/", "/healthz", "/update", "/api/", "/api/A/", "/api/accuracy/",
+            "/v2/X/", "/v2/X/?days=14&gen=1", "/v2/stats/", "/v2/history/",
+            "/v2/about/", "/v2/health/", "/v2/costs/", "/v2/model/",
+            "/webhooks/kofi/", "/webhooks/kofi/summary",
+            "/static/css/site.css", "/admin/", "/admin/login/",
+            "/accounts/login/", "/X/",
+        ]:
+            self.assertFalse(self._blocked(path), f"{path} is a real route and must not be shed")
+
+    def test_critical_endpoints_are_exempt_from_rate_limiting(self):
+        """These three cannot be throttled without breaking the service:
+        /healthz fails the machine, /update loses a forecast cycle outright
+        (EasyCron fires once and never retries), /webhooks/ drops payments."""
+        for path in ["/healthz", "/update", "/update?scheduled=1", "/webhooks/kofi/"]:
+            self.assertTrue(self._exempt(path), f"{path} must bypass the rate limit")
+
+    def test_ordinary_pages_are_not_exempt(self):
+        """Everything else must be limited, or the shield does nothing."""
+        for path in ["/", "/v2/X/", "/api/"]:
+            self.assertFalse(self._exempt(path))
+
+    def test_nginx_conf_still_contains_the_shield(self):
+        """Guards against the directives being dropped in an unrelated edit."""
+        from django.conf import settings
+
+        conf = (Path(settings.BASE_DIR) / "deploy" / "nginx.conf").read_text(encoding="utf-8")
+        for needle in ["limit_req_zone", "limit_conn_zone", "$is_exploit_probe",
+                       "return 444", "$limit_key", "$client_ip"]:
+            self.assertIn(needle, conf, f"nginx.conf lost {needle}")
+        self.assertIn("$http_fly_client_ip", conf,
+                      "rate limiting must key on the real client IP, not the Fly proxy")
