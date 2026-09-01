@@ -1212,3 +1212,50 @@ class NginxScannerShieldTests(TestCase):
                          "444 closes without responding, which Fly's proxy renders as a "
                          "502 plus its own error line — 10-17 of them a second under a "
                          "scan, burying real errors. Use 403.")
+
+
+class RobotsCrawlerLoadTests(TestCase):
+    """robots.txt is the lever that keeps crawler sweeps off the workers.
+
+    2026-09-01: Bingbot swept chart query-parameter permutations. Each distinct
+    query string is its own cache entry, so every request was a miss and a full
+    re-render — measured 2.4-5.4s of CPU each. Four workers saturated, requests
+    queued to 24-47s, /healthz timed out with them and a machine went critical.
+    """
+
+    def _body(self):
+        return self.client.get("/robots.txt").content.decode()
+
+    def test_parameterised_urls_are_disallowed(self):
+        """The actual fix: the permutations are what cost, not the bare pages."""
+        self.assertIn("Disallow: /*?", self._body())
+
+    def test_api_is_disallowed(self):
+        """Large payloads, no indexing value."""
+        self.assertIn("Disallow: /api/", self._body())
+
+    def test_bare_pages_stay_indexable(self):
+        """A blanket Disallow: / for everyone would deindex the site. The chart
+        pages themselves are cheap once cached and carry the content worth finding."""
+        body = self._body()
+        wildcard = body.split("User-agent: *", 1)[1]
+        self.assertNotIn("Disallow: /\n", wildcard)
+
+    def test_bingbot_is_not_blocked_outright(self):
+        """Blocking Bingbot would remove the site from Bing for no extra
+        protection — the parameterised-URL rule already removes the load, and
+        covers the next crawler too."""
+        body = self._body()
+        for line in body.splitlines():
+            if line.lower().startswith("user-agent:"):
+                self.assertNotIn("bingbot", line.lower())
+
+    def test_known_ai_scrapers_still_blocked(self):
+        body = self._body()
+        for bot in ["GPTBot", "ClaudeBot", "CCBot", "PerplexityBot", "Bytespider"]:
+            self.assertIn(f"User-agent: {bot}", body)
+            
+    def test_served_without_authentication(self):
+        r = self.client.get("/robots.txt")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r["Content-Type"], "text/plain")
