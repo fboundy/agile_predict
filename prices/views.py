@@ -1752,10 +1752,31 @@ def robots_txt(request):
         "meta-externalagent",  # Meta AI
     ]
     lines = ["# AI scrapers that sweep every region/filter combination — blocked to"]
-    lines.append("# protect the app's 2 workers; the rate limiter backs this up.")
+    lines.append("# protect the app's gunicorn workers; the rate limiter backs this up.")
     for bot in blocked:
         lines += [f"User-agent: {bot}", "Disallow: /", ""]
-    lines += ["User-agent: *", "Crawl-delay: 10", "Disallow:", ""]
+
+    # 2026-09-01: Bingbot (msnbot-52-167-144-221.search.msn.com) was sweeping chart
+    # query-parameter permutations — /v2/A/?days=5&band=0&export=1&gen=0&dc=1&…
+    # Each distinct query string is a separate cache entry, so every one is a miss
+    # and a full re-render: measured 2.4-5.4s of CPU each. Four workers saturate
+    # almost immediately, requests queued to 24-47s, and /healthz timed out with
+    # them — one machine sat health-check critical for hours.
+    #
+    # Bingbot is NOT added to the block list above. Doing so would remove the site
+    # from Bing entirely, which is a real cost for no extra protection: the
+    # permutations are the problem, not the crawler. Disallowing parameterised URLs
+    # for everyone keeps the bare pages indexable while removing the load, and it
+    # covers the next crawler too rather than just this one.
+    lines += [
+        "# Parameterised URLs are per-combination cache misses, each a full re-render.",
+        "# The bare pages carry the same content and stay indexable.",
+        "User-agent: *",
+        "Crawl-delay: 10",
+        "Disallow: /*?",     # any URL with a query string
+        "Disallow: /api/",   # machine endpoint: large payloads, no indexing value
+        "",
+    ]
     return HttpResponse("\n".join(lines), content_type="text/plain")
 
 
