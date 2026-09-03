@@ -64,7 +64,7 @@
     {# Window buttons #}
     <div class="btn-group btn-group-sm">
       {% for opt in window_options %}
-      <a href="?window={{ opt.key }}&offset_days={{ offset_days }}{% if compare_agileforecast %}&compare_agileforecast=1{% endif %}{% if compare_x2r %}&compare_x2r=1{% endif %}"
+      <a href="?window={{ opt.key }}&offset_days={{ offset_days }}{% if compare_agileforecast %}&compare_agileforecast=1{% endif %}{% if compare_x2r %}&compare_x2r=1{% endif %}{% if compare_corrected %}&compare_corrected=1{% endif %}"
          class="btn {% if window_key == opt.key %}btn-primary{% else %}btn-outline-secondary{% endif %}">
         {{ opt.label }}
       </a>
@@ -86,15 +86,33 @@
 
     {% if can_compare_external %}
     <div class="vr d-none d-sm-block" style="opacity:.3"></div>
-    <a href="?window={{ window_key }}&offset_days={{ offset_days }}&compare_agileforecast={% if compare_agileforecast %}0{% else %}1{% endif %}{% if compare_x2r %}&compare_x2r=1{% endif %}&metric={{ selected_metric }}"
+    <a href="?window={{ window_key }}&offset_days={{ offset_days }}&compare_agileforecast={% if compare_agileforecast %}0{% else %}1{% endif %}{% if compare_x2r %}&compare_x2r=1{% endif %}{% if compare_corrected %}&compare_corrected=1{% endif %}&metric={{ selected_metric }}"
        class="btn btn-sm"
        style="border-color:{{ source_colors.AgileForecast }};{% if compare_agileforecast %}background:{{ source_colors.AgileForecast }};color:#fff{% else %}color:{{ source_colors.AgileForecast }}{% endif %}">
       AgileForecast
     </a>
-    <a href="?window={{ window_key }}&offset_days={{ offset_days }}{% if compare_agileforecast %}&compare_agileforecast=1{% endif %}&compare_x2r={% if compare_x2r %}0{% else %}1{% endif %}&metric={{ selected_metric }}"
+    <a href="?window={{ window_key }}&offset_days={{ offset_days }}{% if compare_agileforecast %}&compare_agileforecast=1{% endif %}&compare_x2r={% if compare_x2r %}0{% else %}1{% endif %}{% if compare_corrected %}&compare_corrected=1{% endif %}&metric={{ selected_metric }}"
        class="btn btn-sm"
        style="border-color:{{ source_colors.X2R }};{% if compare_x2r %}background:{{ source_colors.X2R }};color:#fff{% else %}color:{{ source_colors.X2R }}{% endif %}">
       X2R
+    </a>
+    {% endif %}
+
+    {% comment %} DEV ONLY: post-processed day-ahead comparison (prices/postprocess.py).
+       Not gated on can_compare_external / is_raw_day_ahead_region — the latter is
+       forced False here for display purposes even though V2 history always reads
+       the raw day-ahead data internally, so it uses its own can_compare_corrected
+       flag instead. See docs/MODEL_DYNAMIC_RANGE.md. {% endcomment %}
+    {% if can_compare_corrected %}
+    <div class="vr d-none d-sm-block" style="opacity:.3"></div>
+    <a href="?window={{ window_key }}&offset_days={{ offset_days }}{% if compare_agileforecast %}&compare_agileforecast=1{% endif %}{% if compare_x2r %}&compare_x2r=1{% endif %}&compare_corrected={% if compare_corrected %}0{% else %}1{% endif %}&metric={{ selected_metric }}"
+       class="btn btn-sm"
+       {% comment %} Not looked up from source_colors: its key is "AgilePredict
+          (corrected)", which Django template dot-lookup can't address (spaces,
+          parens). Hardcoded to match the chart page's overlay colour instead. {% endcomment %}
+       style="border-color:#20c997;{% if compare_corrected %}background:#20c997;color:#111{% else %}color:#20c997{% endif %}"
+       title="Post-processed forecast: settled ~ (prediction, surplus, surplus^2), with the spread restored. Dev-only comparison.">
+      Corrected
     </a>
     {% endif %}
 

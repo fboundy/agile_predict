@@ -92,6 +92,22 @@
                         />
                         <label for="compareX2R" class="form-check-label">Compare X2R</label>
                     </div>
+                    {% if can_compare_corrected %}
+                    {% comment %} DEV ONLY: post-processed day-ahead comparison,
+                       prices/postprocess.py. Only offered on the raw day-ahead region —
+                       see docs/MODEL_DYNAMIC_RANGE.md. {% endcomment %}
+                    <div class="form-check mt-2">
+                        <input
+                            id="compareCorrected"
+                            name="compare_corrected"
+                            value="1"
+                            type="checkbox"
+                            class="form-check-input"
+                            {% if compare_corrected %}checked{% endif %}
+                        />
+                        <label for="compareCorrected" class="form-check-label">Compare corrected forecast</label>
+                    </div>
+                    {% endif %}
                 </div>
                 <div class="mb-3">
                     <label for="bucketSelect" class="form-label">Prediction Offset</label>

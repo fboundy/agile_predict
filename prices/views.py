@@ -658,6 +658,7 @@ class HistoryView(TemplateView):
         "AgilePredict": "#ffc107",
         "AgileForecast": "#0dcaf0",
         "X2R": "#fd7e14",
+        "AgilePredict (corrected)": "#20c997",
     }
 
     def _source_color(self, label):
@@ -788,11 +789,20 @@ class HistoryView(TemplateView):
         external_rows_by_label=None,
         forecast_value_attr="agile_pred",
         external_raw_day_ahead=False,
+        internal_series_by_label=None,
     ):
+        """`internal_series_by_label` is for series that share forecast_rows and the
+        AgilePredict lead-time semantics (build_predicted_series) but read a different
+        column — e.g. {"AgilePredict (corrected)": "day_ahead_corrected"}. This is
+        distinct from external_rows_by_label, whose rows carry their own
+        source_created_at and go through build_external_predicted_series instead.
+        """
         external_rows_by_label = external_rows_by_label or {}
+        internal_series_by_label = internal_series_by_label or {}
         columns_by_offset = {}
         metric_sets = {
             "AgilePredict": {},
+            **{label: {} for label in internal_series_by_label},
             **{label: {} for label in external_rows_by_label},
         }
 
@@ -810,6 +820,23 @@ class HistoryView(TemplateView):
                     "n": metrics["n"],
                 }
                 metric_sets["AgilePredict"][offset_days] = metrics
+
+            for label, value_attr in internal_series_by_label.items():
+                internal_predicted = self.build_predicted_series(
+                    forecast_rows,
+                    offset_days * 24,
+                    (offset_days + 1) * 24,
+                    value_attr=value_attr,
+                )
+                internal_metrics = self.calculate_error_metrics(actual, internal_predicted)
+                if internal_metrics is None:
+                    continue
+                if offset_days not in columns_by_offset:
+                    columns_by_offset[offset_days] = {
+                        "label": self.format_offset_label(offset_days),
+                        "n": "",
+                    }
+                metric_sets[label][offset_days] = internal_metrics
 
             for label, external_rows in external_rows_by_label.items():
                 external_predicted = self.build_external_predicted_series(
@@ -899,12 +926,20 @@ class HistoryView(TemplateView):
 
         compare_agileforecast = can_compare_external and _truthy(self.request.GET.get("compare_agileforecast"))
         compare_x2r = can_compare_external and _truthy(self.request.GET.get("compare_x2r"))
+        # day_ahead_corrected only exists on ForecastData, i.e. only when this view's
+        # forecast_rows come from the raw day-ahead region — see the raw_day_ahead
+        # branch below. DEV ONLY: the column does not exist on `main` at all, so this
+        # stays inert (empty series, hidden checkbox) wherever it is absent.
+        can_compare_corrected = raw_day_ahead
+        compare_corrected = can_compare_corrected and _truthy(self.request.GET.get("compare_corrected"))
 
         context["region"] = region
         context["data_region"] = data_region
         context["can_compare_external"] = can_compare_external
         context["compare_agileforecast"] = compare_agileforecast
         context["compare_x2r"] = compare_x2r
+        context["can_compare_corrected"] = can_compare_corrected
+        context["compare_corrected"] = compare_corrected
         context["region_name"] = regions.get(region, {"name": ""})["name"]
         context["is_raw_day_ahead_region"] = raw_day_ahead
         context["price_label"] = price_display["label"]
@@ -983,13 +1018,18 @@ class HistoryView(TemplateView):
         self._history_forecast_value_attr = forecast_value_attr
         self._history_data_region = data_region
         self._history_raw_day_ahead = raw_day_ahead
+        self._history_compare_corrected = compare_corrected
 
+        internal_series_by_label = (
+            {"AgilePredict (corrected)": "day_ahead_corrected"} if compare_corrected else None
+        )
         metrics_table = self.build_metrics_table(
             actual,
             forecast_rows,
             external_rows_by_label,
             forecast_value_attr=forecast_value_attr,
             external_raw_day_ahead=raw_day_ahead,
+            internal_series_by_label=internal_series_by_label,
         )
 
         figure = make_subplots(rows=1, cols=1)
@@ -1030,6 +1070,24 @@ class HistoryView(TemplateView):
                             hovertemplate=hover_template_price,
                         )
                     )
+
+        corrected_count = 0
+        if compare_corrected:
+            corrected_predicted = self.build_predicted_series(
+                forecast_rows, start_hours, end_hours, value_attr="day_ahead_corrected",
+            )
+            corrected_count = len(corrected_predicted)
+            if corrected_count > 0:
+                figure.add_trace(
+                    go.Scatter(
+                        x=corrected_predicted.index.tz_convert("GB"),
+                        y=corrected_predicted,
+                        line={"color": self._source_color("AgilePredict (corrected)"), "width": 2, "dash": "dot"},
+                        mode="lines",
+                        name=f"AgilePredict (corrected) {offset_label} ahead",
+                        hovertemplate=hover_template_price,
+                    )
+                )
 
         error_metrics = self.calculate_error_metrics(actual, predicted)
         if error_metrics is None:
@@ -1082,6 +1140,7 @@ class HistoryView(TemplateView):
         context["prediction_count"] = len(predicted)
         context["external_counts"] = external_counts
         context["prediction_segment_count"] = prediction_segment_count
+        context["corrected_count"] = corrected_count
         context["error_metrics"] = error_metrics
         context["metrics_table"] = metrics_table
         context["actual_count"] = len(actual)
@@ -2428,6 +2487,11 @@ class GraphV2View(V2NavMixin, TemplateView):
         # region) instead of trimming them at the last confirmed slot — mirrors
         # v1's "Allow Forecast Overlap".
         show_overlap = self.request.GET.get("overlap", "0") == "1"
+        # Post-processed day-ahead overlay (prices/postprocess.py). Only meaningful
+        # for the raw day-ahead region: day_ahead_corrected lives on ForecastData, not
+        # on the per-region AgileData rows the other regions plot. DEV ONLY: the
+        # column and this whole code path are absent on `main`.
+        show_corrected = raw and self.request.GET.get("dac", "0") == "1"
         color_fn = _export_price_color if show_export else _price_color
 
         fc_param = self.request.GET.getlist("fc")
@@ -2479,6 +2543,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         primary_s = pd.Series(dtype=float)
         low_s = pd.Series(dtype=float)
         high_s = pd.Series(dtype=float)
+        corrected_s = pd.Series(dtype=float)
 
         # Single shared read of the latest forecast's ForecastData rows (widest range any
         # of raw-price/gen&dc/SHAP need), replacing what used to be three separate queries
@@ -2491,7 +2556,7 @@ class GraphV2View(V2NavMixin, TemplateView):
                     date_time__gte=prior_gb.tz_convert("UTC"),
                     date_time__lte=end_gb.tz_convert("UTC"),
                 ).order_by("date_time").values(
-                    "date_time", "day_ahead", "demand", "solar", "emb_wind",
+                    "date_time", "day_ahead", "day_ahead_corrected", "demand", "solar", "emb_wind",
                     "nuclear", "bm_wind", "dispatchable_capacity", "shap_top_features",
                 )
             )
@@ -2504,6 +2569,11 @@ class GraphV2View(V2NavMixin, TemplateView):
                         index=pd.to_datetime([r["date_time"] for r in fd_rows]).tz_convert("GB"),
                         data=[r["day_ahead"] for r in fd_rows],
                     )
+                    if show_corrected:
+                        corrected_s = pd.Series(
+                            index=pd.to_datetime([r["date_time"] for r in fd_rows]).tz_convert("GB"),
+                            data=[r["day_ahead_corrected"] for r in fd_rows],
+                        ).dropna()
             else:
                 ad_rows = list(
                     AgileData.objects.filter(
@@ -2994,6 +3064,18 @@ class GraphV2View(V2NavMixin, TemplateView):
                 hovertemplate=fc_hover,
             ))
 
+        # Post-processed overlay — dashed, distinct colour, deliberately never styled
+        # to look like the primary line: the point is to compare it, not blend in.
+        if show_corrected and not corrected_s.empty:
+            add_price(go.Scatter(
+                x=corrected_s.index,
+                y=corrected_s.values,
+                mode="lines",
+                line=dict(shape="hv", color="#20c997", width=2.0, dash="dot"),
+                name="Forecast (corrected)",
+                hovertemplate=f"<b>%{{y:.2f}} {unit}</b><extra>Corrected</extra>",
+            ))
+
         # Older selected forecasts — solid lines
         older = [f for f in forecasts_to_plot if latest is None or f.id != latest.id]
         for i, fc_obj in enumerate(older[:3]):
@@ -3270,6 +3352,8 @@ class GraphV2View(V2NavMixin, TemplateView):
                 "show_af": show_af,
                 "show_x2r": show_x2r,
                 "show_overlap": show_overlap,
+                "show_corrected": show_corrected,
+                "can_show_corrected": raw,
                 "summary": summary,
                 "summary_pos": summary_pos,
                 "summary_pos_options": _SUMMARY_POSITION_LABELS,
@@ -3321,6 +3405,7 @@ class HistoryV2View(V2NavMixin, HistoryView):
         "AgilePredict": "#56B4E9",
         "AgileForecast": "#D55E00",
         "X2R": "#009E73",
+        "AgilePredict (corrected)": "#F0E442",
     }
 
     def _build_metrics_chart(self, metrics_table, price_unit, selected_metric="mae"):
@@ -3456,9 +3541,14 @@ class HistoryV2View(V2NavMixin, HistoryView):
         actual_agile = day_ahead_to_agile(actual_da, region="X").sort_index()
         forecast_rows = getattr(self, "_history_forecast_rows", [])
         external_rows = getattr(self, "_history_external_rows", {})
+        compare_corrected = getattr(self, "_history_compare_corrected", False)
 
         columns_by_offset = {}
-        metric_sets = {"AgilePredict": {}, **{label: {} for label in external_rows}}
+        metric_sets = {
+            "AgilePredict": {},
+            **({"AgilePredict (corrected)": {}} if compare_corrected else {}),
+            **{label: {} for label in external_rows},
+        }
 
         for offset_days in range(self.max_offset_days + 1):
             # Predictions are from ForecastData.day_ahead (£/MWh); convert to Agile X
@@ -3474,6 +3564,20 @@ class HistoryV2View(V2NavMixin, HistoryView):
             if metrics is not None:
                 columns_by_offset[offset_days] = {"label": self.format_offset_label(offset_days), "n": metrics["n"]}
                 metric_sets["AgilePredict"][offset_days] = metrics
+
+            if compare_corrected:
+                corrected_da = self.build_predicted_series(
+                    forecast_rows, offset_days * 24, (offset_days + 1) * 24, value_attr="day_ahead_corrected"
+                )
+                if len(corrected_da) >= 2:
+                    corrected = day_ahead_to_agile(corrected_da, region="X")
+                else:
+                    corrected = pd.Series(dtype=float)
+                corrected_metrics = self.calculate_error_metrics(actual_agile, corrected)
+                if corrected_metrics is not None:
+                    if offset_days not in columns_by_offset:
+                        columns_by_offset[offset_days] = {"label": self.format_offset_label(offset_days), "n": ""}
+                    metric_sets["AgilePredict (corrected)"][offset_days] = corrected_metrics
 
             for label, ext_rows in external_rows.items():
                 # External rows were fetched for region "G"; raw_day_ahead=True gives them in DA

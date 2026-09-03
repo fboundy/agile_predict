@@ -872,6 +872,16 @@ class CanonicalCacheKeyTests(TestCase):
         self._diff("/v2/history/?compare_x2r=1", "/v2/history/")
         self._diff("/v2/history/?compare_agileforecast=1", "/v2/history/")
 
+    # --- post-processed day-ahead overlay (DEV ONLY, prices/postprocess.py) ---
+    def test_corrected_overlay_toggle_changes_the_chart_key(self):
+        self._diff("/v2/X/?dac=1", "/v2/X/")
+
+    def test_corrected_overlay_explicit_default_matches_omitted(self):
+        self._same("/v2/X/?dac=0", "/v2/X/")
+
+    def test_compare_corrected_changes_the_history_key(self):
+        self._diff("/v2/history/?compare_corrected=1", "/v2/history/")
+
     def test_history_does_not_collide_with_chart_params(self):
         # A history URL must never key the same as the chart page's defaults.
         self._diff("/v2/history/?window=last-week", "/v2/X/?days=5")
@@ -1613,3 +1623,180 @@ class RobotsCrawlerLoadTests(TestCase):
         r = self.client.get("/robots.txt")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r["Content-Type"], "text/plain")
+
+
+class DayAheadCorrectedOverlayTests(TestCase):
+    """DEV ONLY: show the post-processed day-ahead (prices/postprocess.py) as an
+    overlay on the chart and a comparison column on the history page. Gated to the
+    raw day-ahead region (Z), since day_ahead_corrected lives on ForecastData and
+    the other regions plot AgileData, which has no corrected counterpart."""
+
+    def setUp(self):
+        # /v2/... is behind ResponseCacheMiddleware. Its "responses" cache is
+        # FileBasedCache with a 1h TTL (see settings.CACHES — shared across
+        # gunicorn workers, so it must survive a single test process, which rules
+        # out LocMemCache), and its data-version stamp is memoized in the default
+        # cache for 30s independently of the DB. Neither is reset by TestCase's
+        # transaction rollback, so two tests hitting the same canonical /v2/ URL
+        # within that window get the FIRST test's cached HTML, not a fresh render
+        # — this class is the first here to do that (multiple tests against the
+        # same /v2/Z/?dac=1 and /v2/history/ URLs with different fixture data), so
+        # it is the first to need this. Both caches are test/dev-local, never
+        # shipped (see .dockerignore), so clearing them is safe.
+        from django.core.cache import caches
+
+        caches["default"].clear()
+        caches["responses"].clear()
+
+    def _forecast_with_corrected(self, name, created_at, rows):
+        """rows: list of (date_time, day_ahead, day_ahead_corrected)."""
+        forecast = Forecasts.objects.create(name=name, mean=0, stdev=0)
+        Forecasts.objects.filter(pk=forecast.pk).update(created_at=created_at)
+        forecast.refresh_from_db()
+        for date_time, day_ahead, corrected in rows:
+            ForecastData.objects.create(
+                forecast=forecast, date_time=date_time,
+                day_ahead=day_ahead, day_ahead_corrected=corrected,
+                bm_wind=0, solar=0, emb_wind=0, nuclear=0,
+                temp_2m=0, wind_10m=0, rad=0, demand=0,
+            )
+        return forecast
+
+    # --- chart page (GraphV2View) ---
+
+    def test_chart_shows_corrected_overlay_when_requested_on_raw_region(self):
+        now = timezone.now()
+        self._forecast_with_corrected(
+            "chart-corrected-test", now - timedelta(hours=1),
+            [(now + timedelta(hours=h), 100.0, 80.0) for h in range(1, 6)],
+        )
+        response = self.client.get("/v2/Z/?dac=1")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Forecast (corrected)")
+
+    def test_chart_omits_overlay_by_default(self):
+        now = timezone.now()
+        self._forecast_with_corrected(
+            "chart-corrected-default-test", now - timedelta(hours=1),
+            [(now + timedelta(hours=h), 100.0, 80.0) for h in range(1, 6)],
+        )
+        response = self.client.get("/v2/Z/")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Forecast (corrected)")
+
+    def test_chart_overlay_unavailable_on_non_raw_region(self):
+        """dac=1 on a non-raw region must not show the overlay — AgileData has no
+        day_ahead_corrected counterpart to plot. A PriceHistory row is included so
+        the page takes its normal render path (a region with literally no data at
+        all anywhere hits a pre-existing, unrelated empty-index bug in the "current
+        price" summary block — not something this feature should mask or fix)."""
+        now = timezone.now()
+        PriceHistory.objects.create(date_time=now - timedelta(minutes=30), agile=0, day_ahead=100)
+        self._forecast_with_corrected(
+            "chart-corrected-nonraw-test", now - timedelta(hours=1),
+            [(now + timedelta(hours=h), 100.0, 80.0) for h in range(1, 6)],
+        )
+        response = self.client.get("/v2/X/?dac=1")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Forecast (corrected)")
+
+    def test_chart_overlay_skips_rows_with_null_corrected(self):
+        """A forecast run before the correction was fitted has NULL
+        day_ahead_corrected on every row; the overlay must degrade to empty, not error."""
+        now = timezone.now()
+        self._forecast_with_corrected(
+            "chart-corrected-null-test", now - timedelta(hours=1),
+            [(now + timedelta(hours=h), 100.0, None) for h in range(1, 6)],
+        )
+        response = self.client.get("/v2/Z/?dac=1")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Forecast (corrected)")
+
+    # --- history page, v1 (HistoryView) ---
+
+    def test_history_v1_shows_corrected_checkbox_on_raw_region(self):
+        response = self.client.get("/history/?offset_days=0")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "compare_corrected")
+
+    def test_history_v1_hides_corrected_checkbox_on_non_raw_region(self):
+        response = self.client.get("/history/X/?offset_days=0")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "compare_corrected")
+
+    def test_history_v1_metrics_table_includes_corrected_row(self):
+        created_at = timezone.now() - timedelta(hours=6)
+        date_time = created_at + timedelta(hours=1)
+        PriceHistory.objects.create(date_time=date_time, agile=0, day_ahead=100)
+        self._forecast_with_corrected(
+            "history-corrected-metrics-test", created_at,
+            [(date_time, 90.0, 100.0)],  # raw off by 10, corrected exact
+        )
+        response = self.client.get("/history/?offset_days=0&compare_corrected=1")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "AgilePredict (corrected)")
+
+    def test_history_v1_compare_corrected_ignored_on_non_raw_region(self):
+        """The param must be inert (not a crash) when the region can't support it."""
+        response = self.client.get("/history/X/?offset_days=0&compare_corrected=1")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "AgilePredict (corrected)")
+
+    # --- history page, v2 (HistoryV2View) ---
+
+    def test_history_v2_shows_corrected_checkbox(self):
+        response = self.client.get("/v2/history/?offset_days=0")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "compare_corrected")
+
+    def test_history_v2_metrics_table_includes_corrected_row(self):
+        created_at = timezone.now() - timedelta(hours=6)
+        date_time = created_at + timedelta(hours=1)
+        PriceHistory.objects.create(date_time=date_time, agile=0, day_ahead=100)
+        self._forecast_with_corrected(
+            "history-v2-corrected-metrics-test", created_at,
+            [(date_time, 90.0, 100.0)],
+        )
+        response = self.client.get("/v2/history/?offset_days=0&compare_corrected=1")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "AgilePredict (corrected)")
+
+    def test_history_v2_agile_unit_mode_includes_corrected_row(self):
+        """The Agile p/kWh accuracy chart forward-converts day_ahead_corrected the
+        same way it converts day_ahead — must not silently drop the series."""
+        created_at = timezone.now() - timedelta(hours=6)
+        date_time = created_at + timedelta(hours=1)
+        PriceHistory.objects.create(date_time=date_time, agile=0, day_ahead=100)
+        self._forecast_with_corrected(
+            "history-v2-corrected-agile-test", created_at,
+            [(date_time, 90.0, 100.0)],
+        )
+        response = self.client.get(
+            "/v2/history/?offset_days=0&compare_corrected=1&unit_mode=agile"
+        )
+        self.assertEqual(response.status_code, 200)
+
+    # --- build_metrics_table unit coverage ---
+
+    def test_build_metrics_table_internal_series_reuses_lead_time_semantics(self):
+        """internal_series_by_label must use the SAME lead-time filtering as the
+        primary AgilePredict series (forecast.created_at, not an external
+        source_created_at) — confirms it does not accidentally take the
+        external-forecast code path."""
+        from prices.views import HistoryView
+
+        created_at = timezone.now() - timedelta(hours=6)
+        date_time = created_at + timedelta(hours=1)
+        forecast = self._forecast_with_corrected(
+            "metrics-table-unit-test", created_at, [(date_time, 90.0, 100.0)]
+        )
+        rows = list(ForecastData.objects.filter(forecast=forecast))
+        actual = pd.Series([100.0], index=[date_time])
+        view = HistoryView()
+        table = view.build_metrics_table(
+            actual, rows, forecast_value_attr="day_ahead",
+            internal_series_by_label={"AgilePredict (corrected)": "day_ahead_corrected"},
+        )
+        models_seen = {row["model"] for row in table["rows"]}
+        self.assertIn("AgilePredict (corrected)", models_seen)
+        self.assertIn("AgilePredict", models_seen)

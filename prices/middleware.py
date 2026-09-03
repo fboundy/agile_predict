@@ -263,11 +263,15 @@ def _canonical_query(path, q):
                 unit_mode = "da"
             cmp_af = "1" if str(q.get("compare_agileforecast")).lower() in _TRUE_WORDS else "0"
             cmp_x2r = "1" if str(q.get("compare_x2r")).lower() in _TRUE_WORDS else "0"
+            # DEV ONLY overlay (prices/postprocess.py) — see the /v2/ branch's `dac`
+            # comment below; harmless to include on a build that lacks it.
+            cmp_corr = "1" if str(q.get("compare_corrected")).lower() in _TRUE_WORDS else "0"
 
             return "&".join(
                 [f"window={window}", *date_parts, f"offset_days={offset_days}",
                  f"metric={metric}", f"unit_mode={unit_mode}",
-                 f"compare_agileforecast={cmp_af}", f"compare_x2r={cmp_x2r}"]
+                 f"compare_agileforecast={cmp_af}", f"compare_x2r={cmp_x2r}",
+                 f"compare_corrected={cmp_corr}"]
             )
 
         if path.startswith("/v2/"):
@@ -286,6 +290,11 @@ def _canonical_query(path, q):
             af = "1" if str(q.get("af", "")).lower() in _TRUE_WORDS else "0"
             x2r = "1" if str(q.get("x2r", "")).lower() in _TRUE_WORDS else "0"
             overlap = "1" if q.get("overlap", "0") == "1" else "0"
+            # Post-processed day-ahead overlay (prices/postprocess.py). DEV ONLY: the
+            # underlying column and view code only exist on the dev branch, but the
+            # param is harmless to include everywhere — it is simply always "0" on a
+            # build that lacks it, since the view never sets show_corrected=True there.
+            dac = "1" if q.get("dac", "0") == "1" else "0"
             # Summary-card placement (GH #93). It changes the rendered HTML, so
             # it has to be in the key or all three positions collapse onto one
             # cached entry. Mirrors GraphV2View's validation, including the
@@ -299,7 +308,7 @@ def _canonical_query(path, q):
             parts = [
                 f"days={days}", f"band={band}", f"export={export}", f"gen={gen}",
                 f"fg={fg}", f"dc={dc}", f"af={af}", f"x2r={x2r}", f"overlap={overlap}",
-                f"summary={summary}",
+                f"summary={summary}", f"dac={dac}",
             ]
             if fc:
                 parts.append("fc=" + ",".join(str(i) for i in fc))
