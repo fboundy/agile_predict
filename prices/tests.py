@@ -215,6 +215,66 @@ class HistoryViewTests(TestCase):
         self.assertContains(response, "1 predictions for &lt;1d ahead")
 
 
+class HistoryDateWindowTests(TestCase):
+    """The rolling windows (Last Week / 2 Weeks / Month) must run to the end of
+    confirmed pricing, not stop dead at "now". Agile prices are published ahead
+    of time (release 16:00 for the next day), so PriceHistory routinely already
+    holds settled rows beyond the current moment — capping the window at `now`
+    hid prices the site already knew for no reason. Shared by both /history/
+    (v1) and /v2/history/ via HistoryView.get_date_window; HistoryV2View does
+    not override it."""
+
+    def test_window_extends_to_a_future_confirmed_price(self):
+        future = timezone.now() + timedelta(hours=20)
+        PriceHistory.objects.create(date_time=future, agile=0, day_ahead=100)
+
+        response = self.client.get("/history/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["custom_end_date"], future.date().isoformat())
+
+    def test_v2_history_also_extends(self):
+        future = timezone.now() + timedelta(hours=20)
+        PriceHistory.objects.create(date_time=future, agile=0, day_ahead=100)
+
+        response = self.client.get("/v2/history/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["custom_end_date"], future.date().isoformat())
+
+    def test_window_does_not_regress_without_future_data(self):
+        """Without a future-dated confirmed price the window still ends at
+        "now" as before — the fix must not always jump forward."""
+        response = self.client.get("/history/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["custom_end_date"], timezone.now().date().isoformat())
+
+    def test_custom_window_is_unaffected(self):
+        """An explicit custom date range is the user's own choice and must not
+        be silently extended past what they asked for."""
+        future = timezone.now() + timedelta(hours=20)
+        PriceHistory.objects.create(date_time=future, agile=0, day_ahead=100)
+        yesterday = (timezone.now() - timedelta(days=1)).date().isoformat()
+        today = timezone.now().date().isoformat()
+
+        response = self.client.get(f"/history/?window=custom&start_date={yesterday}&end_date={today}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["custom_end_date"], today)
+
+    def test_future_confirmed_price_appears_in_the_chart_data(self):
+        """Not just the date-picker default — the extra confirmed row must
+        actually reach the query that builds the chart/table."""
+        future = timezone.now() + timedelta(hours=20)
+        PriceHistory.objects.create(date_time=future, agile=0, day_ahead=123.45)
+
+        response = self.client.get("/history/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["actual_count"], 1)
+
+
 class ExportPricingTests(TestCase):
     def test_national_export_coefficients_are_arithmetic_mean(self):
         regional_factors = [
