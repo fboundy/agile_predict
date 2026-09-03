@@ -635,7 +635,16 @@ class HistoryView(TemplateView):
         if window_key not in self.window_options:
             window_key = "last-2-weeks"
 
-        end = timezone.now()
+        # Confirmed (settled) Agile prices are published ahead of "now" — the
+        # release time is 16:00 for the next day — so PriceHistory routinely
+        # already holds rows beyond the current moment. Capping the rolling
+        # windows at `timezone.now()` hid those already-known prices from the
+        # chart and the accuracy table for no reason; run to whichever is later.
+        now = timezone.now()
+        latest_confirmed = (
+            PriceHistory.objects.order_by("-date_time").values_list("date_time", flat=True).first()
+        )
+        end = max(now, latest_confirmed) if latest_confirmed else now
         start = end - timedelta(days=self.window_options[window_key]["days"] or 14)
         custom_start_date = start.date().isoformat()
         custom_end_date = end.date().isoformat()
