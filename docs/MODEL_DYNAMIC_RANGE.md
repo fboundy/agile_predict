@@ -3769,3 +3769,117 @@ detection columns will be `n/a` and the honest answer will be "not yet testable"
 same event-scarcity that made the 2026-08-23 review inconclusive. The dispersion and
 aggregate-error columns will still be readable. Judge it on the bands that have
 events, and do not read an empty negative band as a null result.
+
+---
+
+# Claude — weekly review: dev raw, dev corrected, and prod, over 2026-09-04 to 09-11
+
+Appended 2026-09-11, at the owner's request. This is the first review with a real
+event budget since the trial began — the previous reviews (08-23, and every dry
+run of the post-processing correction) landed on weeks with no negative prices at
+all. This week had a genuine 37-slot negative-price event (04–06 Sep) and a
+sustained elevated/high-price run (07–11 Sep, up to £262.52). The headline result
+is not the one the trial was expecting.
+
+## Preconditions
+
+Both boxes published cleanly all week: dev 38 runs (5/day), prod 30 runs (4/day),
+zero failed jobs on either side. Dev's latest forecast carries `day_ahead_corrected`
+on all 652 rows; the calibration table grew to 3 121 rows. Confirmed prod is still
+the pre-fix build (`TRAIN_HORIZON_DAYS` absent, `postprocess.py` absent).
+
+Confirmed the two databases agree on what actually happened: the 27 negative
+settled slots visible in prod's `PriceHistory` for 04–06 Sep are byte-identical to
+dev's (same timestamps, same prices to the penny) for the rows checked — this is a
+model-behaviour difference, not a data discrepancy between the two boxes.
+
+Unlike the 08-23 trial review, dev and prod are scored over the **identical
+calendar week** here, not two different windows — so the difference-in-differences
+correction that review needed (to separate "model" from "which days landed in
+whose window") does not apply. The two cells share the same weather and the same
+settled prices; the only real confound is that dev published more runs than prod
+over the same days (38 vs 30), so the pooled forecast/actual pair counts differ in
+composition. Noted, not corrected for — it is a minor effect next to what follows.
+
+## The three-way comparison, ≥2 d horizon, pooled forecast/actual pairs
+
+| | dev `day_ahead` (raw, widened window) | dev `day_ahead_corrected` | **prod `day_ahead` (old, narrow window)** |
+|---|---|---|---|
+| n (pairs) | 4 194 | 4 194 | 3 300 |
+| RMSE | 42.03 | 46.41 | **35.90** |
+| MAE | 34.42 | 37.47 | **28.57** |
+| sd ratio | 1.096 | 1.287 | 1.026 |
+| slope | 0.732 | 0.643 | **0.818** |
+| negative recall (n=35/35/24) | **0.000** | 0.257 | **0.375** |
+| negative precision | — | 0.071 | **1.000** |
+| cheap recall (n=114/114/85) | 0.684 | **0.939** | 0.882 |
+| expensive recall (n=780/780/617) | 0.487 | **0.535** | 0.431 |
+| expensive precision | 0.931 | 0.923 | **0.940** |
+| spike recall (n=58/58/46) | 0.000 | 0.000 | 0.000 |
+
+**Prod — the model this trial exists to replace — has the best aggregate error,
+the best negative-price precision, and the best negative-price recall of the three,
+on the week that actually contained a negative-price event.** Dev's own raw model
+predicts *zero* negative prices, the same defect the whole investigation opened
+with five weeks ago. The correction lifts that to 0.257 recall, a real
+improvement over dev's raw model — but it still falls short of what the
+un-fixed production model achieved this week, and it does so at a steep precision
+cost (126 flagged, 9 correct, versus prod's 9 flagged, 9 correct).
+
+This is not a small-print caveat. It is the headline of this review, and it
+inverts the direction of travel the trial was measuring.
+
+## What is and is not surprising here
+
+**Not surprising:** the correction trades aggregate accuracy for tail recall,
+exactly as designed and exactly as the held-out-day evidence predicted. RMSE
+42.03 → 46.41 (+10.4%), MAE 34.42 → 37.47 (+8.9%), both regime biases and the
+dispersion ratio move further from ideal. Expensive-band recall improves
+(0.487 → 0.535) without losing precision. That part of the story matches what was
+promised.
+
+**Surprising, and not yet explained:** dev's *raw* model — no correction involved
+— has worse negative-price recall than prod's raw model, on a week that finally
+had negative prices to detect. Every measurement since the training-window fix
+landed (2026-08-16 → today) has shown the widened window *improving* negative
+detection relative to the narrow one: 0.000 → 0.219 in the original offline
+reconstruction, 0.000 in every empty week since. This is the first week with real
+negative events to test it against, and on that test the widened window does
+worse than the model it was built to fix.
+
+## Two questions this raises, neither answered here
+
+1. **Is this event outside the widened-window model's learned response surface in
+   a way the narrow model's happened to reach anyway?** One candidate: if the
+   weather forecast for 04–06 Sep was unusually reliable even several days out (a
+   settled high-pressure, high-solar pattern), the narrow model's `22–46 h`-trained
+   response function might extrapolate correctly from sharp-looking blunt inputs,
+   while the widened model — trained on a mix of sharp and blunt inputs across
+   every horizon — may have learned to discount exactly the kind of extreme signal
+   that was, this time, genuinely reliable. This is a hypothesis, not a finding;
+   it has not been tested.
+2. **Is one event, one week, enough to act on?** No. It is the first week with
+   any negative-price signal at all, which makes it the most informative week the
+   trial has had — but "most informative so far" and "sufficient to decide" are
+   different bars, and this document has been burned before by drawing conclusions
+   from a single week (the 08-23 review) and from pooled-not-paired comparisons.
+
+## Position
+
+- **Do not deploy the widened training window on the strength of the improvement
+  narrative.** That narrative rested entirely on offline reconstruction and
+  weeks with no negative prices to check it against. The one week that could
+  check it shows the opposite of what was predicted.
+- **Do not deploy the post-processing correction either.** It does what it was
+  designed to do relative to dev's own raw model, but it is fixing a problem on
+  top of a model that this week under-performed the one it was meant to replace.
+- **The event-budget-first discipline earned its keep again.** Had this review
+  landed on another empty week, "still not testable" would have been the honest
+  answer for a third time running. It did not, and the answer it produced was not
+  the one anybody expected — which is exactly the value of insisting on evidence
+  over another quiet week of offline reconstruction.
+- **Next step: root-cause the 04–06 Sep miss**, using the same tools this
+  investigation has used throughout — pull the actual wind/solar/demand inputs
+  each model saw for those slots, at the horizons where prod succeeded and dev
+  failed, and see what differs. Until that exists, "widen the window" is back to
+  being a hypothesis rather than a confirmed fix.
