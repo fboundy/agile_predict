@@ -3883,3 +3883,109 @@ worse than the model it was built to fix.
   each model saw for those slots, at the horizons where prod succeeded and dev
   failed, and see what differs. Until that exists, "widen the window" is back to
   being a hypothesis rather than a confirmed fix.
+
+## Root cause of the 04–06 Sep miss, and what it implies for detecting extremes
+
+That root-cause work is now done. Findings below are from direct inspection of
+dev's stored per-slot inputs/outputs (`ForecastData`), prod's equivalent CSV pull
+via the worker machine, and the actual reconstructed training set for the
+`2026-09-04T10:17:18Z` dev run (the run responsible for missing the event) — not
+inference from aggregate metrics.
+
+**The mechanism, verified at matched horizon and matched surplus.** At ~2 d
+horizon, holding surplus (`demand − bm_wind − emb_wind − solar − nuclear`)
+roughly fixed at ≈ −11 GW, dev's raw prediction swings by nearly 70 £/MWh
+depending on whether the slot is a high-demand weekday or a low-demand-weekend
+trough:
+
+| slot | GB day/time | horizon | demand | weekend | surplus | raw pred | corrected |
+|---|---|---|---|---|---|---|---|
+| 2026-09-04T13:00Z | Fri | 2.11 d | 21 970 MW | 0 | −11.61 GW | **+74.7** | +35.3 |
+| 2026-09-06T10:30Z | Sun | 2.01 d | 15 331 MW | 1 | −11.00 GW | **+4.1** | −38.6 |
+| 2026-09-06T14:30Z | Sun | 2.18 d | 16 014 MW | 1 | −13.89 GW | **+10.0** | −40.8 |
+
+Same surplus, same horizon band, ~70 £/MWh apart in the raw model's output. The
+actual settled prices for the Sunday slots were deeply negative (part of the 37
+negative slots for the week); prod's narrow-window model crossed zero on exactly
+these 9 slots (09-06 10:30–14:30Z) and nowhere else in its 13 correct negative
+calls at 2–4 d horizon — 100% of prod's hits concentrate in the same window
+where dev's raw model was most damped.
+
+**Why: not a training-data absence, a training-data *composition* effect.**
+Reconstructing the actual training set the 09-04 10:17Z run used (60-day
+lookback, `TRAIN_HORIZON_DAYS=14`, one run/day via
+`select_daily_training_forecasts` → 30 325 rows): weekend rows are present
+(27.8% of the set) and low-demand rows are present (851 rows below 17 000 MW,
+92.8% of them weekend) — so this is not a case of the regime being absent from
+training. But within that low-demand/weekend band, the settled-price
+distribution is dominated by moderate prices, not extreme ones: **median £80.2,
+max £171.2, min only −£30.2**. Weekend rows overall average £103 vs £125 for
+weekday, a ~20 £/MWh gap — nowhere near what a genuine −£30 to −£60 trough
+needs. The ensemble has correctly learned "low demand + weekend → moderately
+below-average price," and a bivariate regression pulled toward that regime's
+central tendency will under-shoot a specific week's unusually deep trough, because
+genuinely negative outcomes are a thin minority of that regime's history, not
+because the regime itself is unseen.
+
+**The post-processing correction is not clip-limited.** The two apparently-
+suspicious corrected values (−38.6, −40.8) were checked against `CLIP_SD=4.0`
+bounds refit from the current calibration table (`clip=[-47.8, +279.9]`,
+n=3121) — both are 7–9 points clear of the floor, and they differ from each
+other in proportion to their differing (pred, surplus) inputs rather than
+collapsing to one flat rail value. That rules out the hard-clip design as the
+explanation and confirms the correction is producing a genuine, if insufficient,
+graded response: it moves the widened model's damped +4.1/+10.0 into negative
+territory, just not far enough to match the −60-ish actual outcomes, because a
+2-parameter (predicted, surplus, surplus²) correction can only partially repair
+a base model whose raw prediction is itself regime-blind to begin with.
+
+**A feature-set gap this event exposes directly.** The active `_BASE` feature
+list (`prices/forecast_features.py:27`) is `solar, emb_wind, demand, peak, time,
+days_ago, weekend, bank_holiday, dispatchable_capacity` — it does **not**
+include `bm_wind` (BM-unit/transmission-connected wind), which the code
+comment at line 25–26 already flags as "demoted — does it add back?" and never
+resolved. In the 09-06 event, `bm_wind` (11 178–13 358 MW) was 4–5× larger than
+`emb_wind` (2 264–2 845 MW) — i.e. the dominant wind term driving the surplus
+deficit is one the base ensemble never sees. `dispatchable_capacity` (renamed
+from `opmr_surplus`, migration 0048) is a NESO OPMR generation-availability
+margin (`gen_availability + max_ic_import − opmr_total − constrained_plant`) —
+it does not substitute for wind output. There is also an `opmr_national_surplus`
+field, populated by the same OPMR backfill (`backfill_opmr.py:160`) alongside
+`dispatchable_capacity`, that is stored on every `ForecastData` row but appears
+in **no** feature set in `EXPERIMENT_FEATURE_SETS` or `FEATURE_SETS` — a
+NESO-published system-margin number, already collected, currently unused.
+
+## Likely ways to improve extreme-price detection, ranked by evidence strength
+
+1. **Re-run the `bm_wind` add-back experiment, specifically scored on tail
+   recall, not just RMSE.** It's already wired up (`EXPERIMENT_FEATURE_SETS["bm_wind"]`)
+   and already flagged in-code as unresolved. The 09-06 event is a concrete case
+   where the currently-excluded wind term was the dominant supply-side driver of
+   a missed extreme — a natural test case, not a hypothetical one.
+2. **Feed `opmr_national_surplus` into a feature set.** It's NESO's own
+   published margin figure, already harvested and stored, and directly
+   analogous to the `surplus` term the post-processing correction relies on —
+   but the base ensemble has never been trained with it. Cheapest of these to
+   try: no new data collection required.
+3. **Target the regime-conditional damping directly**, e.g. an explicit
+   interaction feature (`weekend × demand`, or a coarse demand-regime bucket)
+   or upweighting historically-negative/near-negative rows during training, so
+   the loss function stops treating a rare deep trough as noise around a
+   regime's typical (positive) mean. This attacks the verified mechanism
+   head-on rather than working around it post hoc.
+4. **Don't just keep widening the window — consider keeping both.** Prod's
+   narrow-window model has worse aggregate error (RMSE 35.90 vs dev raw's
+   42.03) but demonstrably better negative recall and precision this week.
+   Blending a narrow-window "tail specialist" with the wide-window general
+   model (rather than treating "widen vs not" as a single either/or choice) is
+   worth testing before either fully replaces the other.
+5. **Keep leaning on the post-processing correction, but don't expect it to
+   carry the whole fix.** It is doing real, non-clip-limited work (recall 0.000
+   → 0.257) but a 3-parameter correction on top of a regime-blind base model has
+   a ceiling; (1)–(3) address the base model directly and should do more per
+   unit of effort than further correction tuning.
+
+None of this changes the position above: **do not deploy the widened window or
+the correction on the strength of the improvement narrative.** It does give the
+next iteration concrete, evidence-backed things to try rather than another
+offline reconstruction.
