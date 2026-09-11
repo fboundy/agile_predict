@@ -3989,3 +3989,65 @@ None of this changes the position above: **do not deploy the widened window or
 the correction on the strength of the improvement narrative.** It does give the
 next iteration concrete, evidence-backed things to try rather than another
 offline reconstruction.
+
+## Candidate 1 tested: bm_wind add-back — no improvement, and a bigger surprise
+
+**Result: negative.** Retrained the actual production feature set for that
+week (`full_fr` — confirmed via `UpdateJob` id 690's stored
+`feature_importance`, *not* plain `_BASE`; the two differ) both with and
+without `bm_wind` added, on the identical 30,325-row training set, evaluated
+on the same 4,194 pooled ≥2d pairs `compare_trial` uses. Across 11 fits per
+candidate (8 model random seeds + 3 training-row-order permutations, to
+separate signal from fit noise):
+
+| | `full_fr` (actual set) | `full_fr` + `bm_wind` |
+|---|---|---|
+| RMSE (mean across 11 fits) | 16.81 ± 0.17 | 17.56 ± 0.15 |
+| negative recall (mean) | 0.899 ± 0.019 | 0.899 ± 0.014 |
+
+Identical recall, RMSE modestly *worse* with `bm_wind` added. **Do not pursue
+`bm_wind` add-back** — the natural experiment this event seemed to offer did
+not pay off; whatever the base model is missing for this regime, it isn't
+simply "can't see BM-connected wind."
+
+**A bigger, unresolved finding surfaced getting to that result.** Both
+retrained candidates reliably predicted the 09-06 event **correctly negative
+in all 22 fits** (mean ≈ -£14, actual -£17.4) — yet the real, actually-
+deployed model from that exact training cutoff (`UpdateJob` 690, the
+2026-09-04T10:17:18Z run) stored a prediction of **+£4.1** for the identical
+slot. Same cutoff, same verified 30,325-row training set, same feature list
+(confirmed against the run's own stored `feature_importance`), same fixed
+seeds (42 everywhere in production's own `CATBOOST_PARAMS`/`LGBM_PARAMS`/
+`EXTRA_TREES_REGRESSOR_PARAMS`) — a from-scratch retrain does not reproduce
+what actually shipped that day. Ruled out, in order:
+
+1. **Fit instability** — no. 11 seed/shuffle variants per candidate all land
+   within recall 0.886–0.943 and the target slot is negative in 100% of them.
+   Tree-ensemble variance is not the explanation.
+2. **Wrong feature set** — no, not the whole story. The first backtest pass
+   did use the wrong baseline (plain `_BASE` instead of `full_fr`), which
+   inflated confidence in the anomaly; correcting it narrowed but did not
+   close the gap — `full_fr` alone still predicts confidently negative.
+3. **Data completeness drift** (production destructively prunes `Forecasts`
+   every update cycle — `update.py:622–645` — so today's DB might be missing
+   or reshaped relative to what existed live on 09-04) — checked and no:
+   `fr_wind`/`fr_rad`/`nuclear`/`gas_ttf` are 0% null and `fr_nuclear` is ~7%
+   null in today's pre-cutoff training pool; daily run survivorship across the
+   52 days before the cutoff averages a healthy ~4/day with no gaps.
+4. **Code changed between 09-04 and today** — no commits touched
+   `forecast_features.py` or `update.py` in that window (`git log`, empty).
+
+**Status: genuinely unresolved.** This means an offline retrain-and-replay
+backtest — the technique this whole investigation and the ranked candidate
+list rests on — does not currently reproduce what production actually did,
+for reasons none of the obvious suspects explain. Until this is understood,
+treat any future offline-backtest verdict (including the negative result on
+`bm_wind` above) as informative but not fully trustworthy: it may be
+measuring "what a clean retrain does today" rather than "what would actually
+have shipped." Candidate next steps, not yet done: diff `train_X`/`train_y`
+values (not just row count) between a resaved snapshot and a fresh query to
+check for silent dtype/ordering drift beyond what row-shuffling already ruled
+out; check whether `update_worker`'s long-running process pins package
+versions differently from the venv used here; or accept this as a standing
+caveat and prioritize *live* re-scoring (next week's real forecasts under a
+candidate change) over further offline reconstruction.
