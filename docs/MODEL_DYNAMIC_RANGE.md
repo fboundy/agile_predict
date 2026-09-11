@@ -4037,17 +4037,46 @@ what actually shipped that day. Ruled out, in order:
 4. **Code changed between 09-04 and today** — no commits touched
    `forecast_features.py` or `update.py` in that window (`git log`, empty).
 
-**Status: genuinely unresolved.** This means an offline retrain-and-replay
-backtest — the technique this whole investigation and the ranked candidate
-list rests on — does not currently reproduce what production actually did,
-for reasons none of the obvious suspects explain. Until this is understood,
-treat any future offline-backtest verdict (including the negative result on
-`bm_wind` above) as informative but not fully trustworthy: it may be
-measuring "what a clean retrain does today" rather than "what would actually
-have shipped." Candidate next steps, not yet done: diff `train_X`/`train_y`
-values (not just row count) between a resaved snapshot and a fresh query to
-check for silent dtype/ordering drift beyond what row-shuffling already ruled
-out; check whether `update_worker`'s long-running process pins package
-versions differently from the venv used here; or accept this as a standing
-caveat and prioritize *live* re-scoring (next week's real forecasts under a
-candidate change) over further offline reconstruction.
+**Status: genuinely unresolved, and now more thoroughly checked.** Four more
+hypotheses tested and ruled out beyond the original four:
+
+5. **Library version drift** — no. `catboost`/`lightgbm`/`numpy`/`pandas`
+   dist-info timestamps on the CT are all from May/June 2026, untouched since;
+   `requirements.txt` hasn't changed since 2026-06-30.
+6. **GB60 blend contamination of the stored "raw" value** — no. Passthrough
+   would mean stored `day_ahead` ≈ actual (within £0.005); +£4.1 vs -£17.45 is
+   off by over £21, nowhere near that signature.
+7. **`fr_nuclear` was NULL for the entire flagged run** — real, but not
+   causal. Confirmed directly: all 652 `ForecastData` rows for run 1923 (the
+   09-04T10:17:18Z run) have `fr_nuclear = None`, matching a live upstream
+   failure recorded in that run's own `api_status`
+   (`rte_nuclear: {"rows": 0, "error": "no data"}`). The upstream source turns
+   out to fail often — 19/107 (18%) of update runs in the three weeks before
+   the cutoff show the same failure — so this is an ongoing, not a one-off,
+   data-quality issue worth its own note. But it isn't the explanation here:
+   refitting the identical recipe with `fr_nuclear` dropped entirely changed
+   nothing (RMSE 16.77 → 16.14, target-slot predictions still -11 to -17
+   across both). Whatever's driving the gap, it survives removing the one
+   feature that was verifiably corrupted for that specific run.
+8. **The stored value itself was misremembered/mistyped earlier in this
+   investigation** — no. Re-queried fresh, direct from the DB: `day_ahead` =
+   4.103847416143809, `day_ahead_corrected` = -38.586, actual = -17.45, and
+   every input feature (`solar=9280, emb_wind=2264, bm_wind=11178,
+   demand=15331, nuclear=3610, fr_nuclear=None, fr_wind=4.3, fr_rad=553,
+   gas_ttf=71.58, dispatchable_capacity=42147`) matches exactly what was used
+   throughout this backtest. The anomaly is confirmed real, not an artifact of
+   a stale number carried across the session.
+
+Eight hypotheses now eliminated: fit instability, wrong feature set, data-
+completeness/pruning drift, code changes, library version drift, GB60 blend
+contamination, the one verifiably-corrupted feature for that run, and a
+transcription error. None of the readily-available forensic angles explain
+it. Further diagnosis from here would mean instrumenting a *live* run (add
+temporary debug logging to `update_worker` and wait for a real cycle) rather
+than more after-the-fact archaeology on data that production continuously
+prunes and rewrites. **Recommendation: stop relying on offline
+retrain-and-replay to validate candidate changes for now, and prioritize live
+re-scoring** — deploy a candidate to `dev` only, let it run for real, and
+score its own stored predictions against settled prices the way the original
+three-way comparison did, rather than trying to reconstruct historical runs
+after the fact.
