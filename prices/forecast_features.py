@@ -64,6 +64,20 @@ EXPERIMENT_FEATURE_SETS = {
     "melngc":               _BASE + ["melngc_margin"],
     "gas_av_fr":            _BASE + _FR_WEATHER + ["gas_availability"],
     "nuclear_gas_av":       _BASE + ["nuclear", "gas_availability"],
+
+    # ── Live-deployed on dev 2026-09-11 for extreme-detection re-scoring ───
+    # (see docs/MODEL_DYNAMIC_RANGE.md). Adds bm_wind (the dominant wind term
+    # in the 09-06 miss, currently excluded from every set above except its
+    # own single-feature "bm_wind" row) and opmr_national_surplus (a
+    # NESO-published margin figure, collected by backfill_opmr.py since
+    # migration 0048 but never previously used as a model input) on top of
+    # "full_fr", the feature set actually running on dev before this change.
+    # An offline backtest found bm_wind alone unhelpful, but that backtest
+    # methodology was separately shown not to reproduce live production
+    # behaviour for reasons that survived eight ruled-out hypotheses — so
+    # this is being re-tested live rather than trusted from the offline
+    # result alone.
+    "full_fr_bm_opmr":      _BASE + _FR_WEATHER + _FUEL + ["fr_nuclear", "bm_wind", "opmr_national_surplus"],
 }
 
 FEATURE_SETS = {
