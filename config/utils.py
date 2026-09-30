@@ -1243,6 +1243,25 @@ def get_agile(start=pd.Timestamp("2023-07-01"), tz="GB", region="G"):
     return df.rename("agile")
 
 
+def stepped_setting(key, index):
+    """Value of a date-keyed GLOBAL_SETTINGS step table (e.g. SHIFTS, VAT) at each
+    timestamp in ``index``. Each entry applies from its GB-local start time onwards;
+    timestamps before the first entry take the first value."""
+    table = pd.Series(GLOBAL_SETTINGS[key]).astype(float)
+    table.index = pd.to_datetime(table.index).tz_localize("GB")
+    table = table.sort_index()
+    index = pd.DatetimeIndex(index).tz_convert("GB")
+    pos = table.index.searchsorted(index, side="right") - 1
+    return table.to_numpy()[pos.clip(min=0)]
+
+
+def vat_scale(index):
+    """Multiplier converting import prices from the 5%-VAT basis the region factors
+    were fitted on to the VAT rate in force at each timestamp."""
+    base = 1 + GLOBAL_SETTINGS.get("FACTORS_VAT", 0.05)
+    return (1 + stepped_setting("VAT", index)) / base
+
+
 def day_ahead_to_agile(df, reverse=False, region="G", export=False):
     df.index = df.index.tz_convert("GB")
     x = pd.DataFrame(df).set_axis(["In"], axis=1)
@@ -1270,16 +1289,11 @@ def day_ahead_to_agile(df, reverse=False, region="G", export=False):
         name = "day_ahead" if reverse else "agile_export"
         return x["Out"].rename(name)
 
-    shifts = pd.Series(GLOBAL_SETTINGS["SHIFTS"])
-    shifts.index = pd.to_datetime(shifts.index).tz_localize("GB")
-
-    unique_index = pd.DatetimeIndex(x.index.unique()).sort_values()
-    shifts = pd.concat([shifts, pd.Series(index=[unique_index[-1]], data=[shifts.iloc[-1]])]).sort_index()
-    shifts = shifts.resample("30min").ffill()
-    shifts = shifts.reindex(shifts.index.union(unique_index)).sort_index().ffill().bfill().reindex(unique_index)
-    x["Shift"] = shifts.reindex(x.index).to_numpy()
+    x["Shift"] = stepped_setting("SHIFTS", x.index)
+    x["VatScale"] = vat_scale(x.index)
 
     if reverse:
+        x["Out"] /= x["VatScale"]
         x.loc[x["Peak"], "Out"] -= regions[region]["factors"][1]
         x.loc[x["Peak"], "Out"] -= x.loc[x["Peak"], "Shift"]
         x["Out"] /= regions[region]["factors"][0]
@@ -1287,6 +1301,7 @@ def day_ahead_to_agile(df, reverse=False, region="G", export=False):
         x["Out"] *= regions[region]["factors"][0]
         x.loc[x["Peak"], "Out"] += regions[region]["factors"][1]
         x.loc[x["Peak"], "Out"] += x.loc[x["Peak"], "Shift"]
+        x["Out"] *= x["VatScale"]
 
     name = "day_ahead" if reverse else "agile"
     return x["Out"].rename(name)

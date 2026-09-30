@@ -27,7 +27,7 @@ from django.views.generic import FormView, TemplateView
 from plotly.subplots import make_subplots
 
 from config.settings import GLOBAL_SETTINGS
-from config.utils import day_ahead_to_agile, import_agile_to_export_agile, NESO_MIN_FORECAST_ROWS
+from config.utils import day_ahead_to_agile, import_agile_to_export_agile, vat_scale, NESO_MIN_FORECAST_ROWS
 
 from .external_forecasts import fetch_agileforecast, fetch_x2r, region_rows_from_g
 from .forms import ForecastForm, RegistrationForm
@@ -401,6 +401,10 @@ class AboutView(TemplateView):
         applicable = [v for d, v in sorted(shifts.items()) if pd.Timestamp(d, tz="GB") <= now]
         context["conversion_regions"] = rows
         context["peak_shift"] = applicable[-1] if applicable else 0.0
+        vat_steps = GLOBAL_SETTINGS.get("VAT", {})
+        vat_applicable = [v for d, v in sorted(vat_steps.items()) if pd.Timestamp(d, tz="GB") <= now]
+        context["import_vat_pct"] = round(100 * (vat_applicable[-1] if vat_applicable else 0.0), 1)
+        context["factors_vat_pct"] = round(100 * GLOBAL_SETTINGS.get("FACTORS_VAT", 0.05), 1)
         return context
 
 
@@ -3244,12 +3248,13 @@ class GraphV2View(V2NavMixin, TemplateView):
             shap_rows = [r for r in fd_latest_rows if r["shap_top_features"] is not None]
             for row in shap_rows:
                 ts_ms = int(pd.Timestamp(row["date_time"]).timestamp() * 1000)
+                vat = vat_scale([row["date_time"]])[0]
                 shap_data[str(ts_ms)] = {
                     "time": pd.Timestamp(row["date_time"]).tz_convert("GB").strftime("%d %b %H:%M"),
-                    "price": round(row["day_ahead"] * _shap_m + _shap_a, 1) if row["day_ahead"] is not None else None,
+                    "price": round((row["day_ahead"] * _shap_m + _shap_a) * vat, 1) if row["day_ahead"] is not None else None,
                     "contributors": [
                         {"label": _FEATURE_LABELS.get(item["feature"], item["feature"]),
-                         "value": round(item["value"] * _shap_m, 2)}
+                         "value": round(item["value"] * _shap_m * vat, 2)}
                         for item in (row["shap_top_features"] or [])
                     ],
                 }
@@ -3629,8 +3634,9 @@ class StatsV2View(V2NavMixin, StatsView):
 
         factor = GLOBAL_SETTINGS["REGIONS"]["X"]["factors"][0]
         created = [pd.Timestamp(r["created_at"]) for r in qs]
-        means = np.array([r["mean"] * factor for r in qs])
-        stdevs = np.array([(r["stdev"] or 0) * factor for r in qs])
+        vat = vat_scale(created)
+        means = np.array([r["mean"] for r in qs]) * factor * vat
+        stdevs = np.array([r["stdev"] or 0 for r in qs]) * factor * vat
         upper = (means + stdevs).tolist()
         lower = np.maximum(0, means - stdevs).tolist()
 
@@ -3967,7 +3973,8 @@ class StatsV2View(V2NavMixin, StatsView):
 
         sorted_items = sorted(shap_imp.items(), key=lambda x: x[1])
         labels = [_FEATURE_LABELS.get(k, k) for k, _ in sorted_items]
-        values = [v * _AF_M for _, v in sorted_items]
+        vat = vat_scale([pd.Timestamp.now(tz="UTC")])[0]
+        values = [v * _AF_M * vat for _, v in sorted_items]
 
         fig = go.Figure()
         fig.add_trace(go.Bar(
@@ -4014,10 +4021,11 @@ class StatsV2View(V2NavMixin, StatsView):
 
         explanations = []
         for row in rows:
+            vat = vat_scale([row.date_time])[0]
             contributors = [
                 {
                     "label": _FEATURE_LABELS.get(item["feature"], item["feature"]),
-                    "value": round(item["value"] * _AF_M, 2),
+                    "value": round(item["value"] * _AF_M * vat, 2),
                 }
                 for item in (row.shap_top_features or [])
             ]
@@ -4025,7 +4033,7 @@ class StatsV2View(V2NavMixin, StatsView):
                 continue
             explanations.append({
                 "time": row.date_time,
-                "price": round(row.day_ahead * _AF_M + _AF_A, 1) if row.day_ahead is not None else None,
+                "price": round((row.day_ahead * _AF_M + _AF_A) * vat, 1) if row.day_ahead is not None else None,
                 "contributors": contributors,
             })
         return explanations

@@ -419,6 +419,14 @@ GLOBAL_SETTINGS = {
         "2020-01-01 00:00:00": 0.0,
         "2026-04-01 00:00:00": -3.5,
     },
+    # VAT on domestic import, time-stepped like SHIFTS. The REGIONS import factors and
+    # SHIFTS were fitted on value_inc_vat at 5%, so import output is scaled by
+    # (1 + VAT) / (1 + FACTORS_VAT). Export is not subject to VAT and is unaffected.
+    "FACTORS_VAT": 0.05,
+    "VAT": {
+        "2020-01-01 00:00:00": 0.05,
+        "2026-10-01 00:00:00": 0.0,
+    },
     "REGIONS": {
         "X": {
             "name": "National Average",

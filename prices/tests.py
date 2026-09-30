@@ -303,6 +303,31 @@ class ExportPricingTests(TestCase):
 
         self.assertEqual(len(agile), 2)
 
+    def test_import_conversion_removes_vat_from_2026_10_01(self):
+        # 2026-09-30 23:30 BST is the last slot at 5% VAT; 2026-10-01 00:00 BST the first at 0%.
+        index = pd.to_datetime([
+            "2026-09-30T22:30:00Z", "2026-09-30T23:00:00Z",
+            "2026-09-30T15:00:00Z", "2026-10-01T15:00:00Z",
+        ])
+        day_ahead = pd.Series(index=index, data=[100.0] * 4)
+        m, a = GLOBAL_SETTINGS["REGIONS"]["A"]["factors"]
+
+        agile = day_ahead_to_agile(day_ahead.copy(), region="A")
+
+        self.assertAlmostEqual(agile.iloc[0], 100 * m)
+        self.assertAlmostEqual(agile.iloc[1], 100 * m / 1.05)
+        self.assertAlmostEqual(agile.iloc[2], 100 * m + a - 3.5)
+        self.assertAlmostEqual(agile.iloc[3], (100 * m + a - 3.5) / 1.05)
+
+        # Round trip recovers the day-ahead price on both sides of the change.
+        back = day_ahead_to_agile(agile, reverse=True, region="A")
+        for value in back:
+            self.assertAlmostEqual(value, 100.0)
+
+        # Export is not subject to VAT.
+        export = day_ahead_to_agile(day_ahead.iloc[:2].copy(), region="A", export=True)
+        self.assertAlmostEqual(export.iloc[0], export.iloc[1])
+
     def test_forecast_form_has_export_pricing_option(self):
         form = ForecastForm()
 
