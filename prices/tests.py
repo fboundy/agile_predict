@@ -190,6 +190,42 @@ class ExportPricingTests(TestCase):
         self.assertIn("show_export_pricing", form.fields)
 
 
+class VATPricingTests(TestCase):
+    def test_vat_rate_changes_according_to_schedule(self):
+        # Region G factors: (0.21, 12), Shift after 2026-04-01 is -3.3333
+        # Forward formula (non-peak): (day_ahead * 0.21 + (-3.3333)) * (1 + vat)
+        # With day_ahead = 100: (21 - 3.3333) = 17.6667
+        # 5% VAT: 17.6667 * 1.05 = 18.550035
+        # 0% VAT: 17.6667 * 1.00 = 17.6667
+        times = [
+            "2026-09-30 23:30:00",  # Prior to 1st Oct 2026 -> 5%
+            "2026-10-01 00:00:00",  # On 1st Oct 2026 -> 0%
+            "2026-12-15 12:00:00",  # During 0% VAT period -> 0%
+            "2027-03-31 23:30:00",  # Last day of 0% VAT -> 0%
+            "2027-04-01 00:00:00",  # On 1st Apr 2027 -> 5%
+            "2027-06-01 12:00:00",  # After 1st Apr 2027 -> 5%
+        ]
+        index = pd.to_datetime(times).tz_localize("GB")
+        day_ahead = pd.Series(index=index, data=[100.0] * len(times))
+
+        agile = day_ahead_to_agile(day_ahead, region="G")
+
+        # 5% VAT periods
+        self.assertAlmostEqual(agile.iloc[0], 18.550035, places=4)
+        self.assertAlmostEqual(agile.iloc[4], 18.550035, places=4)
+        self.assertAlmostEqual(agile.iloc[5], 18.550035, places=4)
+
+        # 0% VAT periods
+        self.assertAlmostEqual(agile.iloc[1], 17.6667, places=4)
+        self.assertAlmostEqual(agile.iloc[2], 17.6667, places=4)
+        self.assertAlmostEqual(agile.iloc[3], 17.6667, places=4)
+
+        # Verify roundtrip with reverse=True
+        reversed_day_ahead = day_ahead_to_agile(agile, reverse=True, region="G")
+        for orig, recovered in zip(day_ahead, reversed_day_ahead):
+            self.assertAlmostEqual(orig, recovered, places=4)
+
+
 class ForecastFeatureTests(TestCase):
     def test_resolve_feature_columns_supports_named_sets_and_drops(self):
         features = resolve_feature_columns(feature_set="weather", drop_features=["rad"])

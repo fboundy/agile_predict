@@ -728,19 +728,24 @@ def day_ahead_to_agile(df, reverse=False, region="G", export=False):
         name = "day_ahead" if reverse else "agile_export"
         return x["Out"].rename(name)
 
+    unique_index = pd.DatetimeIndex(x.index.unique()).sort_values()
+
     shifts = pd.Series(GLOBAL_SETTINGS["SHIFTS"])
     shifts.index = pd.to_datetime(shifts.index).tz_localize("GB")
-
-    unique_index = pd.DatetimeIndex(x.index.unique()).sort_values()
-    shifts = pd.concat([shifts, pd.Series(index=[unique_index[-1]], data=[shifts.iloc[-1]])]).sort_index()
-    shifts = shifts.resample("30min").ffill()
-    shifts = shifts.reindex(shifts.index.union(unique_index)).sort_index().ffill().bfill().reindex(unique_index)
+    shifts = shifts.reindex(shifts.index.union(unique_index).sort_values()).ffill().bfill().reindex(unique_index)
     x["Shift"] = shifts.reindex(x.index).to_numpy()
 
-    vat = GLOBAL_SETTINGS["VAT"]
+    vat_setting = GLOBAL_SETTINGS["VAT"]
+    if isinstance(vat_setting, dict):
+        vat = pd.Series(vat_setting)
+        vat.index = pd.to_datetime(vat.index).tz_localize("GB")
+        vat = vat.reindex(vat.index.union(unique_index).sort_values()).ffill().bfill().reindex(unique_index)
+        x["VAT"] = vat.reindex(x.index).to_numpy()
+    else:
+        x["VAT"] = float(vat_setting)
 
     if reverse:
-        x["Out"] /= (1 + vat)
+        x["Out"] /= (1 + x["VAT"])
         x.loc[x["Peak"], "Out"] -= regions[region]["factors"][1]
         x["Out"] -= x["Shift"]
         x["Out"] /= regions[region]["factors"][0]
@@ -748,7 +753,7 @@ def day_ahead_to_agile(df, reverse=False, region="G", export=False):
         x["Out"] *= regions[region]["factors"][0]
         x.loc[x["Peak"], "Out"] += regions[region]["factors"][1]
         x["Out"] += x["Shift"]
-        x["Out"] *= (1 + vat)
+        x["Out"] *= (1 + x["VAT"])
 
     name = "day_ahead" if reverse else "agile"
     return x["Out"].rename(name)
