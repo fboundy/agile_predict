@@ -47,6 +47,9 @@ export (off-peak) = max(0, wholesale &times; factor + base&nbsp;adder)
 export (peak)     = max(0, wholesale &times; factor + base&nbsp;adder + peak&nbsp;adder)</div>
           <p class="mb-3 text-body-secondary" style="font-size:.82rem">
             <code>shift</code> is a seasonal peak adjustment, currently <strong>{{ peak_shift }} p/kWh</strong>.
+            Import multipliers, adders and shift include VAT at {{ factors_vat_pct }}% (the rate they were fitted on);
+            import prices are rescaled to the VAT rate in force for each slot, currently <strong>{{ import_vat_pct }}%</strong>
+            (VAT on domestic electricity was removed from 1&nbsp;October&nbsp;2026). Export prices carry no VAT.
             Export prices are floored at 0. Region Z is the raw wholesale day-ahead price (no conversion, shown in &pound;/MWh).
           </p>
 
