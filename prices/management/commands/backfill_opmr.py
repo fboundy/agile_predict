@@ -13,6 +13,7 @@ import pandas as pd
 
 from django.core.management.base import BaseCommand
 
+from config.utils import OPMR_COLUMN_RENAMES
 from prices.models import ForecastData, Forecasts
 
 OPMR_URL = "https://api.neso.energy/api/3/action/datastore_search"
@@ -65,7 +66,7 @@ def fetch_opmr_history(earliest_date, latest_publish):
             "gen_availability", "max_ic_import", "opmr_total", "constrained_plant", "national_surplus",
         ])
 
-    df = pd.DataFrame(all_records)
+    df = pd.DataFrame(all_records).rename(columns=OPMR_COLUMN_RENAMES)
     df["target_date"]         = pd.to_datetime(df["Date"], utc=True).dt.normalize()
     df["publish_date"]        = pd.to_datetime(df["Publish Date"], utc=True).dt.normalize()
     df["gen_availability"]    = pd.to_numeric(df["Generator Availability"], errors="coerce")
