@@ -461,7 +461,7 @@ GLOBAL_SETTINGS = {
         },
         "E": {
             "name": "West Midlands",
-            "factors": (0.21, 11),
+            "factors": (0.21, 12),
             "export_factors": (0.094, 0.77, 6.50),
         },
         "F": {
