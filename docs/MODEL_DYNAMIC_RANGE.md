@@ -4080,3 +4080,67 @@ re-scoring** — deploy a candidate to `dev` only, let it run for real, and
 score its own stored predictions against settled prices the way the original
 three-way comparison did, rather than trying to reconstruct historical runs
 after the fact.
+
+---
+
+# Two data defects found 2026-10-05, and what they do to this trial
+
+Appended 2026-10-05 while fixing GitHub #120 (export prices out).
+
+## 1. The training target was in the wrong units
+
+`day_ahead` is back-calculated from the region G Agile price. Octopus's published
+formula is `(1 + VAT) × (mult × DA + peak_adder + shift)` with the factors and the
+shift **ex-VAT** and the April-2026 shift applying to **every** slot. The code treated
+the factors as VAT-inclusive and applied the shift at peak only, so stored
+`day_ahead` ran 5% high throughout, and from 2026-04-01 off-peak sat ~16.7 £/MWh low
+relative to peak. Verified against Octopus's own import and Outgoing rates, Feb–Oct
+2026, all 14 regions, to within 0.01p (commit `6cb43f6`; region E peak adder also
+corrected 11 → 12, `707ac62`). Dev `PriceHistory.day_ahead` was recomputed with
+`manage.py recompute_day_ahead --apply` (57 143 rows).
+
+Consequences for this log:
+
+- **Dev-vs-prod comparisons made so far are still fair** — both boxes stored the same
+  distorted target, so relative rankings (e.g. the 09-11 three-way table) stand.
+  Absolute RMSE/bias figures are in the old units.
+- **The target had a step change on 2026-04-01** (off-peak only). Any training window
+  spanning April mixed two scales. By mid-June the 60-day lookback was entirely
+  post-April, so the trial period proper is unaffected.
+- **The GB60 0–1d control row is not clean**: GB60 slots are real auction prices
+  appended to a history in the distorted units. Whether GB60 rows enter training at
+  run time (and so differ from an after-the-fact replay, which reads `PriceHistory`)
+  is unchecked — **a candidate ninth explanation for the unreproducible 09-04 +£4.1
+  prediction**, worth checking before any further replay work.
+- **From today, stored forecasts made before the recompute are in old units while
+  `PriceHistory` actuals are in new units.** `compare_trial` and the
+  `published_forecast_quality` report will show spurious bias until those forecasts
+  age out of the 35-day lookback, unless predictions are converted
+  (old→new is deterministic per slot: old D → Agile via the old formula → new D).
+
+## 2. OPMR features were NULL on every forecast from 2026-09-18 16:15
+
+NESO renamed `Maximum I/C Import` → `Maximum IC Import`. `get_neso_opmr` raised
+`KeyError` every run (logged, swallowed), so `dispatchable_capacity` (in `_BASE`,
+so prod too) and `opmr_national_surplus` (the live candidate's distinguishing
+feature) were NULL. Fixed in `e71bb90`; dev backfilled with `backfill_opmr`
+(53 887 rows, 0 NULL remaining since 09-18).
+
+**The `full_fr_bm_opmr` live re-scoring (started 2026-09-11, `da227e3`) has
+therefore had its candidate feature missing for 17 of its 24 days**, including the
+09-17→20 and 09-27 negative-price events. Its live record cannot be used to judge
+`opmr_national_surplus`.
+
+## Position on continuing
+
+- Widened training window: rejected on the only event week (09-04→11). Not revisited.
+- Post-processing correction: rejected with it.
+- `bm_wind` add-back: rejected offline (and offline replay itself is unreliable).
+- `opmr_national_surplus`: **untested**, not rejected — the live window was broken.
+
+Recommendation: stop the trial as constituted and, if `opmr_national_surplus` is
+still worth testing, restart it as a **single-difference** live test — dev on
+`main` code plus only the `feature_set` parameter — for a fixed three weeks with the
+scoring rule set in advance, scored on the same days as prod with both on the
+corrected units. September had ~130 negative slots on 7 days, so three weeks is
+likely to contain events.
