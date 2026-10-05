@@ -310,6 +310,14 @@ def get_rte_french_nuclear(start=None, end=None):
     return s
 
 
+# NESO renamed these OPMR fields around 2026-09-18 ("I/C" -> "IC"); map the new names
+# back to the ones the code uses so either spelling works.
+OPMR_COLUMN_RENAMES = {
+    "Maximum IC Import": "Maximum I/C Import",
+    "Maximum IC Export": "Maximum I/C Export",
+}
+
+
 def get_neso_opmr(start=None, end=None):
     """
     Fetch NESO OPMR component fields for each target date.
@@ -333,7 +341,7 @@ def get_neso_opmr(start=None, end=None):
         records = response.json().get("result", {}).get("records", [])
         if not records:
             return pd.DataFrame()
-        df = pd.DataFrame(records)
+        df = pd.DataFrame(records).rename(columns=OPMR_COLUMN_RENAMES)
         df["Date"]         = pd.to_datetime(df["Date"], utc=True)
         df["Publish Date"] = pd.to_datetime(df["Publish Date"], utc=True)
         for col in ["Generator Availability", "Maximum I/C Import", "OPMR total", "Constrained Plant"]:
