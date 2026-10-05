@@ -12,6 +12,7 @@ import requests
 import pandas as pd
 
 from django.core.management.base import BaseCommand
+from django.db.models import Q
 
 from config.utils import OPMR_COLUMN_RENAMES
 from prices.models import ForecastData, Forecasts
@@ -82,6 +83,11 @@ def fetch_opmr_history(earliest_date, latest_publish):
     )
 
 
+# A failed OPMR fetch stores NaN, which SQLite keeps as NULL but Postgres keeps as
+# 'NaN' (and NaN = NaN is true there), so treat both as missing.
+MISSING_DC = Q(dispatchable_capacity__isnull=True) | Q(dispatchable_capacity=float("nan"))
+
+
 class Command(BaseCommand):
     help = "Backfill dispatchable_capacity on ForecastData using per-slot gen_availability - slot_demand - opmr_total"
 
@@ -90,7 +96,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         force = options["force"]
-        qs = ForecastData.objects.all() if force else ForecastData.objects.filter(dispatchable_capacity__isnull=True)
+        qs = ForecastData.objects.all() if force else ForecastData.objects.filter(MISSING_DC)
         total_rows = qs.count()
         self.stdout.write(f"Rows to backfill: {total_rows}")
         if total_rows == 0:
@@ -136,8 +142,10 @@ class Command(BaseCommand):
                 .set_index("target_date")
             )
 
-            slot_filter = {"forecast": forecast} if force else {"forecast": forecast, "dispatchable_capacity__isnull": True}
-            slot_qs = ForecastData.objects.filter(**slot_filter).only(
+            slot_qs = ForecastData.objects.filter(forecast=forecast)
+            if not force:
+                slot_qs = slot_qs.filter(MISSING_DC)
+            slot_qs = slot_qs.only(
                 "pk", "date_time", "dispatchable_capacity", "opmr_national_surplus"
             )
             rows = list(slot_qs)
