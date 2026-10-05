@@ -292,8 +292,8 @@ class ExportPricingTests(TestCase):
 
         export = day_ahead_to_agile(day_ahead, region="A", export=True)
 
-        self.assertAlmostEqual(export.iloc[0], 10.59)
-        self.assertAlmostEqual(export.iloc[1], 17.63)
+        self.assertAlmostEqual(export.iloc[0], 11.651)
+        self.assertAlmostEqual(export.iloc[1], 16.925)
 
     def test_import_conversion_handles_duplicate_timestamps(self):
         index = pd.to_datetime(["2026-05-01T12:00:00Z", "2026-05-01T12:00:00Z"])

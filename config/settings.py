@@ -431,7 +431,7 @@ GLOBAL_SETTINGS = {
         "X": {
             "name": "National Average",
             "factors": (0.2136, 12.21),
-            "export_factors": (0.0950, 0.9979, 5.8464),
+            "export_factors": (0.0905, 2.5089, 4.0801),
         },
         "Z": {
             "name": "Day Ahead Price",
@@ -441,72 +441,72 @@ GLOBAL_SETTINGS = {
         "A": {
             "name": "Eastern England",
             "factors": (0.21, 13),
-            "export_factors": (0.095, 1.09, 7.04),
+            "export_factors": (0.0905, 2.601, 5.274),
         },
         "B": {
             "name": "East Midlands",
             "factors": (0.20, 14),
-            "export_factors": (0.094, 0.78, 6.27),
+            "export_factors": (0.0895, 2.275, 4.522),
         },
         "C": {
             "name": "London",
             "factors": (0.20, 12),
-            "export_factors": (0.095, 1.30, 5.93),
+            "export_factors": (0.0905, 2.811, 4.164),
         },
         "D": {
             "name": "Merseyside and Northern Wales",
             "factors": (0.22, 13),
-            "export_factors": (0.097, 1.26, 5.97),
+            "export_factors": (0.0924, 2.803, 4.167),
         },
         "E": {
             "name": "West Midlands",
             "factors": (0.21, 11),
-            "export_factors": (0.094, 0.77, 6.50),
+            "export_factors": (0.0895, 2.265, 4.752),
         },
         "F": {
             "name": "North Eastern England",
             "factors": (0.21, 12),
-            "export_factors": (0.095, 0.87, 4.88),
+            "export_factors": (0.0905, 2.381, 3.114),
         },
         "G": {
             "name": "North Western England",
             "factors": (0.21, 12),
-            "export_factors": (0.096, 1.10, 5.89),
+            "export_factors": (0.0914, 2.627, 4.105),
         },
         "H": {
             "name": "Southern England",
             "factors": (0.21, 12),
-            "export_factors": (0.094, 0.93, 7.05),
+            "export_factors": (0.0895, 2.425, 5.302),
         },
         "J": {
             "name": "South Eastern England",
             "factors": (0.22, 12),
-            "export_factors": (0.094, 1.09, 7.41),
+            "export_factors": (0.0895, 2.585, 5.662),
         },
         "K": {
             "name": "Southern Wales",
             "factors": (0.22, 12),
-            "export_factors": (0.094, 0.97, 5.46),
+            "export_factors": (0.0895, 2.465, 3.712),
         },
         "L": {
             "name": "South Western England",
             "factors": (0.23, 11),
-            "export_factors": (0.093, 0.83, 7.14),
+            "export_factors": (0.0886, 2.309, 5.411),
         },
         "M": {
             "name": "Yorkshire",
             "factors": (0.20, 13),
-            "export_factors": (0.096, 0.72, 5.78),
+            "export_factors": (0.0914, 2.247, 3.995),
         },
         "N": {
             "name": "Southern Scotland",
             "factors": (0.21, 13),
-            "export_factors": (0.097, 0.90, 3.85),
+            "export_factors": (0.0924, 2.443, 2.047),
         },
         "P": {
             "name": "Northern Scotland",
             "factors": (0.24, 12),
-            "export_factors": (0.096, 1.36, 2.68),
+            "export_factors": (0.0914, 2.887, 0.895),
         },
     },
 }
