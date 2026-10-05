@@ -64,20 +64,6 @@ EXPERIMENT_FEATURE_SETS = {
     "melngc":               _BASE + ["melngc_margin"],
     "gas_av_fr":            _BASE + _FR_WEATHER + ["gas_availability"],
     "nuclear_gas_av":       _BASE + ["nuclear", "gas_availability"],
-
-    # ── Live-deployed on dev 2026-09-11 for extreme-detection re-scoring ───
-    # (see docs/MODEL_DYNAMIC_RANGE.md). Adds bm_wind (the dominant wind term
-    # in the 09-06 miss, currently excluded from every set above except its
-    # own single-feature "bm_wind" row) and opmr_national_surplus (a
-    # NESO-published margin figure, collected by backfill_opmr.py since
-    # migration 0048 but never previously used as a model input) on top of
-    # "full_fr", the feature set actually running on dev before this change.
-    # An offline backtest found bm_wind alone unhelpful, but that backtest
-    # methodology was separately shown not to reproduce live production
-    # behaviour for reasons that survived eight ruled-out hypotheses — so
-    # this is being re-tested live rather than trusted from the offline
-    # result alone.
-    "full_fr_bm_opmr":      _BASE + _FR_WEATHER + _FUEL + ["fr_nuclear", "bm_wind", "opmr_national_surplus"],
 }
 
 FEATURE_SETS = {
@@ -192,22 +178,6 @@ def add_latest_forecast_features(fc, now=None):
     return fc
 
 
-# How many days of forecast horizon the model is TRAINED on, measured from
-# `ag_start` (22h after the run's midnight).
-#
-# This was effectively 1 — training rows were filtered to the single Agile day
-# `ag_start`..`ag_end` — while the model is served out to 14 days. That is a
-# train/serve mismatch: at 22-46h the weather and demand inputs are sharp, at
-# 7-14d the same columns are smoothed, mean-reverted NWP output, so a model
-# fitted to sharp inputs and fed blunt ones produces blunt output. Measured
-# consequence was sd(pred)/sd(actual) = 0.56 beyond 2 days and *zero* predicted
-# negative prices or spikes at any horizon. See docs/MODEL_DYNAMIC_RANGE.md.
-#
-# 14 covers the full served horizon. Reducing this re-introduces the mismatch in
-# proportion; 7 recovers most but not all of the dispersion.
-TRAIN_HORIZON_DAYS = 14
-
-
 def build_forecast_frame(forecast_data, forecasts):
     ff = forecasts.copy().set_index("id").sort_index()
     ff["created_at"] = pd.to_datetime(ff["name"]).dt.tz_localize("GB")
@@ -237,21 +207,11 @@ def validate_feature_columns(df, features):
         raise ValueError(f"Missing feature column(s): {', '.join(missing)}")
 
 
-def training_horizon_mask(df, horizon_days=TRAIN_HORIZON_DAYS):
-    """Rows within `horizon_days` of forecast horizon, measured from `ag_start`.
-
-    `horizon_days=1` reproduces the original `ag_start`..`ag_end` window — the
-    single Agile day. Anything larger admits longer-horizon rows.
-    """
-    window_end = df["ag_start"] + pd.Timedelta(days=horizon_days)
-    return (df.index >= df["ag_start"]) & (df.index < window_end)
-
-
-def build_training_data(df, training_forecasts, prices, features, max_days, horizon_days=TRAIN_HORIZON_DAYS):
+def build_training_data(df, training_forecasts, prices, features, max_days):
     validate_feature_columns(df, features)
     train_X = df[df["forecast_id"].isin(training_forecasts.index)]
     train_X = train_X[train_X["days_ago"] < max_days]
-    train_X = train_X[training_horizon_mask(train_X, horizon_days)][features]
+    train_X = train_X[(train_X.index >= train_X["ag_start"]) & (train_X.index < train_X["ag_end"])][features]
     train_X = train_X.merge(prices["day_ahead"], left_index=True, right_index=True)
     train_y = train_X.pop("day_ahead")
     return train_X, train_y

@@ -1,0 +1,29 @@
+name: Production update monitor
+
+# Confirms the 06:15/11:15/16:15/22:15 Europe/London EasyCron-triggered
+# production updates actually ran (see docs/INFRASTRUCTURE.md). Runs on
+# GitHub-hosted runners because prices.fly.dev is not reachable from Claude's
+# cloud agent environment. Fires every 15 minutes inside UTC windows that
+# bracket each expected run in both BST and GMT; bin/check_prod_update.py
+# uses the real Europe/London clock to no-op outside the real window, so it
+# only acts once per event regardless of daylight saving.
+on:
+  schedule:
+    - cron: "0,15,30,45 5,6,7,10,11,12,15,16,17,21,22,23 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check production forecast update ran
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python bin/check_prod_update.py
