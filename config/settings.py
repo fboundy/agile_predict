@@ -417,12 +417,13 @@ GLOBAL_SETTINGS = {
     "AGILE_RELEASE_TIME": "16:00",
     "SHIFTS": {
         "2020-01-01 00:00:00": 0.0,
-        "2026-04-01 00:00:00": -3.5,
+        "2026-04-01 00:00:00": -3.34,
     },
-    # VAT on domestic import, time-stepped like SHIFTS. The REGIONS import factors and
-    # SHIFTS were fitted on value_inc_vat at 5%, so import output is scaled by
-    # (1 + VAT) / (1 + FACTORS_VAT). Export is not subject to VAT and is unaffected.
-    "FACTORS_VAT": 0.05,
+    # Octopus's published Agile import formula is
+    #     (1 + VAT) x (multiplier x day_ahead + peak_adder [16-19h] + shift)
+    # with the REGIONS "factors" and SHIFTS all ex-VAT; the shift applies to every slot.
+    # Verified against Octopus's own rates Feb-Oct 2026 to within 0.03p. VAT is
+    # time-stepped like SHIFTS. Export (Agile Outgoing) carries no VAT.
     "VAT": {
         "2020-01-01 00:00:00": 0.05,
         "2026-10-01 00:00:00": 0.0,

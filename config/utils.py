@@ -1255,11 +1255,9 @@ def stepped_setting(key, index):
     return table.to_numpy()[pos.clip(min=0)]
 
 
-def vat_scale(index):
-    """Multiplier converting import prices from the 5%-VAT basis the region factors
-    were fitted on to the VAT rate in force at each timestamp."""
-    base = 1 + GLOBAL_SETTINGS.get("FACTORS_VAT", 0.05)
-    return (1 + stepped_setting("VAT", index)) / base
+def vat_multiplier(index):
+    """(1 + VAT) on domestic import at each timestamp in ``index``."""
+    return 1 + stepped_setting("VAT", index)
 
 
 def day_ahead_to_agile(df, reverse=False, region="G", export=False):
@@ -1289,19 +1287,22 @@ def day_ahead_to_agile(df, reverse=False, region="G", export=False):
         name = "day_ahead" if reverse else "agile_export"
         return x["Out"].rename(name)
 
+    # Agile import = (1 + VAT) x (multiplier x day_ahead + peak_adder [16-19h] + shift),
+    # with the factors and shift ex-VAT and the shift applying to every slot.
+    multiplier, peak_adder = regions[region]["factors"]
     x["Shift"] = stepped_setting("SHIFTS", x.index)
-    x["VatScale"] = vat_scale(x.index)
+    x["Vat"] = vat_multiplier(x.index)
 
     if reverse:
-        x["Out"] /= x["VatScale"]
-        x.loc[x["Peak"], "Out"] -= regions[region]["factors"][1]
-        x.loc[x["Peak"], "Out"] -= x.loc[x["Peak"], "Shift"]
-        x["Out"] /= regions[region]["factors"][0]
+        x["Out"] /= x["Vat"]
+        x["Out"] -= x["Shift"]
+        x.loc[x["Peak"], "Out"] -= peak_adder
+        x["Out"] /= multiplier
     else:
-        x["Out"] *= regions[region]["factors"][0]
-        x.loc[x["Peak"], "Out"] += regions[region]["factors"][1]
-        x.loc[x["Peak"], "Out"] += x.loc[x["Peak"], "Shift"]
-        x["Out"] *= x["VatScale"]
+        x["Out"] *= multiplier
+        x.loc[x["Peak"], "Out"] += peak_adder
+        x["Out"] += x["Shift"]
+        x["Out"] *= x["Vat"]
 
     name = "day_ahead" if reverse else "agile"
     return x["Out"].rename(name)
