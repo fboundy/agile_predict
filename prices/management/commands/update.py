@@ -30,6 +30,7 @@ from ...forecast_features import (
     build_training_data,
     EXPERIMENT_FEATURE_SETS,
     FEATURE_SETS,
+    is_scheduled_forecast_name,
     latest_prediction_features,
     add_latest_forecast_features,
     resolve_feature_columns,
@@ -465,7 +466,9 @@ class Command(BaseCommand):
 
         debug = options.get("debug", False)
 
-        min_fd = int(options.get("min_fd", 600) or 600)
+        # Must not exceed MIN_FORECAST_ROWS: the cleanup below runs on every update,
+        # so a stricter threshold silently deletes forecasts the save step accepted.
+        min_fd = int(options.get("min_fd", MIN_FORECAST_ROWS) or MIN_FORECAST_ROWS)
         min_ad = int(options.get("min_ad", 1500) or 1500)
         max_days = int(options.get("max_days", 60) or 60)
 
@@ -534,10 +537,9 @@ class Command(BaseCommand):
             else:
                 fail = " <- Manual"
                 if days < max_days:
-                    for hour in [4, 6, 10, 11, 16, 22]:
-                        if f"{hour:02d}:15" in f.name:
-                            keep.append(f.id)
-                            fail = ""
+                    if is_scheduled_forecast_name(f.name):
+                        keep.append(f.id)
+                        fail = ""
                 else:
                     fail = "<- Old"
             if debug:
