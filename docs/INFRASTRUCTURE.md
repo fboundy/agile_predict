@@ -167,11 +167,15 @@ they update the **CT's own** database, not production. They authenticate with
 - **GitHub Actions — `prod-update-monitor.yml`** — confirms the EasyCron-triggered
   updates below actually completed. Runs on GitHub-hosted runners (not the CT),
   since prices.fly.dev is not reachable from Claude's cloud agent environment.
-  Checks `/api/` (`created_at` of the latest forecast) and `/healthz` shortly
-  after each of 06:15/11:15/16:15/22:15 Europe/London; a stale forecast or
-  unreachable site fails the job (GitHub's default failure notification) and,
-  if the `NTFY_TOPIC` repo secret is set, pushes an alert. See
-  `bin/check_prod_update.py`.
+  Checks `/api/` (`created_at` of the latest forecast) and `/healthz`, verifying
+  the latest forecast is no older than the most recent of 06:15/11:15/16:15/22:15
+  Europe/London that's already passed; a stale forecast or unreachable site
+  fails the job (GitHub's default failure notification) and, if the
+  `NTFY_TOPIC` repo secret is set, pushes an alert. Deliberately independent of
+  *when* the job actually runs: GitHub Actions schedules on low-activity repos
+  are best-effort and were observed firing at times unrelated to the
+  configured cron (issue #121), so the check itself — not the schedule — is
+  what guarantees each expected run gets verified. See `bin/check_prod_update.py`.
 
 ### Dev-only pages
 

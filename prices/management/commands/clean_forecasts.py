@@ -2,6 +2,8 @@ from django.core.management.base import BaseCommand
 from ...models import History, PriceHistory, Forecasts, ForecastData, AgileData
 
 from config.utils import *
+from ...forecast_features import is_scheduled_forecast_name
+from .update import MIN_FORECAST_ROWS
 
 
 class Command(BaseCommand):
@@ -30,7 +32,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         delete = options.get("delete", False)
-        min_fd = int(options.get("min_fd", 600) or 600)
+        min_fd = int(options.get("min_fd", MIN_FORECAST_ROWS) or MIN_FORECAST_ROWS)
         min_ad = int(options.get("min_ad", 0) or 0)
         max_days = int(options.get("days", 100000) or 10000)
 
@@ -48,11 +50,9 @@ class Command(BaseCommand):
                 fail = " <- Fail"
             else:
                 fail = " <- Manual"
-                if days < max_days:
-                    for hour in [4, 6, 10, 11,16, 22]:
-                        if f"{hour:02d}:15" in f.name:
-                            keep.append(f.id)
-                            fail = ""
+                if days < max_days and is_scheduled_forecast_name(f.name):
+                    keep.append(f.id)
+                    fail = ""
 
             if f.mean is None:
                 print(f"{f.id:5d} | {f.name} | {fd.count():5d} | {ad.count():7d} | {days:4d} |  N/A  |  N/A  | {fail}")

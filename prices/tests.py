@@ -1352,3 +1352,61 @@ class RobotsCrawlerLoadTests(TestCase):
         r = self.client.get("/robots.txt")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r["Content-Type"], "text/plain")
+
+
+class ForecastRetentionTests(TestCase):
+    """Every update run deletes forecasts that fail the retention rule (GH #121).
+
+    Forecasts that the save step accepted were being deleted by the next run:
+    the cleanup demanded 600 ForecastData rows where the save step only demands
+    MIN_FORECAST_ROWS, and only kept names at exactly HH:15, so a run that
+    reached the save step at 16:16 was pruned.
+    """
+
+    def test_scheduled_slot_names(self):
+        from prices.forecast_features import is_scheduled_forecast_name
+
+        for name in [
+            "2026-10-14 06:15", "2026-10-14 11:15", "2026-10-14 16:15", "2026-10-14 22:15",
+            "2026-11-02 05:15", "2026-11-02 10:15", "2026-11-02 15:15", "2026-11-02 21:15",
+            "2026-10-14 04:15", "2026-10-14 16:16", "2026-10-14 16:59",
+        ]:
+            self.assertTrue(is_scheduled_forecast_name(name), name)
+
+        for name in ["2026-10-14 16:14", "2026-10-14 17:15", "2026-10-14 13:42", "2026-10-14 00:15", "not a date"]:
+            self.assertFalse(is_scheduled_forecast_name(name), name)
+
+    def _forecast(self, name, fd_rows, ad_rows=1500):
+        f = Forecasts.objects.create(name=name)
+        start = timezone.now()
+        ForecastData.objects.bulk_create(
+            ForecastData(
+                forecast=f, date_time=start + timedelta(minutes=30 * i), bm_wind=0, solar=0, emb_wind=0,
+                temp_2m=0, wind_10m=0, rad=0, demand=0,
+            )
+            for i in range(fd_rows)
+        )
+        AgileData.objects.bulk_create(
+            AgileData(
+                forecast=f, region="G", agile_pred=0, agile_low=0, agile_high=0,
+                date_time=start + timedelta(minutes=30 * i),
+            )
+            for i in range(ad_rows)
+        )
+        return f
+
+    def test_cleanup_keeps_accepted_scheduled_forecasts(self):
+        today = pd.Timestamp.now(tz="GB").strftime("%Y-%m-%d")
+        short_but_valid = self._forecast(f"{today} 06:15", fd_rows=300)
+        late_start = self._forecast(f"{today} 11:17", fd_rows=650)
+        manual = self._forecast(f"{today} 13:42", fd_rows=650)
+        degraded = self._forecast(f"{today} 04:15", fd_rows=100)
+
+        with patch("sys.stdout"):
+            call_command("clean_forecasts", delete=True)
+
+        remaining = set(Forecasts.objects.values_list("id", flat=True))
+        self.assertIn(short_but_valid.id, remaining)
+        self.assertIn(late_start.id, remaining)
+        self.assertNotIn(manual.id, remaining)
+        self.assertNotIn(degraded.id, remaining)

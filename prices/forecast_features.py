@@ -191,6 +191,27 @@ def build_forecast_frame(forecast_data, forecasts):
     return add_derived_features(df), ff
 
 
+# Hours (GB local) at which a scheduled update starts at HH:15: production's
+# EasyCron slots (05:15/10:15/15:15/21:15 UTC, i.e. 06/11/16/22 in BST and
+# 05/10/15/21 in GMT) plus the dev CT crontab (04/10/11/16/22).
+SCHEDULED_UPDATE_HOURS = frozenset({4, 5, 6, 10, 11, 15, 16, 21, 22})
+SCHEDULED_SLOT_MINUTE = 15
+# A forecast is named after the wall-clock minute the run reaches the save
+# step, which can be well past HH:15 once upstream fetches are slow.
+SCHEDULED_SLOT_TOLERANCE_MINUTES = 45
+
+
+def is_scheduled_forecast_name(name):
+    """True if a forecast name ('YYYY-MM-DD HH:MM', GB time) falls within a scheduled update slot."""
+    try:
+        ts = pd.Timestamp(name)
+    except (ValueError, TypeError):
+        return False
+    if ts.hour not in SCHEDULED_UPDATE_HOURS:
+        return False
+    return 0 <= ts.minute - SCHEDULED_SLOT_MINUTE < SCHEDULED_SLOT_TOLERANCE_MINUTES
+
+
 def select_daily_training_forecasts(forecasts):
     forecasts = forecasts.copy()
     forecasts["dt1600"] = (
