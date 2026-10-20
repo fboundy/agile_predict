@@ -5,21 +5,20 @@ name: Production update monitor
 # GitHub-hosted runners because prices.fly.dev is not reachable from Claude's
 # cloud agent environment.
 #
-# One fixed tick per expected run per possible UTC offset (BST/GMT) — 8/day,
-# each 35 minutes after the run, at :50 rather than a round minute.
-# bin/check_prod_update.py uses the real Europe/London clock to no-op for
-# whichever offset isn't currently in effect, so this needs no seasonal
-# adjustment. An earlier version fired every 15 minutes across broad hour
-# windows (~48 ticks/day) to cover the same DST uncertainty with a wide
-# buffer; GitHub Actions throttled that down to ~5 runs/day at essentially
-# arbitrary times (confirmed via the runs list — see PR history), which
-# silently skipped most of the real check windows. Scheduled workflows are
-# known to be delayed or dropped under load, worst at the top of the hour;
-# this schedule stays far below whatever threshold triggered that, and off
-# the crowded minutes.
+# GitHub Actions schedules on low-activity repos are best-effort: the
+# previous version of this schedule targeted 8 fixed daily ticks but was
+# observed (see issue #121) actually firing only ~4/day, at times unrelated
+# to the configured minute/hour — every single run since that fix landed
+# fired outside its intended window and no-opped. So this workflow no longer
+# tries to land inside narrow windows around each expected run. It fires
+# hourly (GitHub throttles that down on its own regardless), and
+# bin/check_prod_update.py checks, whenever it happens to run, that the
+# latest forecast is no older than the most recent expected run that has
+# already passed - so it catches a missed update regardless of exactly when
+# GitHub decides to execute the job.
 on:
   schedule:
-    - cron: "50 5,6,10,11,15,16,21,22 * * *"
+    - cron: "10 * * * *"
   workflow_dispatch: {}
 
 permissions:

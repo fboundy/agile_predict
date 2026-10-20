@@ -3,16 +3,22 @@
 
 Scheduled via .github/workflows/prod-update-monitor.yml on GitHub-hosted
 runners, because the production site is not reachable from Claude's cloud
-agent environment (org egress policy). The workflow fires every 15 minutes
-inside UTC windows that bracket each expected run, covering both BST and GMT
-offsets; this script then uses the real Europe/London clock to decide whether
-`now` is actually inside a check window, and no-ops otherwise so it only acts
-once per real event regardless of DST.
+agent environment (org egress policy). GitHub Actions schedules on
+low-activity repos are best-effort and run at times only loosely related to
+the configured cron (observed: a schedule targeting 8 fixed ticks/day still
+fired ~4/day at essentially arbitrary times). So this script does not assume
+it runs anywhere near a particular expected time: whenever it runs, it finds
+the most recent of the four daily expected runs that has already passed
+(with a grace buffer for the job to complete) and checks the latest forecast
+is no older than that. That makes correctness independent of when GitHub
+actually decides to fire the job, as long as it fires at least once between
+consecutive expected runs (~4-6 hours apart).
 
 Exits non-zero (failing the GitHub Actions job, which triggers GitHub's
 default failure notification) when the latest forecast wasn't refreshed
-after the expected run, or the site is unreachable. Set the NTFY_TOPIC repo
-secret to also push an alert via ntfy.sh, matching bin/uptime_monitor.sh.
+after the most recent expected run, or the site is unreachable. Set the
+NTFY_TOPIC repo secret to also push an alert via ntfy.sh, matching
+bin/uptime_monitor.sh.
 """
 import json
 import os
@@ -23,8 +29,7 @@ from zoneinfo import ZoneInfo
 
 LONDON = ZoneInfo("Europe/London")
 EXPECTED_TIMES = [(6, 15), (11, 15), (16, 15), (22, 15)]
-BUFFER_START = timedelta(minutes=20)  # give the worker time to pick up and run the job
-BUFFER_END = timedelta(minutes=50)
+GRACE = timedelta(minutes=20)  # give the worker time to pick up and run the job
 API_URL = "https://prices.fly.dev/api/"
 HEALTHZ_URL = "https://prices.fly.dev/healthz"
 TIMEOUT = 20
@@ -36,13 +41,15 @@ def fetch(url):
         return resp.status, resp.read()
 
 
-def current_window(now):
-    """Return the expected run datetime if `now` falls inside its check window."""
-    for hour, minute in EXPECTED_TIMES:
-        expected = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if expected + BUFFER_START <= now <= expected + BUFFER_END:
-            return expected
-    return None
+def most_recent_expected(now):
+    """Return the latest expected run datetime that is already past its grace period."""
+    candidates = []
+    for day_offset in (0, -1):
+        day = now + timedelta(days=day_offset)
+        for hour, minute in EXPECTED_TIMES:
+            candidates.append(day.replace(hour=hour, minute=minute, second=0, microsecond=0))
+    past = [c for c in candidates if c + GRACE <= now]
+    return max(past)
 
 
 def send_ntfy_alert(message):
@@ -66,10 +73,7 @@ def send_ntfy_alert(message):
 
 def main():
     now = datetime.now(LONDON)
-    expected = current_window(now)
-    if expected is None:
-        print(f"{now.isoformat()} outside a check window, nothing to do")
-        return 0
+    expected = most_recent_expected(now)
 
     print(f"Checking update expected at {expected.isoformat()} (now {now.isoformat()})")
     problems = []
