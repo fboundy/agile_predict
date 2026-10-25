@@ -3,6 +3,8 @@ from datetime import timedelta
 import logging
 import os
 from pathlib import Path
+import subprocess
+import sys
 import time
 import traceback
 
@@ -211,6 +213,34 @@ class Command(BaseCommand):
         close_old_connections()
         self.mark_job_completed(job)
         logger.info("Worker job id=%s type=%s completed", job.id, job.job_type)
+
+        if job.job_type == UpdateJob.JOB_UPDATE and getattr(settings, "TIMESTRAL_ENABLED", False):
+            self.run_timestral()
+
+    def run_timestral(self):
+        """Run the dev-only Timestral forecast after a completed update.
+
+        A separate process so torch and the model weights are released when it
+        exits instead of staying resident in the worker. Failures are logged and
+        never affect the update job, which has already been marked completed.
+        """
+        log_path = BASE_DIR / "logs" / "timestral.log"
+        try:
+            with log_path.open("a") as log_file:
+                result = subprocess.run(
+                    [sys.executable, str(BASE_DIR / "manage.py"), "timestral_forecast"],
+                    cwd=BASE_DIR,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    timeout=settings.TIMESTRAL_TIMEOUT_SECONDS,
+                )
+        except Exception:
+            logger.exception("Timestral forecast could not be run")
+            return
+        if result.returncode:
+            logger.error("Timestral forecast failed with exit code %s; see %s", result.returncode, log_path)
+        else:
+            logger.info("Timestral forecast completed")
 
     def set_job_log_file(self, job, log_path):
         while True:

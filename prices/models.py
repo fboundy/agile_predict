@@ -55,10 +55,12 @@ class PlotImage(models.Model):
 class ExternalForecast(models.Model):
     SOURCE_AGILEFORECAST = "agileforecast"
     SOURCE_X2R = "x2r"
+    SOURCE_TIMESTRAL = "timestral"
 
     SOURCE_CHOICES = [
         (SOURCE_AGILEFORECAST, "AgileForecast"),
         (SOURCE_X2R, "X2R"),
+        (SOURCE_TIMESTRAL, "Timestral"),
     ]
 
     source = models.CharField(max_length=32, choices=SOURCE_CHOICES)

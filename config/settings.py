@@ -205,6 +205,14 @@ RATELIMIT_BLOCK_SECONDS = env.int("RATELIMIT_BLOCK_SECONDS", default=600)  # len
 UPDATE_CATCHUP_ENABLED = env.bool("UPDATE_CATCHUP_ENABLED", default=True)
 UPDATE_CATCHUP_HOURS = env.int("UPDATE_CATCHUP_HOURS", default=9)
 
+# Timestral zero-shot forecast (prices/timestral.py), run by the update worker in a
+# separate process after each successful update. Dev-only experiment: needs the
+# packages in requirements-timestral.txt, which production does not install.
+TIMESTRAL_ENABLED = env.bool("TIMESTRAL_ENABLED", default=False)
+TIMESTRAL_MODEL = env.str("TIMESTRAL_MODEL", default="mistralai/Timestral-5M")
+TIMESTRAL_CONTEXT_DAYS = env.int("TIMESTRAL_CONTEXT_DAYS", default=365)
+TIMESTRAL_TIMEOUT_SECONDS = env.int("TIMESTRAL_TIMEOUT_SECONDS", default=900)
+
 # Event-keyed response caching for anonymous GETs on the heavy chart/API paths.
 # The cache key embeds the latest forecast/price version and the current 30-min
 # slot, so entries live until the content actually changes; RESPONSE_CACHE_TTL

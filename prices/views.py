@@ -670,6 +670,7 @@ class HistoryView(TemplateView):
         "AgilePredict": "#ffc107",
         "AgileForecast": "#0dcaf0",
         "X2R": "#fd7e14",
+        "Timestral": "#d63384",
     }
 
     def _source_color(self, label):
@@ -911,12 +912,17 @@ class HistoryView(TemplateView):
 
         compare_agileforecast = can_compare_external and _truthy(self.request.GET.get("compare_agileforecast"))
         compare_x2r = can_compare_external and _truthy(self.request.GET.get("compare_x2r"))
+        compare_timestral = (
+            can_compare_external and settings.TIMESTRAL_ENABLED and _truthy(self.request.GET.get("compare_timestral"))
+        )
 
         context["region"] = region
         context["data_region"] = data_region
         context["can_compare_external"] = can_compare_external
         context["compare_agileforecast"] = compare_agileforecast
         context["compare_x2r"] = compare_x2r
+        context["compare_timestral"] = compare_timestral
+        context["timestral_enabled"] = settings.TIMESTRAL_ENABLED
         context["region_name"] = regions.get(region, {"name": ""})["name"]
         context["is_raw_day_ahead_region"] = raw_day_ahead
         context["price_label"] = price_display["label"]
@@ -976,6 +982,10 @@ class HistoryView(TemplateView):
                 )
             if compare_x2r:
                 external_sources.append((ExternalForecast.SOURCE_X2R, "X2R", self._source_color("X2R")))
+            if compare_timestral:
+                external_sources.append(
+                    (ExternalForecast.SOURCE_TIMESTRAL, "Timestral", self._source_color("Timestral"))
+                )
 
         external_rows_by_label = {}
         for source, label, _color in external_sources:
@@ -1622,10 +1632,11 @@ def _stored_external_rows(source, region):
     }
 
 
-_EXT_COLORS = {"AgileForecast": "#D55E00", "X2R": "#009E73"}
+_EXT_COLORS = {"AgileForecast": "#D55E00", "X2R": "#009E73", "Timestral": "#CC79A7"}
 _EXT_SOURCES = {
     "AgileForecast": ExternalForecast.SOURCE_AGILEFORECAST,
     "X2R": ExternalForecast.SOURCE_X2R,
+    "Timestral": ExternalForecast.SOURCE_TIMESTRAL,
 }
 
 
@@ -1701,6 +1712,7 @@ def ext_forecast_json(request, region):
     show_export = request.GET.get("export", "0") == "1" and not raw
     show_af = _truthy(request.GET.get("af", "")) and not raw
     show_x2r = _truthy(request.GET.get("x2r", "")) and not raw
+    show_ts = settings.TIMESTRAL_ENABLED and _truthy(request.GET.get("ts", "")) and not raw
 
     now_gb = pd.Timestamp.now(tz="GB")
     prior_gb = now_gb - pd.Timedelta(hours=12)
@@ -1711,6 +1723,8 @@ def ext_forecast_json(request, region):
         ext_labels.append("AgileForecast")
     if show_x2r:
         ext_labels.append("X2R")
+    if show_ts:
+        ext_labels.append("Timestral")
 
     traces, statuses = _fetch_external_forecasts(ext_labels, region, show_export, prior_gb, end_gb)
     return JsonResponse({"traces": traces, "statuses": statuses})
@@ -2430,6 +2444,7 @@ class GraphV2View(V2NavMixin, TemplateView):
         show_dc = self.request.GET.get("dc", "0") == "1"
         show_af = _truthy(self.request.GET.get("af", "")) and not raw
         show_x2r = _truthy(self.request.GET.get("x2r", "")) and not raw
+        show_ts = settings.TIMESTRAL_ENABLED and _truthy(self.request.GET.get("ts", "")) and not raw
         # Summary-card placement (GH #93): above the chart, below it, or hidden.
         # Anything unrecognised falls back to "above" so a mangled URL or a stale
         # saved preference cannot silently blank the cards.
@@ -3282,6 +3297,8 @@ class GraphV2View(V2NavMixin, TemplateView):
                 "show_dc": show_dc,
                 "show_af": show_af,
                 "show_x2r": show_x2r,
+                "show_ts": show_ts,
+                "timestral_enabled": settings.TIMESTRAL_ENABLED,
                 "show_overlap": show_overlap,
                 "summary": summary,
                 "summary_pos": summary_pos,
@@ -3334,6 +3351,7 @@ class HistoryV2View(V2NavMixin, HistoryView):
         "AgilePredict": "#56B4E9",
         "AgileForecast": "#D55E00",
         "X2R": "#009E73",
+        "Timestral": "#CC79A7",
     }
 
     def _build_metrics_chart(self, metrics_table, price_unit, selected_metric="mae"):

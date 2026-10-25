@@ -1,0 +1,4 @@
+# Dev-only: Timestral zero-shot forecast (prices/timestral.py). Not installed on production.
+# CPU-only torch: pip install -r requirements-timestral.txt --extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.14.1+cpu
+timestral @ git+https://github.com/mistralai/timestral.git@a534bdbd244d64f3d9d743f46c7bf6fc330ed4ff

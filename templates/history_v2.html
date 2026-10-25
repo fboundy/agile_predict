@@ -64,7 +64,7 @@
     {# Window buttons #}
     <div class="btn-group btn-group-sm">
       {% for opt in window_options %}
-      <a href="?window={{ opt.key }}&offset_days={{ offset_days }}{% if compare_agileforecast %}&compare_agileforecast=1{% endif %}{% if compare_x2r %}&compare_x2r=1{% endif %}"
+      <a href="?window={{ opt.key }}&offset_days={{ offset_days }}{% if compare_agileforecast %}&compare_agileforecast=1{% endif %}{% if compare_x2r %}&compare_x2r=1{% endif %}{% if compare_timestral %}&compare_timestral=1{% endif %}"
          class="btn {% if window_key == opt.key %}btn-primary{% else %}btn-outline-secondary{% endif %}">
         {{ opt.label }}
       </a>
@@ -86,16 +86,23 @@
 
     {% if can_compare_external %}
     <div class="vr d-none d-sm-block" style="opacity:.3"></div>
-    <a href="?window={{ window_key }}&offset_days={{ offset_days }}&compare_agileforecast={% if compare_agileforecast %}0{% else %}1{% endif %}{% if compare_x2r %}&compare_x2r=1{% endif %}&metric={{ selected_metric }}"
+    <a href="?window={{ window_key }}&offset_days={{ offset_days }}&compare_agileforecast={% if compare_agileforecast %}0{% else %}1{% endif %}{% if compare_x2r %}&compare_x2r=1{% endif %}{% if compare_timestral %}&compare_timestral=1{% endif %}&metric={{ selected_metric }}"
        class="btn btn-sm"
        style="border-color:{{ source_colors.AgileForecast }};{% if compare_agileforecast %}background:{{ source_colors.AgileForecast }};color:#fff{% else %}color:{{ source_colors.AgileForecast }}{% endif %}">
       AgileForecast
     </a>
-    <a href="?window={{ window_key }}&offset_days={{ offset_days }}{% if compare_agileforecast %}&compare_agileforecast=1{% endif %}&compare_x2r={% if compare_x2r %}0{% else %}1{% endif %}&metric={{ selected_metric }}"
+    <a href="?window={{ window_key }}&offset_days={{ offset_days }}{% if compare_agileforecast %}&compare_agileforecast=1{% endif %}&compare_x2r={% if compare_x2r %}0{% else %}1{% endif %}{% if compare_timestral %}&compare_timestral=1{% endif %}&metric={{ selected_metric }}"
        class="btn btn-sm"
        style="border-color:{{ source_colors.X2R }};{% if compare_x2r %}background:{{ source_colors.X2R }};color:#fff{% else %}color:{{ source_colors.X2R }}{% endif %}">
       X2R
     </a>
+    {% if timestral_enabled %}
+    <a href="?window={{ window_key }}&offset_days={{ offset_days }}{% if compare_agileforecast %}&compare_agileforecast=1{% endif %}{% if compare_x2r %}&compare_x2r=1{% endif %}&compare_timestral={% if compare_timestral %}0{% else %}1{% endif %}&metric={{ selected_metric }}"
+       class="btn btn-sm" title="Dev-only experiment: Mistral Timestral zero-shot forecast"
+       style="border-color:{{ source_colors.Timestral }};{% if compare_timestral %}background:{{ source_colors.Timestral }};color:#fff{% else %}color:{{ source_colors.Timestral }}{% endif %}">
+      Timestral
+    </a>
+    {% endif %}
     {% endif %}
 
     <div class="vr d-none d-sm-block" style="opacity:.3"></div>

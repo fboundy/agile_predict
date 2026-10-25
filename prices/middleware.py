@@ -263,11 +263,13 @@ def _canonical_query(path, q):
                 unit_mode = "da"
             cmp_af = "1" if str(q.get("compare_agileforecast")).lower() in _TRUE_WORDS else "0"
             cmp_x2r = "1" if str(q.get("compare_x2r")).lower() in _TRUE_WORDS else "0"
+            cmp_ts = "1" if str(q.get("compare_timestral")).lower() in _TRUE_WORDS else "0"
 
             return "&".join(
                 [f"window={window}", *date_parts, f"offset_days={offset_days}",
                  f"metric={metric}", f"unit_mode={unit_mode}",
-                 f"compare_agileforecast={cmp_af}", f"compare_x2r={cmp_x2r}"]
+                 f"compare_agileforecast={cmp_af}", f"compare_x2r={cmp_x2r}",
+                 f"compare_timestral={cmp_ts}"]
             )
 
         if path.startswith("/v2/"):
@@ -285,6 +287,7 @@ def _canonical_query(path, q):
             dc = "1" if q.get("dc", "0") == "1" else "0"
             af = "1" if str(q.get("af", "")).lower() in _TRUE_WORDS else "0"
             x2r = "1" if str(q.get("x2r", "")).lower() in _TRUE_WORDS else "0"
+            ts = "1" if str(q.get("ts", "")).lower() in _TRUE_WORDS else "0"
             overlap = "1" if q.get("overlap", "0") == "1" else "0"
             # Summary-card placement (GH #93). It changes the rendered HTML, so
             # it has to be in the key or all three positions collapse onto one
@@ -298,7 +301,7 @@ def _canonical_query(path, q):
             fc = sorted({int(x) for x in q.getlist("fc") if str(x).strip()})
             parts = [
                 f"days={days}", f"band={band}", f"export={export}", f"gen={gen}",
-                f"fg={fg}", f"dc={dc}", f"af={af}", f"x2r={x2r}", f"overlap={overlap}",
+                f"fg={fg}", f"dc={dc}", f"af={af}", f"x2r={x2r}", f"ts={ts}", f"overlap={overlap}",
                 f"summary={summary}",
             ]
             if fc:

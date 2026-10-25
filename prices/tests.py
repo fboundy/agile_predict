@@ -1410,3 +1410,90 @@ class ForecastRetentionTests(TestCase):
         self.assertIn(late_start.id, remaining)
         self.assertNotIn(manual.id, remaining)
         self.assertNotIn(degraded.id, remaining)
+
+
+class TimestralTests(TestCase):
+    """Dev-only Timestral forecast: inputs on a common grid, overlay gating, cache
+    keys and the worker hook. torch/timestral are never imported here."""
+
+    def _seed(self, now):
+        start = (now - pd.Timedelta(days=3)).floor("30min")
+        for i, ts in enumerate(pd.date_range(start, now.floor("30min"), freq="30min")):
+            PriceHistory.objects.create(date_time=ts, day_ahead=80.0 + i % 10, agile=20.0)
+        older = Forecasts.objects.create(name="older")
+        latest = Forecasts.objects.create(name="latest")
+        Forecasts.objects.filter(id=older.id).update(created_at=now - pd.Timedelta(days=1))
+        Forecasts.objects.filter(id=latest.id).update(created_at=now)
+        cov = dict(bm_wind=1, emb_wind=1, temp_2m=1, wind_10m=1, rad=1, dispatchable_capacity=1, demand=1)
+        for fc, solar, first, last in ((older, 1.0, -1, 3), (latest, 2.0, 0, 2)):
+            for ts in pd.date_range(now.floor("30min") + pd.Timedelta(days=first), now + pd.Timedelta(days=last), freq="30min"):
+                ForecastData.objects.create(forecast=fc, date_time=ts, solar=solar, **cov)
+        return latest
+
+    @patch("prices.timestral.get_gb60", return_value=None)
+    def test_inputs_start_horizon_after_last_price_with_latest_covariates(self, _gb60):
+        from prices.timestral import build_inputs
+
+        now = pd.Timestamp.now(tz="UTC")
+        self._seed(now)
+        index, target, covariates, horizon_start = build_inputs(context_days=5, now=now)
+
+        self.assertEqual(horizon_start, PriceHistory.objects.latest("date_time").date_time + timedelta(minutes=30))
+        self.assertTrue(target[index >= horizon_start].isna().all())
+        self.assertEqual(index[-1], now.floor("30min") + pd.Timedelta(days=2))
+        # The latest run supersedes the older one wherever both cover a slot.
+        self.assertTrue((covariates.loc[index >= horizon_start, "solar"] == 2.0).all())
+        self.assertTrue((covariates.loc[index < now.floor("30min"), "solar"].dropna() == 1.0).all())
+
+    @patch("prices.timestral.get_gb60")
+    def test_backtest_inputs_only_use_what_was_known_then(self, gb60):
+        from prices.timestral import build_inputs
+
+        now = pd.Timestamp.now(tz="UTC")
+        self._seed(now)
+        older = Forecasts.objects.get(name="older")
+        cutoff = (now - pd.Timedelta(days=1)).floor("30min")
+        index, target, covariates, horizon_start = build_inputs(context_days=5, run=older, prices_before=cutoff)
+
+        gb60.assert_not_called()
+        self.assertEqual(horizon_start, cutoff)
+        self.assertNotIn(2.0, covariates["solar"].unique())
+
+    @override_settings(RESPONSE_CACHE_ENABLED=False)
+    def test_overlay_ignored_unless_enabled(self):
+        ExternalForecast.objects.create(
+            source=ExternalForecast.SOURCE_TIMESTRAL, region="G", forecast_name="t",
+            source_created_at=timezone.now(), date_time=timezone.now() + timedelta(hours=1), agile_pred=10.0,
+        )
+        with override_settings(TIMESTRAL_ENABLED=False):
+            self.assertEqual(self.client.get("/v2/G/ext-forecast/?ts=1").json()["traces"], [])
+        with override_settings(TIMESTRAL_ENABLED=True):
+            traces = self.client.get("/v2/G/ext-forecast/?ts=1").json()["traces"]
+        self.assertEqual(len(traces), 1)
+        self.assertTrue(traces[0]["name"].startswith("Timestral"))
+
+    def test_cache_keys_distinguish_timestral_toggle(self):
+        from django.core.cache import cache
+        from prices.middleware import ResponseCacheMiddleware
+
+        def key(url):
+            cache.delete("rc:data-ver")
+            return ResponseCacheMiddleware(lambda r: None)._key(RequestFactory().get(url))
+
+        self.assertNotEqual(key("/v2/X/?ts=1"), key("/v2/X/"))
+        self.assertNotEqual(key("/v2/history/?compare_timestral=1"), key("/v2/history/"))
+
+    @patch("prices.management.commands.update_worker.subprocess.run")
+    def test_worker_runs_timestral_only_when_enabled(self, run):
+        from prices.management.commands.update_worker import Command as WorkerCommand
+
+        run.return_value.returncode = 0
+        with patch("prices.management.commands.update_worker.call_command"):
+            with override_settings(TIMESTRAL_ENABLED=False):
+                WorkerCommand().run_job(UpdateJob.objects.create(job_type=UpdateJob.JOB_UPDATE))
+            run.assert_not_called()
+            with override_settings(TIMESTRAL_ENABLED=True):
+                WorkerCommand().run_job(UpdateJob.objects.create(job_type=UpdateJob.JOB_UPDATE))
+                WorkerCommand().run_job(UpdateJob.objects.create(job_type=UpdateJob.JOB_LATEST_AGILE))
+        self.assertEqual(run.call_count, 1)
+        self.assertIn("timestral_forecast", run.call_args.args[0])

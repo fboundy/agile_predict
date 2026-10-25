@@ -4,7 +4,7 @@
 <script>
 (function () {
   var KEY = 'ap_prefs_{{ region }}';
-  var PREF_KEYS = ['days','band','export','gen','dc','af','x2r','overlap','summary'];
+  var PREF_KEYS = ['days','band','export','gen','dc','af','x2r','ts','overlap','summary'];
   var params = new URLSearchParams(window.location.search);
   var hasPrefs = PREF_KEYS.some(function(k){ return params.has(k); });
   if (!hasPrefs) {
@@ -22,7 +22,7 @@
 <div class="container-lg py-3">
 
   {# ======== Status cards (data sources + externals) collapsed behind toggle ======== #}
-  {% if api_status or show_af or show_x2r %}
+  {% if api_status or show_af or show_x2r or show_ts %}
   <div class="mb-3">
     <button id="status-btn" class="btn d-flex align-items-center gap-3 px-3 py-2 w-100 text-start"
             style="background:#2a2d31;border:none;color:#dee2e6;border-radius:.375rem;transition:background .2s"
@@ -122,7 +122,7 @@
       <span class="text-body-secondary" style="font-size:.72rem;white-space:nowrap">Period</span>
       <div class="btn-group btn-group-sm" role="group" aria-label="Days to show">
         {% for d in day_options %}
-        <a href="?days={{ d }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+        <a href="?days={{ d }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_ts %}&ts=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
            class="btn {% if days == d %}btn-primary{% else %}btn-outline-secondary{% endif %}">{{ d }}d</a>
         {% endfor %}
       </div>
@@ -146,30 +146,30 @@
 
       {# Toggles #}
       {% if not is_raw_day_ahead_region %}
-      <a href="?days={{ days }}&band={% if show_band %}0{% else %}1{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+      <a href="?days={{ days }}&band={% if show_band %}0{% else %}1{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_ts %}&ts=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
          class="btn btn-sm {% if show_band %}btn-outline-info active{% else %}btn-outline-secondary{% endif %}">
         Uncertainty band
       </a>
-      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}&export={% if show_export %}0{% else %}1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}&export={% if show_export %}0{% else %}1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_ts %}&ts=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
          class="btn btn-sm {% if show_export %}btn-outline-warning active{% else %}btn-outline-secondary{% endif %}">
         Export prices
       </a>
       {% endif %}
-      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}&overlap={% if show_overlap %}0{% else %}1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_ts %}&ts=1{% endif %}&overlap={% if show_overlap %}0{% else %}1{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
          class="btn btn-sm {% if show_overlap %}btn-outline-info active{% else %}btn-outline-secondary{% endif %}"
          title="Show each forecast for its full duration, including where a confirmed price now exists">
         Forecast overlap
       </a>
-      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}&gen={% if show_gen %}0{% else %}1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}&gen={% if show_gen %}0{% else %}1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_ts %}&ts=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
          class="btn btn-sm {% if show_gen %}btn-outline-success active{% else %}btn-outline-secondary{% endif %}">
         Gen &amp; demand
       </a>
-      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}&dc={% if show_dc %}0{% else %}1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}&dc={% if show_dc %}0{% else %}1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_ts %}&ts=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
          class="btn btn-sm {% if show_dc %}btn-outline-warning active{% else %}btn-outline-secondary{% endif %}">
         Dispatch capacity
       </a>
       {% if show_gen and selected_ids %}
-      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}&gen=1&fg={% if show_fc_gen %}0{% else %}1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}&gen=1&fg={% if show_fc_gen %}0{% else %}1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_ts %}&ts=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
          class="btn btn-sm {% if show_fc_gen %}btn-outline-success active{% else %}btn-outline-secondary{% endif %}">
         Forecast inputs
       </a>
@@ -178,16 +178,23 @@
       {# External forecast overlays #}
       {% if not is_raw_day_ahead_region %}
       <div class="vr d-none d-sm-block" style="opacity:.3"></div>
-      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}&af={% if show_af %}0{% else %}1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}&af={% if show_af %}0{% else %}1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_ts %}&ts=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
          class="btn btn-sm"
          style="border-color:#D55E00;{% if show_af %}background:#D55E00;color:#fff{% else %}color:#D55E00{% endif %}">
         AgileForecast
       </a>
-      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}&x2r={% if show_x2r %}0{% else %}1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}&x2r={% if show_x2r %}0{% else %}1{% endif %}{% if show_ts %}&ts=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
          class="btn btn-sm"
          style="border-color:#009E73;{% if show_x2r %}background:#009E73;color:#fff{% else %}color:#009E73{% endif %}">
         X2R
       </a>
+      {% if timestral_enabled %}
+      <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}&ts={% if show_ts %}0{% else %}1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+         class="btn btn-sm" title="Dev-only experiment: Mistral Timestral zero-shot forecast"
+         style="border-color:#CC79A7;{% if show_ts %}background:#CC79A7;color:#fff{% else %}color:#CC79A7{% endif %}">
+        Timestral
+      </a>
+      {% endif %}
       {% endif %}
 
       {% comment %} Summary-card placement (GH #93). Three states rather than a toggle,
@@ -198,7 +205,7 @@
         <span class="text-body-secondary" style="font-size:.72rem;white-space:nowrap">Summary</span>
         <div class="btn-group btn-group-sm" role="group" aria-label="Summary card placement">
           {% for pos, label in summary_pos_options %}
-          <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if pos != "above" %}&summary={{ pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
+          <a href="?days={{ days }}{% if not show_band %}&band=0{% endif %}{% if show_export %}&export=1{% endif %}{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_ts %}&ts=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if pos != "above" %}&summary={{ pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}"
              class="btn {% if summary_pos == pos %}btn-primary{% else %}btn-outline-secondary{% endif %}">{{ label }}</a>
           {% endfor %}
         </div>
@@ -223,6 +230,7 @@
         {% if show_dc %}<input type="hidden" name="dc" value="1">{% endif %}
         {% if show_af %}<input type="hidden" name="af" value="1">{% endif %}
         {% if show_x2r %}<input type="hidden" name="x2r" value="1">{% endif %}
+        {% if show_ts %}<input type="hidden" name="ts" value="1">{% endif %}
         {% if summary_pos != "above" %}<input type="hidden" name="summary" value="{{ summary_pos }}">{% endif %}
         {% if show_overlap %}<input type="hidden" name="overlap" value="1">{% endif %}
         {% for f in forecast_list %}
@@ -264,7 +272,7 @@
   })();
   </script>
 
-  {% if show_af or show_x2r %}
+  {% if show_af or show_x2r or show_ts %}
   <script>
   (function () {
     var plotDiv = document.querySelector('.plotly-graph-div');
@@ -275,6 +283,7 @@
     {% if show_export %}params.set('export', '1');{% endif %}
     {% if show_af %}params.set('af', '1');{% endif %}
     {% if show_x2r %}params.set('x2r', '1');{% endif %}
+    {% if show_ts %}params.set('ts', '1');{% endif %}
 
     function addStatusCard(name, health, detail) {
       var row = document.getElementById('status-cards-row');
