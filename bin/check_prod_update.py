@@ -28,14 +28,9 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 LONDON = ZoneInfo("Europe/London")
-UTC = ZoneInfo("UTC")
+# EasyCron's schedule is in Europe/London time: after the 2026-10-25 clock change
+# the updates landed at 06:15/11:15/16:15/22:15 GMT, not an hour earlier.
 EXPECTED_TIMES = [(6, 15), (11, 15), (16, 15), (22, 15)]
-# EasyCron was last verified firing at these UTC times (= the London times above in
-# BST). It is not recorded whether its schedule is set in UTC or Europe/London, so
-# in GMT the runs may come an hour earlier than EXPECTED_TIMES. Checking against
-# the earlier of the two readings avoids four false alarms a day all winter if it
-# is UTC, at the cost of noticing a missed run up to one slot later.
-EXPECTED_TIMES_UTC = [(5, 15), (10, 15), (15, 15), (21, 15)]
 GRACE = timedelta(minutes=20)  # give the worker time to pick up and run the job
 API_URL = "https://prices.fly.dev/api/"
 HEALTHZ_URL = "https://prices.fly.dev/healthz"
@@ -48,21 +43,16 @@ def fetch(url):
         return resp.status, resp.read()
 
 
-def _most_recent(now, times, tz):
-    local_now = now.astimezone(tz)
+def most_recent_expected(now):
+    """Return the latest expected run datetime that is already past its grace period."""
+    local_now = now.astimezone(LONDON)
     candidates = []
     for day_offset in (0, -1):
         day = local_now + timedelta(days=day_offset)
-        for hour, minute in times:
+        for hour, minute in EXPECTED_TIMES:
             candidates.append(day.replace(hour=hour, minute=minute, second=0, microsecond=0))
     past = [c for c in candidates if c + GRACE <= local_now]
-    return max(past).astimezone(LONDON)
-
-
-def most_recent_expected(now):
-    """Return the latest expected run datetime that is already past its grace period,
-    reading the schedule as London time or UTC, whichever is earlier."""
-    return min(_most_recent(now, EXPECTED_TIMES, LONDON), _most_recent(now, EXPECTED_TIMES_UTC, UTC))
+    return max(past)
 
 
 def send_ntfy_alert(message):
