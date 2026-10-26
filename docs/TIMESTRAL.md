@@ -96,3 +96,50 @@ The 28M model was run on the same 54 runs as the 5M backtest. Errors are Agile G
   slots by hedging towards the middle.
 - **Errors correlate at 0.84.** A blend gives the lowest MAE overall (6.99) but matches the
   28M alone in the clean window.
+
+## Ensemble forecast as a covariate (#2), 2026-10-26
+
+`--ensemble-covariate` adds the ensemble's own forecast as a known covariate. For each slot
+it takes the most recent run that genuinely forecast it; slots a run copied from published
+prices are skipped. Results were scored with `evaluate_forecasts` (docs/FORECAST_EVALUATION.md)
+at lead ≥ 2 d, in Agile G p/kWh. "Blend" is the 50/50 average of the ensemble and ts28.
+
+Clean window (19 runs from 5 Oct):
+
+| | MAE | RMSE | bias | MAE bottom 10% | cheap 4h regret | cheap 4h hit | peak 3h regret | day rank corr |
+|---|---|---|---|---|---|---|---|---|
+| ensemble | 7.45 | 10.16 | 1.65 | 20.9 | **2.24** | **0.47** | 0.10 | 0.765 |
+| ts28 | **7.13** | 10.08 | 1.50 | **19.4** | 3.29 | 0.42 | 0.12 | 0.751 |
+| ts28 + ens covariate | 7.62 | 10.22 | **0.73** | 19.5 | 2.90 | 0.44 | **0.06** | 0.764 |
+| ts5 + ens covariate | 7.91 | 10.92 | 1.21 | 21.6 | 3.69 | 0.36 | 0.42 | 0.747 |
+| blend | 7.14 | **9.91** | 1.57 | 20.1 | 3.05 | 0.41 | 0.06 | **0.774** |
+
+All 52 daily runs (the ensemble before 5 Oct is the trial algorithm):
+
+| | MAE | RMSE | cheap 4h regret | day rank corr |
+|---|---|---|---|---|
+| ensemble | 7.13 | 9.81 | 2.34 | 0.814 |
+| ts28 | 7.11 | 10.08 | 1.79 | 0.813 |
+| ts28 + ens covariate | 7.29 | 9.95 | **1.65** | 0.821 |
+| blend | **6.93** | **9.61** | 1.77 | **0.828** |
+
+Findings:
+
+- **The covariate didn't turn Timestral into a corrector.** With it, ts28 is closer to the
+  ensemble on timing (cheap-window regret 2.90 against 3.29 without it) and has less bias.
+  But it loses ts28's MAE advantage (7.62 against 7.13), and it still picks cheap windows
+  worse than the ensemble in the clean window.
+- **The two periods disagree on timing.** Over all runs, every Timestral variant picks
+  cheaper windows than the ensemble. In the clean window the ensemble is clearly best (2.24
+  against 2.9–3.7). The all-runs comparison is partly against the trial algorithm, so the
+  clean window is the one to trust. However, it is only 19 runs.
+- **No variant fixes the tails or negative prices.** All sd ratios are 0.6–0.66, and recall
+  of negative slots is under 10%.
+- **The blend is the best all-rounder on error** (lowest RMSE in both periods, lowest MAE
+  overall) but gives up the ensemble's cheap-window timing in the clean window.
+- **Verdict:** nothing here justifies replacing or changing the production forecast yet.
+  - ts28 alone is the best on MAE. The ensemble remains best at picking the cheapest
+    window.
+  - Leave Timestral running live on dev (switch to 28M) and re-score with
+    `evaluate_forecasts` once more clean runs accumulate. Pulling production's history would
+    allow a definitive comparison sooner.
