@@ -211,6 +211,8 @@ UPDATE_CATCHUP_HOURS = env.int("UPDATE_CATCHUP_HOURS", default=9)
 TIMESTRAL_ENABLED = env.bool("TIMESTRAL_ENABLED", default=False)
 TIMESTRAL_MODEL = env.str("TIMESTRAL_MODEL", default="mistralai/Timestral-5M")
 TIMESTRAL_CONTEXT_DAYS = env.int("TIMESTRAL_CONTEXT_DAYS", default=365)
+# Give Timestral the ensemble's own forecast as a known covariate (docs/TIMESTRAL.md).
+TIMESTRAL_ENSEMBLE_COVARIATE = env.bool("TIMESTRAL_ENSEMBLE_COVARIATE", default=False)
 TIMESTRAL_TIMEOUT_SECONDS = env.int("TIMESTRAL_TIMEOUT_SECONDS", default=900)
 
 # Event-keyed response caching for anonymous GETs on the heavy chart/API paths.

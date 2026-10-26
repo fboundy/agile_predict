@@ -34,6 +34,9 @@ class Command(BaseCommand):
         parser.add_argument("--model", default=settings.TIMESTRAL_MODEL)
         parser.add_argument("--context-days", type=int, default=settings.TIMESTRAL_CONTEXT_DAYS)
         parser.add_argument("--start", help="Only runs created on/after this date")
+        parser.add_argument(
+            "--ensemble-covariate", action="store_true", help="Give Timestral the ensemble forecast as a covariate"
+        )
         parser.add_argument("--csv", default="logs/timestral_backtest.csv", help="Per-slot results")
 
     def handle(self, *args, **options):
@@ -57,7 +60,8 @@ class Command(BaseCommand):
             cutoff, ensemble = first_unpriced_slot(run_obj, prices)
             try:
                 ts = forecast_day_ahead(
-                    options["model"], options["context_days"], run=run_obj, prices_before=cutoff, forecaster=forecaster
+                    options["model"], options["context_days"], run=run_obj, prices_before=cutoff,
+                    forecaster=forecaster, with_ensemble=options["ensemble_covariate"],
                 )
             except Exception as exc:
                 self.stderr.write(f"{run['name']}: {exc}")

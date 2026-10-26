@@ -25,7 +25,7 @@ from django.utils import timezone
 from config.utils import day_ahead_to_agile, get_gb60
 from prices.external_forecasts import _save_rows
 from prices.forecast_features import _bank_holiday_series
-from prices.models import ExternalForecast, ForecastData, Forecasts, PriceHistory
+from prices.models import AgileData, ExternalForecast, ForecastData, Forecasts, PriceHistory
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +79,35 @@ def stitched_covariates(start, as_of=None):
     return df.set_index("date_time").sort_index()[COVARIATES].astype(float)
 
 
+def ensemble_covariate(start, as_of=None):
+    """The ensemble's own day-ahead forecast per slot, as a covariate for Timestral.
+
+    Each slot takes the most recent run that genuinely forecast it: slots a run
+    copied from already-published prices are skipped, or the covariate would equal
+    the target over the context and Timestral would learn to trust it blindly.
+    Read from the region-G Agile forecast, so runs stored under the old day-ahead
+    units still convert consistently.
+    """
+    rows = AgileData.objects.filter(region=REGION, date_time__gte=start)
+    if as_of is not None:
+        rows = rows.filter(forecast__created_at__lte=as_of)
+    df = pd.DataFrame(
+        list(rows.values_list("forecast_id", "forecast__created_at", "date_time", "agile_pred")),
+        columns=["run", "created_at", "date_time", "agile"],
+    )
+    if df.empty:
+        return pd.Series(dtype=float, name="ensemble")
+    df["date_time"] = pd.to_datetime(df["date_time"], utc=True)
+    known = pd.Series(dict(PriceHistory.objects.filter(date_time__gte=start).values_list("date_time", "agile")), dtype=float)
+    known.index = pd.DatetimeIndex(known.index).tz_convert("UTC")
+    copied = (df["agile"] - df["date_time"].map(known)).abs() <= 0.01
+    first_forecast = df.loc[~copied].groupby("run")["date_time"].min()
+    df = df[df["date_time"] >= df["run"].map(first_forecast)]
+    df = df.sort_values("created_at").drop_duplicates("date_time", keep="last").set_index("date_time").sort_index()
+    agile = df["agile"].astype(float)
+    return day_ahead_to_agile(agile.copy(), reverse=True, region=REGION).set_axis(agile.index).rename("ensemble")
+
+
 def calendar_covariates(index):
     """Known-future calendar rows. All-0/1 rows are treated as indicators by Timestral."""
     gb = index.tz_convert("GB")
@@ -94,7 +123,7 @@ def calendar_covariates(index):
     )
 
 
-def build_inputs(context_days, now=None, run=None, prices_before=None):
+def build_inputs(context_days, now=None, run=None, prices_before=None, with_ensemble=False):
     """Return (index, target, covariates, horizon_start) on a common 30-min UTC grid.
 
     ``run`` (a Forecasts row) and ``prices_before`` reconstruct what was known when
@@ -118,6 +147,8 @@ def build_inputs(context_days, now=None, run=None, prices_before=None):
     target = prices.reindex(index)
     target[index >= horizon_start] = np.nan
     covariates = pd.concat([stitched_covariates(start, as_of).reindex(index), calendar_covariates(index)], axis=1)
+    if with_ensemble:
+        covariates["ensemble"] = ensemble_covariate(start, as_of).reindex(index)
     return index, target, covariates, horizon_start
 
 
@@ -127,12 +158,18 @@ def load_forecaster(model_name=None):
     return TimestralForecaster.from_pretrained(model_name or settings.TIMESTRAL_MODEL)
 
 
-def forecast_day_ahead(model_name=None, context_days=None, now=None, run=None, prices_before=None, forecaster=None):
+def forecast_day_ahead(
+    model_name=None, context_days=None, now=None, run=None, prices_before=None, forecaster=None, with_ensemble=None
+):
     """Run Timestral and return a DataFrame of day-ahead median/low/high over the horizon."""
     model_name = model_name or settings.TIMESTRAL_MODEL
     context_days = context_days or settings.TIMESTRAL_CONTEXT_DAYS
+    if with_ensemble is None:
+        with_ensemble = settings.TIMESTRAL_ENSEMBLE_COVARIATE
 
-    index, target, covariates, horizon_start = build_inputs(context_days, now=now, run=run, prices_before=prices_before)
+    index, target, covariates, horizon_start = build_inputs(
+        context_days, now=now, run=run, prices_before=prices_before, with_ensemble=with_ensemble
+    )
     is_context = index < horizon_start
     context = target[is_context].to_numpy()
     horizon = int((~is_context).sum())

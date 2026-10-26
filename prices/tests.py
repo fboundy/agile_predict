@@ -1459,6 +1459,29 @@ class TimestralTests(TestCase):
         self.assertEqual(horizon_start, cutoff)
         self.assertNotIn(2.0, covariates["solar"].unique())
 
+    def test_ensemble_covariate_skips_slots_copied_from_known_prices(self):
+        from prices.timestral import ensemble_covariate
+
+        t0 = pd.Timestamp("2026-10-01 00:00", tz="UTC")
+        slots = [t0 + pd.Timedelta(minutes=30 * i) for i in range(4)]
+        for ts in slots:
+            PriceHistory.objects.create(date_time=ts, day_ahead=50.0, agile=20.0)
+        older, newer = Forecasts.objects.create(name="a"), Forecasts.objects.create(name="b")
+        Forecasts.objects.filter(id=older.id).update(created_at=t0 - pd.Timedelta(days=2))
+        Forecasts.objects.filter(id=newer.id).update(created_at=t0 - pd.Timedelta(days=1))
+        for fc, values in ((older, [20.0, 25.0, 26.0, None]), (newer, [None, 20.0, 30.0, 31.0])):
+            for ts, v in zip(slots, values):
+                if v is not None:
+                    AgileData.objects.create(forecast=fc, region="G", date_time=ts, agile_pred=v, agile_low=v, agile_high=v)
+
+        cov = ensemble_covariate(t0 - pd.Timedelta(days=1))
+        agile = day_ahead_to_agile(cov.copy(), region="G")
+
+        # slot 0 was only ever copied; slot 1 comes from the older run because the
+        # newer one copied it; slots 2-3 from the newer run.
+        self.assertEqual(list(cov.index), slots[1:])
+        self.assertEqual([round(v, 2) for v in agile], [25.0, 30.0, 31.0])
+
     @override_settings(RESPONSE_CACHE_ENABLED=False)
     def test_overlay_ignored_unless_enabled(self):
         ExternalForecast.objects.create(
