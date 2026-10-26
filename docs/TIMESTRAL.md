@@ -73,3 +73,26 @@ were 54 runs (26 Aug – 23 Oct) and 30.6k scored slots. Errors are Agile G in p
   day_ahead units (see MODEL_DYNAMIC_RANGE.md). The clean window is runs from 5 Oct, where
   the ensemble leads by about 1p a week: Timestral 7.0 / 9.5 / 14.1 against ensemble
   6.2 / 8.2 / 12.4.
+
+## Backtest: 28M, 2026-10-25
+
+The 28M model was run on the same 54 runs as the 5M backtest. Errors are Agile G in p/kWh.
+
+| | MAE | RMSE | sd of forecast |
+|---|---|---|---|
+| Timestral 28M, lead ≥ 2 d | **7.10** | 10.07 | 8.36 |
+| Ensemble, lead ≥ 2 d | 7.41 | **9.91** | 10.99 |
+| 50/50 blend, lead ≥ 2 d | 6.99 | | |
+| Clean window (runs from 5 Oct): 28M / ensemble / blend | 7.13 / 7.45 / 7.14 | | |
+
+- **MAE is about 0.3p better than the ensemble.** The 28M beats it at leads of 2–5 days
+  and again at 10–13 days, and is level or slightly worse at 6–9 days. It wins in 5 of the
+  9 run-weeks. It is a clear step up from the 5M (7.82).
+- **RMSE is still slightly worse**, which means it makes fewer moderate errors but larger
+  misses.
+- **The tails are worse still.** Its sd is 8.4, against 11.0 for the ensemble and 13.7
+  actual. In the bottom decile of actuals (−0.2p) it forecasts 21.6p against the ensemble's
+  16.3p. In the top decile (51.1p) it forecasts 45.5p against 48.0p. It wins on typical
+  slots by hedging towards the middle.
+- **Errors correlate at 0.84.** A blend gives the lowest MAE overall (6.99) but matches the
+  28M alone in the clean window.
