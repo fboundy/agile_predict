@@ -4,8 +4,9 @@ channels:
   - defaults
 dependencies:
   - python=3.12
-  - django=4.2.*
+  - django=4.2
   - djangorestframework
+  - django-cors-headers
   - environs
   - psycopg2-binary
   - dj-database-url

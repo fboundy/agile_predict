@@ -241,12 +241,14 @@ INSTALLED_APPS = [
     "rest_framework",
     "crispy_forms",
     "crispy_bootstrap5",
+    "corsheaders",
     # Local
     "prices",
     "api",
 ]
 
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",
     "prices.middleware.HealthCheckMiddleware",
     "prices.middleware.BlocklistMiddleware",
     "prices.middleware.RateLimitMiddleware",
@@ -511,3 +513,8 @@ GLOBAL_SETTINGS = {
         },
     },
 }
+
+
+# Public, read-only API: allow cross-origin GETs from browsers
+CORS_URLS_REGEX = r"^/api/.*$"
+CORS_ALLOW_ALL_ORIGINS = True
