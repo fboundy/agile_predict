@@ -247,10 +247,10 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "prices.middleware.ApiCorsMiddleware",
     "prices.middleware.HealthCheckMiddleware",
     "prices.middleware.BlocklistMiddleware",
     "prices.middleware.RateLimitMiddleware",
-    "prices.middleware.ApiCorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
@@ -263,6 +263,7 @@ MIDDLEWARE = [
     # middleware above still post-process cache hits.
     "prices.middleware.ResponseCacheMiddleware",
 ]
+
 
 ROOT_URLCONF = "config.urls"
 
