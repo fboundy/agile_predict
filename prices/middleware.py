@@ -426,10 +426,17 @@ class ResponseCacheMiddleware:
 
 
 class ApiCorsMiddleware:
+    """Allow cross-origin requests for the public, read-only /api/ endpoint.
+
+    This is safe as the data is public and we do not set cookies or provide
+    any credentials (e.g. Authorization headers) on these responses.
+    """
     def __init__(self, get_response):
         self.get_response = get_response
+
     def __call__(self, request):
         response = self.get_response(request)
-            if request.path.startswith("/api/"):
-                response["Access-Control-Allow-Origin"] = "*"
-            return response
+        if request.path.startswith("/api/"):
+            response["Access-Control-Allow-Origin"] = "*"
+        return response
+
