@@ -1410,3 +1410,21 @@ class ForecastRetentionTests(TestCase):
         self.assertIn(late_start.id, remaining)
         self.assertNotIn(manual.id, remaining)
         self.assertNotIn(degraded.id, remaining)
+
+class ApiCorsTests(TestCase):
+    def test_api_cors_header_on_success(self):
+        response = self.client.get("/api/G/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Access-Control-Allow-Origin"], "*")
+
+    def test_no_cors_header_on_non_api_page(self):
+        response = self.client.get("/")
+        # We don't check the status code is 200 here because its a redirect (3xx)
+        self.assertNotIn("Access-Control-Allow-Origin", response)
+
+    def test_api_cors_header_on_rate_limited(self):
+        # Override ratelimit to ensure 429
+        with override_settings(RATELIMIT_PER_MIN=0):
+            response = self.client.get("/api/G/")
+            self.assertEqual(response.status_code, 429)
+            self.assertEqual(response["Access-Control-Allow-Origin"], "*")
