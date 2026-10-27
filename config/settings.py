@@ -250,6 +250,7 @@ MIDDLEWARE = [
     "prices.middleware.HealthCheckMiddleware",
     "prices.middleware.BlocklistMiddleware",
     "prices.middleware.RateLimitMiddleware",
+    "prices.middleware.ApiCorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
