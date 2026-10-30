@@ -45,7 +45,7 @@ def get_gb60():
     }
 
     try:
-        r = requests.get(url, params=params)
+        r = requests.get(url, params=params, timeout=30)
         r.raise_for_status()  # Raise an exception for unsuccessful HTTP status codes
 
     except requests.exceptions.RequestException as e:
@@ -1066,7 +1066,7 @@ class DataSet:
         code = None
         for n in range(RETRIES):
             try:
-                response = requests.get(url=self.url, params=self.params)
+                response = requests.get(url=self.url, params=self.params, timeout=30)
                 response.raise_for_status()
                 break
 
@@ -1229,7 +1229,7 @@ def get_agile(start=pd.Timestamp("2023-07-01"), tz="GB", region="G"):
             "period_to": _oct_time(end),
         }
 
-        r = requests.get(url, params=params)
+        r = requests.get(url, params=params, timeout=30)
         try:
             payload = r.json()
         except ValueError:
@@ -1343,6 +1343,15 @@ def df_to_Model(df, myModel, update=False):
                 obj.save()
             except Exception as e:
                 logger.warning("Failed to update model=%s datetime=%s error=%s", myModel.__name__, index, e)
+
+
+def df_to_Model_bulk(df, myModel, batch_size=1000):
+    """Insert every row of df, or raise. Unlike df_to_Model it never swallows a
+    failed row: inside a transaction that silently rolled back the whole forecast
+    while the update reported success."""
+    myModel.objects.bulk_create(
+        [myModel(date_time=index, **row) for index, row in df.iterrows()], batch_size=batch_size
+    )
 
 
 def model_to_df(myModel):

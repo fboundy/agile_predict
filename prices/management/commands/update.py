@@ -578,7 +578,13 @@ class Command(BaseCommand):
         if debug:
             logger.info(f"GB60:\n{gb60}")
 
-        gb60 = gb60.resample("30min").ffill().loc[agile_end + pd.Timedelta("30min") :]
+        # get_gb60 returns None when Nord Pool is unreachable; forecast without it
+        # rather than losing the whole cycle.
+        if gb60 is None:
+            logger.warning("GB60 day-ahead prices unavailable; continuing without them")
+            gb60 = pd.Series(dtype=float)
+        else:
+            gb60 = gb60.resample("30min").ffill().loc[agile_end + pd.Timedelta("30min") :]
 
         if len(gb60) > 0:
             gb60 = gb60.reindex(
@@ -1192,9 +1198,9 @@ class Command(BaseCommand):
                         fc["forecast"] = this_forecast
                         ag["forecast"] = this_forecast
                         logger.info(f"Writing ForecastData rows: {len(fc)}")
-                        df_to_Model(fc, ForecastData)
+                        df_to_Model_bulk(fc, ForecastData)
                         logger.info(f"Writing AgileData rows: {len(ag)}")
-                        df_to_Model(ag, AgileData)
+                        df_to_Model_bulk(ag, AgileData)
                     logger.info(f"Finished writing forecast {this_forecast.id}: {this_forecast.name}")
 
         if debug:

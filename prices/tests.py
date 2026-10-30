@@ -11,7 +11,7 @@ from django.test import RequestFactory, TestCase, override_settings
 from django.utils import timezone
 
 from config.settings import GLOBAL_SETTINGS
-from config.utils import day_ahead_to_agile, get_gas_ttf_history
+from config.utils import day_ahead_to_agile, df_to_Model_bulk, get_gas_ttf_history
 from prices.forecast_features import (
     build_training_data,
     FEATURE_SETS,
@@ -1410,3 +1410,24 @@ class ForecastRetentionTests(TestCase):
         self.assertIn(late_start.id, remaining)
         self.assertNotIn(manual.id, remaining)
         self.assertNotIn(degraded.id, remaining)
+
+
+class ForecastSaveTests(TestCase):
+    """A forecast is saved whole or the update fails: a bad row must never be
+    skipped silently (inside the save transaction that rolled back every row)."""
+
+    def frame(self, forecast, preds):
+        index = pd.date_range("2026-05-01", periods=len(preds), freq="30min", tz="GB")
+        return pd.DataFrame(
+            {"forecast": forecast, "region": "G", "agile_pred": preds, "agile_low": 1.0, "agile_high": 2.0}, index=index
+        )
+
+    def test_saves_every_row(self):
+        forecast = Forecasts.objects.create(name="2026-05-01 05:15")
+        df_to_Model_bulk(self.frame(forecast, [1.0, 2.0, 3.0]), AgileData)
+        self.assertEqual(AgileData.objects.filter(forecast=forecast).count(), 3)
+
+    def test_a_bad_row_raises_instead_of_being_skipped(self):
+        forecast = Forecasts.objects.create(name="2026-05-01 05:15")
+        with self.assertRaises(Exception):
+            df_to_Model_bulk(self.frame(forecast, [1.0, None, 3.0]).astype({"agile_pred": object}), AgileData)

@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta, timezone as datetime_timezone
+import pandas as pd
 
 from django.test import TestCase
 from django.utils import timezone
 
+from config.utils import import_agile_to_export_agile
 from prices.models import AgileData, Forecasts, PriceHistory
 
 
@@ -99,3 +101,34 @@ class AccuracyAPITests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertAlmostEqual(payload[0]["prices"][0]["agile_pred"], 10.59)
+
+    def test_bulk_api_export_converts_each_row_with_its_own_region(self):
+        created_at = datetime(2026, 5, 1, tzinfo=datetime_timezone.utc)
+        forecast = self.create_forecast(created_at)
+        slots = [created_at + timedelta(hours=12), created_at + timedelta(hours=16)]  # off-peak and 17:00 BST peak
+        for region in ("A", "P"):
+            for date_time in slots:
+                AgileData.objects.create(
+                    forecast=forecast, region=region, date_time=date_time, agile_pred=21, agile_low=20, agile_high=24
+                )
+
+        response = self.client.get("/api/?export=true")
+
+        self.assertEqual(response.status_code, 200)
+        rows = response.json()[0]["prices"]
+        self.assertEqual(len(rows), 4)
+        for row in rows:
+            date_time = pd.Timestamp(row["date_time"])
+            for field, value in (("agile_pred", 21), ("agile_low", 20), ("agile_high", 24)):
+                expected = import_agile_to_export_agile(
+                    pd.Series(index=pd.DatetimeIndex([date_time]), data=[value]), region=row["region"]
+                ).iloc[0]
+                self.assertAlmostEqual(row[field], round(float(expected), 4))
+
+    def test_region_forecast_api_caps_forecast_count(self):
+        for i in range(25):
+            self.create_forecast(datetime(2026, 5, 1, tzinfo=datetime_timezone.utc) + timedelta(hours=i))
+
+        self.assertEqual(len(self.client.get("/api/A/?forecast_count=1000").json()), 20)
+        self.assertEqual(len(self.client.get("/api/A/?forecast_count=-1").json()), 1)
+        self.assertEqual(len(self.client.get("/api/A/?forecast_count=abc").json()), 1)

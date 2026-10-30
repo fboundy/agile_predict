@@ -7,22 +7,33 @@ from config.utils import import_agile_to_export_agile
 # These are the serializers for the bulk view
 
 
+class DataListSerializer(serializers.ListSerializer):
+    def to_representation(self, data):
+        items = list(data.all() if hasattr(data, "all") else data)
+        out = super().to_representation(items)
+        if self.context.get("export"):
+            # One conversion per region and field. Converting row by row took
+            # ~150s for /api/?export=true, past gunicorn's 60s timeout.
+            by_region = {}
+            for pos, item in enumerate(items):
+                by_region.setdefault(item.region, []).append(pos)
+            for region, positions in by_region.items():
+                index = pd.to_datetime([items[p].date_time for p in positions])
+                for field in ["agile_pred", "agile_low", "agile_high"]:
+                    converted = import_agile_to_export_agile(
+                        pd.Series(index=index, data=[getattr(items[p], field) for p in positions]),
+                        region=region,
+                    )
+                    for p, value in zip(positions, converted):
+                        out[p][field] = round(float(value), 4)
+        return out
+
+
 class DataSerializer(serializers.ModelSerializer):
     class Meta:
+        list_serializer_class = DataListSerializer
         model = AgileData
         fields = ["date_time", "agile_pred", "agile_low", "agile_high", "region"]
-
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        if self.context.get("export"):
-            index = pd.to_datetime([instance.date_time])
-            for field in ["agile_pred", "agile_low", "agile_high"]:
-                converted = import_agile_to_export_agile(
-                    pd.Series(index=index, data=[getattr(instance, field)]),
-                    region=instance.region,
-                )
-                data[field] = round(float(converted.iloc[0]), 4)
-        return data
 
 
 class PriceForecastSerializer(serializers.ModelSerializer):
