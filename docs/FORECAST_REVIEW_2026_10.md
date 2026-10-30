@@ -110,3 +110,75 @@ Belgian coast, N France).
 The model is too high when the continent is windy and too low when it is calm (24–25 Oct:
 `eu_wind_cf` 0.78–0.90, bias +£88/+£75; 28–30 Oct: 0.05–0.30, bias −£40 to −£64).
 Curtailment and the regional split carry almost none of the remaining error.
+
+## 6. Structural test: which information explains price? (Jun–Oct, actual drivers)
+
+`structural_test.py`: LightGBM on **actual** half-hourly drivers (≈4,500 slots, 1 Jun–30 Oct), so
+forecast error is taken out and only the information content is tested. Base = transmission
+demand, actual solar (B1630), nuclear, time, weekend, TTF. Each candidate is added on its own.
+`fwd` mimics production (train on the prior 60 days, predict the next 7, rolling from 1 Aug);
+`lowo` is leave-one-week-out. Tails = bottom/top decile of actual price.
+
+| feature set | fwd RMSE | fwd low-10 % RMSE | fwd high-10 % bias | lowo RMSE |
+|---|---|---|---|---|
+| GB + **unconstrained** wind (PN) | 29.71 | 52.5 | −22.7 | 31.73 |
+| GB + **metered** (post-curtailment) wind | 30.48 | 54.9 | −19.6 | 32.60 |
+| + Scottish curtailment | 29.32 | 54.5 | −22.1 | 31.60 |
+| + Scottish share of wind | 29.72 | 54.0 | −22.6 | 31.40 |
+| + central-France 10 m wind (today's `fr_wind`) | 29.15 | 52.2 | −21.3 | 31.02 |
+| + **continental wind belt** (`eu_wind_cf`) | 28.13 | **46.9** | −18.0 | 29.04 |
+| + continental + Scottish share + curtailment | 27.73 | 50.9 | −18.0 | 29.27 |
+| GB + PN, target **price / gas** | 28.67 | 51.8 | −14.6 | 26.77 |
+| **continental wind + price/gas target** | **26.66** | 48.6 | **−7.0** | **22.97** |
+
+Findings:
+
+1. **Curtailment: do not add.** Scottish curtailment moves RMSE by ≤0.4 and makes the low tail
+   *worse*. It is also not knowable in advance (it is decided in the BM after the day-ahead
+   auction) — any forecastable version would be a proxy for "lots of Scottish wind", which the
+   wind feature already carries.
+2. **Regional split: do not add.** Scottish share of wind is inert (29.71 → 29.72). This is what the
+   market design predicts: the day-ahead auction is one national zone (zonal pricing was
+   rejected in the July 2025 REMA decision), so it prices *unconstrained* national wind and
+   resolves the Scotland/England imbalance afterwards at NESO's cost. Using **metered** wind is
+   measurably worse than PN — so the one thing to protect is that the wind feature stays the
+   unconstrained forecast (WINDFOR/PN), never an outturn net of curtailment.
+3. **Continental wind: add.** It is the single best new input (−5 % RMSE, −11 % low-tail RMSE) and
+   is the variable the dev model's error tracks (§5). The existing `fr_wind` single point captures
+   about a third of that gain.
+4. **Gas-normalised target: try.** Predicting price/TTF and multiplying back is the largest single
+   improvement on the high tail (bias −22.7 → −7.0) because trees cannot extrapolate price level
+   when gas rises above the training window (TTF went 45 → 104 Jun → Oct; the fortnight's calm
+   days were under-forecast by £40–64). Together with continental wind: fwd RMSE −10 %, lowo −28 %.
+5. **What none of this fixes:** 24–25 Oct is still over-forecast by £45–85 even with *actual*
+   drivers. The 60 days before contained 315 slots with GB wind >15 GW and `eu_wind_cf` >0.6
+   (mean £66) — the regime was not absent, it was milder; that weekend (£31) was a more
+   extreme joint state and the tree ensemble regresses to the leaf mean. This is the
+   compression problem in [`MODEL_DYNAMIC_RANGE.md`](MODEL_DYNAMIC_RANGE.md), not a missing input.
+
+## 7. Recommendations
+
+In priority order. Per the standing caveat in `MODEL_DYNAMIC_RANGE.md` (offline retrain/replay
+has not reproduced production), each should be validated by **live re-scoring of a
+single-difference dev candidate** (dev = main + one change), with the scoring rule fixed in
+advance and an event budget rather than a calendar stop.
+
+1. **Continental wind feature.** Replace/extend `get_open_meteo_fr_weather` (`config/utils.py:197`)
+   with a multi-point 100 m wind fetch over the NW-Europe wind belt (points in `drivers.py`),
+   reduced to a power-curve capacity factor. Open-Meteo serves 16-day forecasts for all points in
+   one call; backfill from its historical-forecast API.
+2. **Gas-normalised target** (`day_ahead / gas_ttf`, rescale at predict time) — a small change in
+   `build_training_data` / prediction; addresses rising-gas under-forecast directly.
+3. **Do not add curtailment or Scotland/England imbalance features.** Keep the wind input on the
+   unconstrained basis.
+4. Not tested here, worth a look later: continental weekend/holiday calendar (24–25 Oct was a
+   weekend on the continent too), and NO2 hydro (Norway priced well below GB on 27–30 Oct).
+
+### Caveats
+
+* §6 uses actual drivers; in production the continental wind is itself a forecast. At 2–4 d the
+  GB wind inputs were accurate this fortnight (§2), so most of the gain should survive, but it
+  must be measured live.
+* `eu_wind_cf` is a crude proxy (one generic power curve, unweighted points). A capacity-weighted
+  version should do better, not worse.
+* 17 days of dev-model residuals (§5) is a small sample; §6 is the larger evidence base.
