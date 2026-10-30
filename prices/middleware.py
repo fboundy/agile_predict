@@ -209,7 +209,7 @@ def _canonical_query(path, q):
         if path.startswith("/api/"):
             # api/views.py: PriceForecast*APIView / AccuracyAPIView
             days = min(max(int(q.get("days", 14)), 1), 14)
-            count = int(q.get("forecast_count", 1))
+            count = min(max(int(q.get("forecast_count", 1)), 1), 20)  # api.views.MAX_FORECAST_COUNT
             high_low = "1" if str(q.get("high_low", "true")).lower() in {"true", "1"} else "0"
             export = "1" if str(q.get("export", "false")).lower() in _TRUE_WORDS else "0"
             region = str(q.get("region", "X")).upper()

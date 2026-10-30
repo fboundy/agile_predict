@@ -40,3 +40,6 @@ Thumbs.db
 
 # Local Django file-based cache
 .django_cache/
+
+# Analysis data dumps
+analysis/**/data/

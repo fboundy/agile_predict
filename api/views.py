@@ -17,6 +17,9 @@ from .serializers import PriceForecastSerializer, PriceForecastRegionSerializer
 
 logger = logging.getLogger("prices.api")
 
+# 20 runs is ~1.1MB, under the 2MB response-cache limit; 50 was ~2.8MB and 6s per uncached hit.
+MAX_FORECAST_COUNT = 20
+
 
 # class PriceForecastAPIView(generics.ListAPIView):
 #     ids = [f.id for f in Forecasts.objects.all().order_by("-created_at")[:1]]
@@ -51,7 +54,11 @@ class PriceForecastRegionAPIView(generics.ListAPIView):
         return context
 
     def get_queryset(self):
-        forecast_count = int(self.request.query_params.get("forecast_count", 1))
+        # Capped: forecast_count=1000 took ~22s and 15MB, too big to cache.
+        try:
+            forecast_count = min(max(int(self.request.query_params.get("forecast_count", 1)), 1), MAX_FORECAST_COUNT)
+        except ValueError:
+            forecast_count = 1
         region = self.kwargs["region"].upper()
         logger.debug("API forecast request region=%s forecast_count=%s", region, forecast_count)
         ids = [f.id for f in Forecasts.objects.all().order_by("-created_at")[:forecast_count]]

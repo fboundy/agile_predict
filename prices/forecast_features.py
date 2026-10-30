@@ -58,6 +58,7 @@ EXPERIMENT_FEATURE_SETS = {
 
     # ── Full combinations ─────────────────────────────────────────────────
     "full_fr":              _BASE + _FR_WEATHER + _FUEL + ["fr_nuclear"],
+    "full_fr_eu":           _BASE + _FR_WEATHER + _FUEL + ["fr_nuclear", "eu_wind_cf"],  # continental wind belt (docs/FORECAST_REVIEW_2026_10.md)
     "full":                 _BASE + _FR_WEATHER + _UK_WEATHER + _FUEL + ["fr_nuclear"],
 
     # ── Accumulating (insufficient history to evaluate yet) ───────────────
