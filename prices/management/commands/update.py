@@ -578,7 +578,13 @@ class Command(BaseCommand):
         if debug:
             logger.info(f"GB60:\n{gb60}")
 
-        gb60 = gb60.resample("30min").ffill().loc[agile_end + pd.Timedelta("30min") :]
+        # get_gb60 returns None when Nord Pool is unreachable; forecast without it
+        # rather than losing the whole cycle.
+        if gb60 is None:
+            logger.warning("GB60 day-ahead prices unavailable; continuing without them")
+            gb60 = pd.Series(dtype=float)
+        else:
+            gb60 = gb60.resample("30min").ffill().loc[agile_end + pd.Timedelta("30min") :]
 
         if len(gb60) > 0:
             gb60 = gb60.reindex(
@@ -665,8 +671,10 @@ class Command(BaseCommand):
                                     "Feature experiment elapsed_seconds=%.2f",
                                     time.monotonic() - _exp_started,
                                 )
-                                # Update features for this run if the winner differs
-                                if _winner != _optimal_fs:
+                                # Update features for this run if the winner differs (an explicit --feature_set still wins)
+                                if _cli_fs:
+                                    logger.info("Experiment winner %s ignored: --feature_set %s given", _winner, _cli_fs)
+                                elif _winner != _optimal_fs:
                                     logger.info(
                                         "Feature set changing: %s → %s", _optimal_fs, _winner
                                     )
@@ -1172,7 +1180,7 @@ class Command(BaseCommand):
                             "day_ahead_extra_trees",
                             "plunge_probability",
                             "shap_top_features",
-                            *[c for c in ("gas_availability", "fr_nuclear", "dispatchable_capacity", "opmr_national_surplus", "melngc_margin", "fr_wind", "fr_rad") if c in fc.columns],
+                            *[c for c in ("gas_availability", "fr_nuclear", "dispatchable_capacity", "opmr_national_surplus", "melngc_margin", "fr_wind", "fr_rad", "eu_wind_cf") if c in fc.columns],
                         ]
                     ]
 
@@ -1192,9 +1200,9 @@ class Command(BaseCommand):
                         fc["forecast"] = this_forecast
                         ag["forecast"] = this_forecast
                         logger.info(f"Writing ForecastData rows: {len(fc)}")
-                        df_to_Model(fc, ForecastData)
+                        df_to_Model_bulk(fc, ForecastData)
                         logger.info(f"Writing AgileData rows: {len(ag)}")
-                        df_to_Model(ag, AgileData)
+                        df_to_Model_bulk(ag, AgileData)
                     logger.info(f"Finished writing forecast {this_forecast.id}: {this_forecast.name}")
 
         if debug:

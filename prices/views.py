@@ -63,6 +63,7 @@ _FEATURE_LABELS = {
     "dispatchable_capacity": "Dispatch capacity (MW)",
     "fr_wind": "FR wind speed (m/s)",
     "fr_rad": "FR solar rad. (W/m²)",
+    "eu_wind_cf": "EU wind capacity factor",
     "peak": "Peak hours (16–19)",
     "weekend": "Weekend",
     "days_ago": "Forecast age (days)",

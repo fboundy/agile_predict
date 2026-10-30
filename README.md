@@ -9,7 +9,7 @@ Forecasts Octopus Agile electricity import and export prices up to 14 days ahead
 | [Elexon BMRS](https://bmrs.elexon.co.uk/) | UK nuclear availability, demand |
 | [NESO](https://www.nationalgrideso.com/data-portal) | Wind, solar, embedded wind and demand forecasts; daily operating margin reserve (OPMR) |
 | [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/) | French nuclear generation (interconnector signal) |
-| [Open-Meteo](https://open-meteo.com) | UK and French temperature, wind speed, radiation (forecast + ensemble) |
+| [Open-Meteo](https://open-meteo.com) | UK and French temperature, wind speed, radiation (forecast + ensemble); NW-Europe 100 m wind (ECMWF) |
 | [Octopus Energy](https://developer.octopus.energy/docs/api/) | Agile tariff prices (actuals) |
 | [Nord Pool](https://www.nordpoolgroup.com/) | GB60 day-ahead prices |
 | [Yahoo Finance](https://finance.yahoo.com/) | TTF natural gas futures |
