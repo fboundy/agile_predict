@@ -234,6 +234,46 @@ def get_open_meteo_fr_weather(start=None, end=None):
         return pd.DataFrame(columns=["fr_wind", "fr_rad"])
 
 
+# NW-Europe wind belt (N Germany ×2, German Bight, NL, DK, Belgian coast, N France): where the
+# continental wind fleet GB couples to sits. See docs/FORECAST_REVIEW_2026_10.md.
+EU_WIND_POINTS = [(53.6, 9.3), (54.6, 9.2), (54.4, 6.6), (52.9, 5.6), (56.0, 8.6), (51.5, 2.8), (50.2, 2.8)]
+
+
+def wind_capacity_factor(speed):
+    """Crude turbine power curve: 0 below 3 m/s cut-in, cubic to rated at 12 m/s, 0 at/above 25 m/s cut-out."""
+    speed = np.asarray(speed, dtype=float)
+    return np.where(speed >= 25, 0.0, np.clip((speed**3 - 27) / (12**3 - 27), 0, 1))
+
+
+def get_open_meteo_eu_wind(url="https://api.open-meteo.com/v1/forecast", variable="wind_speed_100m", **params):
+    """
+    Mean wind capacity factor over EU_WIND_POINTS from ECMWF IFS 100 m wind, as a 30-min Series
+    named eu_wind_cf. Default is the live forecast (~14.4 d); backfill passes the previous-runs
+    URL, a *_previous_dayN variable and start_date/end_date.
+    """
+    try:
+        resp = requests.get(url, params={
+            "latitude":  ",".join(str(lat) for lat, _ in EU_WIND_POINTS),
+            "longitude": ",".join(str(lon) for _, lon in EU_WIND_POINTS),
+            "hourly": variable,
+            # One model for the whole horizon: best_match switches ICON → GFS at ~7 d.
+            "models": "ecmwf_ifs025",
+            "wind_speed_unit": "ms",
+            "timeformat": "unixtime",
+            "timezone": "UTC",
+            **(params or {"forecast_days": 16}),
+        }, timeout=60)
+        resp.raise_for_status()
+        locations = resp.json()
+        times = pd.to_datetime(locations[0]["hourly"]["time"], unit="s", utc=True)
+        speeds = pd.DataFrame({i: loc["hourly"][variable] for i, loc in enumerate(locations)}, index=times)
+        cf = pd.DataFrame(wind_capacity_factor(speeds), index=times).mean(axis=1).dropna()
+        return cf.resample("30min").interpolate(method="time").rename("eu_wind_cf")
+    except Exception:
+        logger.exception("Open-Meteo EU: failed to fetch continental wind")
+        return pd.Series(dtype=float, name="eu_wind_cf")
+
+
 def _parse_entsoe_qty(xml_text):
     """Parse ENTSO-E generation XML into a UTC-indexed Series of quantities."""
     from xml.etree import ElementTree as ET
@@ -966,6 +1006,13 @@ def get_latest_forecast():
         df["fr_rad"]  = np.nan
         source_rows["openmeteo_fr"] = 0
         source_details["openmeteo_fr"] = {"label": "Open-Meteo FR", "rows": 0, "error": "no data", "fallback": False}
+
+    # Continental wind belt — GB day-ahead price tracks continental surplus, not just GB's
+    eu_wind = get_open_meteo_eu_wind()
+    # shortcut: ECMWF ends ~14.4 d ahead, so the last hours of a 14 d frame repeat the final value (nearest); fill from GFS if that tail matters.
+    df["eu_wind_cf"] = eu_wind.reindex(df.index, method="nearest") if not eu_wind.empty else np.nan
+    source_rows["openmeteo_eu"] = int(eu_wind.notna().sum())
+    source_details["openmeteo_eu"] = {"label": "Open-Meteo EU wind", "rows": source_rows["openmeteo_eu"], "error": None if source_rows["openmeteo_eu"] else "no data", "fallback": False}
 
     all_cols = ["emb_wind", "bm_wind", "solar", "nuclear", "gas_ttf", "demand", "temp_2m", "wind_10m", "rad"]
     missing_cols += [c for c in all_cols if c not in df.columns]

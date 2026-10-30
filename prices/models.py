@@ -151,6 +151,7 @@ class ForecastData(models.Model):
     melngc_margin = models.FloatField(null=True, blank=True)
     fr_wind = models.FloatField(null=True, blank=True)
     fr_rad = models.FloatField(null=True, blank=True)
+    eu_wind_cf = models.FloatField(null=True, blank=True)
     shap_top_features = models.JSONField(null=True, blank=True)
 
     class Meta:

@@ -197,3 +197,18 @@ advance and an event budget rather than a calendar stop.
 * **Gap:** no 8–14 d vintages exist, so if the training window is ever widened (the reverted
   `TRAIN_HORIZON_DAYS` trial) the history must come from storing the feature per `ForecastData`
   row going forward.
+
+## 9. Built: `eu_wind_cf` dev candidate (2026-10-30)
+
+* `config/utils.py`: `get_open_meteo_eu_wind()` — ECMWF IFS 100 m wind at the 7 belt points →
+  `wind_capacity_factor()` → mean; fetched in `get_latest_forecast`, stored on `ForecastData.eu_wind_cf`
+  (migration 0051). Source status key `openmeteo_eu`.
+* Feature set `full_fr_eu` = `full_fr` + `eu_wind_cf` (single difference from the current dev set).
+* `manage.py backfill_eu_wind` fills history from the Previous Runs API (`previous_day1`, matching the
+  22–46 h training window). Dev DB backfilled: 159,345 rows; stored vs analysis proxy corr 0.98.
+* `update`: an explicit `--feature_set` now beats the fortnightly experiment winner (previously the
+  winner silently replaced it on experiment days, which would break a single-difference trial).
+  No effect on prod, which never passes `feature_set`.
+* Dev pinned via the CT crontab: `UPDATE_CRON_URL=...&feature_set=full_fr_eu`.
+* **Control:** prod (`main`, `full_fr`). **Score** with published-forecast quality at ≥2 d over an
+  event budget, not a fixed date.

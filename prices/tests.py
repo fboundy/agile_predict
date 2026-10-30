@@ -11,7 +11,7 @@ from django.test import RequestFactory, TestCase, override_settings
 from django.utils import timezone
 
 from config.settings import GLOBAL_SETTINGS
-from config.utils import day_ahead_to_agile, df_to_Model_bulk, get_gas_ttf_history
+from config.utils import day_ahead_to_agile, df_to_Model_bulk, get_gas_ttf_history, wind_capacity_factor
 from prices.forecast_features import (
     build_training_data,
     FEATURE_SETS,
@@ -575,6 +575,16 @@ class ForecastFeatureTests(TestCase):
         features = resolve_feature_columns(explicit_features="demand, peak, weekend")
 
         self.assertEqual(features, ["demand", "peak", "weekend"])
+
+    def test_wind_capacity_factor_power_curve(self):
+        cf = wind_capacity_factor([0, 3, 12, 20, 25, float("nan")])
+
+        self.assertEqual(list(cf[:5]), [0, 0, 1, 1, 0])
+        self.assertTrue(pd.isna(cf[5]))
+        self.assertAlmostEqual(float(wind_capacity_factor(7.5)), (7.5**3 - 27) / (12**3 - 27))
+
+    def test_full_fr_eu_is_full_fr_plus_continental_wind(self):
+        self.assertEqual(resolve_feature_columns("full_fr_eu"), resolve_feature_columns("full_fr") + ["eu_wind_cf"])
 
     def test_build_training_data_uses_supplied_feature_set(self):
         index = pd.to_datetime(["2026-05-01T22:00:00Z"])
