@@ -91,3 +91,22 @@ Daily means (energy-charts day-ahead, FUELHH interconnector net flow, + = GB imp
 The model's only continental signal is `fr_wind`/`fr_rad`: 10 m wind and radiation at a
 **single point in central France** (47 N 2 E, `config/utils.py:197`) — not where the
 continental wind fleet is (north Germany, NL, Denmark, the North Sea).
+
+## 5. What the dev model's errors line up with
+
+`residual_vs_drivers.py`: dev model 2–4 d bias (pred − actual) against actual drivers, 14–30 Oct.
+`eu_wind_cf` is a crude capacity-factor proxy — a cubic power curve on Open-Meteo 100 m wind
+averaged over seven points in the NW-Europe wind belt (N Germany ×2, German Bight, NL, DK,
+Belgian coast, N France).
+
+| correlation with bias | daily (n=17) | half-hourly |
+|---|---|---|
+| **continental wind (`eu_wind_cf`)** | **+0.79** | **+0.69** |
+| GB unconstrained wind (model already sees it) | +0.49 | +0.38 |
+| central-France 10 m wind (`fr_wind`, in the model) | — | +0.45 |
+| Scottish curtailment | +0.13 | +0.09 |
+| Scottish share of GB wind | −0.25 | −0.18 |
+
+The model is too high when the continent is windy and too low when it is calm (24–25 Oct:
+`eu_wind_cf` 0.78–0.90, bias +£88/+£75; 28–30 Oct: 0.05–0.30, bias −£40 to −£64).
+Curtailment and the regional split carry almost none of the remaining error.
