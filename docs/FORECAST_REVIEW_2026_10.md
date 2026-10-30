@@ -182,3 +182,18 @@ advance and an event budget rather than a calendar stop.
 * `eu_wind_cf` is a crude proxy (one generic power curve, unweighted points). A capacity-weighted
   version should do better, not worse.
 * 17 days of dev-model residuals (§5) is a small sample; §6 is the larger evidence base.
+
+## 8. Can a continental wind feature line up with the 14-day forecast frame? (checked 2026-10-30)
+
+* **Serving horizon:** Open-Meteo 100 m wind for all 7 points in one call reaches 15.3 d
+  (`best_match`, `gfs_seamless`) / 14.4 d (`ecmwf_ifs025`). `best_match` switches ICON → GFS at
+  ~7.3 d, a step change mid-horizon — **pin one model** (ECMWF, GFS-filled for the last hours, or
+  ffill like other features).
+* **Horizon-matched training history:** the Previous Runs API serves `wind_speed_100m_previous_dayN`
+  for N ≤ 7 only (`previous_day14` is empty). That is sufficient for the current training window,
+  which keeps only 22–46 h-ahead rows (`build_training_data`): backfill with `previous_day1/2`
+  is a faithful reconstruction of what a run would have seen. (Better than `fr_wind`, whose
+  backfill used archive actuals.)
+* **Gap:** no 8–14 d vintages exist, so if the training window is ever widened (the reverted
+  `TRAIN_HORIZON_DAYS` trial) the history must come from storing the feature per `ForecastData`
+  row going forward.
