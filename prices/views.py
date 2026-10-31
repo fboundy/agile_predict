@@ -8,13 +8,11 @@ import time
 import pandas as pd
 import plotly.graph_objects as go
 from django.conf import settings
-from django.contrib import messages
-from django.contrib.auth.views import LoginView
 from django.db.models import Count, Sum
 from django.core.cache import cache
 from django.http import HttpResponse, HttpResponseForbidden, JsonResponse
-from django.shortcuts import get_object_or_404, redirect
-from django.urls import reverse, reverse_lazy
+from django.shortcuts import get_object_or_404
+from django.urls import reverse
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -27,7 +25,7 @@ from plotly.subplots import make_subplots
 from config.settings import GLOBAL_SETTINGS
 from config.utils import day_ahead_to_agile, import_agile_to_export_agile, vat_multiplier, NESO_MIN_FORECAST_ROWS
 
-from .external_forecasts import fetch_agileforecast, fetch_x2r, region_rows_from_g
+from .external_forecasts import region_rows_from_g
 from .forms import ForecastForm
 from .models import (
     AgileData,
@@ -44,7 +42,6 @@ from .models import (
 regions = GLOBAL_SETTINGS["REGIONS"]
 PRIOR_DAYS = 2
 logger = logging.getLogger("prices.web")
-PRIVILEGED_GROUP_NAME = "Privileged Users"
 
 _FEATURE_LABELS = {
     "bm_wind": "BM wind (MW)",
@@ -162,15 +159,6 @@ def _export_price_badge(p):
 
 def _truthy(value):
     return str(value).lower() in {"1", "true", "yes", "on"}
-
-
-def _can_use_admin_only_features(request):
-    user = getattr(request, "user", None)
-    if not getattr(user, "is_authenticated", False):
-        return False
-    if getattr(user, "is_staff", False):
-        return True
-    return user.groups.filter(name=PRIVILEGED_GROUP_NAME).exists()
 
 
 def _update_options(request):
@@ -570,12 +558,6 @@ class StatsView(TemplateView):
 
         return context
 
-
-
-class SiteLoginView(LoginView):
-    template_name = "registration/login.html"
-    redirect_authenticated_user = True
-    next_page = reverse_lazy("graph")
 
 
 class HistoryView(TemplateView):
@@ -1068,46 +1050,8 @@ class GraphFormView(FormView):
         kwargs = super(GraphFormView, self).get_form_kwargs()
         kwargs["region"] = self.kwargs.get("region", "X").upper()
         kwargs["prefix"] = "test"
-        kwargs["local_realtime_external_forecasts"] = _can_use_admin_only_features(self.request)
         # print(kwargs)
         return kwargs
-
-    def fetch_live_external_forecasts(self, region, show_agileforecast, show_x2r):
-        if not _can_use_admin_only_features(getattr(self, "request", None)):
-            return [], []
-
-        forecasts = []
-        errors = []
-        sources = []
-        if show_agileforecast:
-            sources.append(("AgileForecast", "#0dcaf0", fetch_agileforecast))
-        if show_x2r:
-            sources.append(("X2R", "#fd7e14", fetch_x2r))
-
-        for label, color, fetcher in sources:
-            try:
-                forecast = fetcher(region)
-            except Exception as exc:
-                logger.warning("Unable to fetch live %s forecast for region %s: %s", label, region, exc)
-                errors.append(f"{label}: {exc}")
-                continue
-
-            forecasts.append(
-                {
-                    "label": label,
-                    "color": color,
-                    **forecast,
-                }
-            )
-
-        return forecasts, errors
-
-    def filter_forecast_rows_for_plot(self, rows, actual_end, plot_end, show_overlap):
-        return [
-            row
-            for row in rows
-            if row["date_time"] <= plot_end and (show_overlap or row["date_time"] >= actual_end)
-        ]
 
     def update_chart(self, context, **kwargs):
         region = context["region"]
@@ -1119,8 +1063,6 @@ class GraphFormView(FormView):
         show_range = kwargs.get("show_range_on_most_recent_forecast", True)
         show_overlap = kwargs.get("show_forecast_overlap", False)
         show_export = kwargs.get("show_export_pricing", False)
-        show_live_agileforecast = kwargs.get("show_live_agileforecast", False)
-        show_live_x2r = kwargs.get("show_live_x2r", False)
         raw_day_ahead = _is_raw_day_ahead_region(region)
         if raw_day_ahead:
             show_export = False
@@ -1266,50 +1208,6 @@ class GraphFormView(FormView):
                         ),
                     ]
                 width = 1
-
-        live_external_forecasts, live_external_errors = self.fetch_live_external_forecasts(
-            "G" if raw_day_ahead else region,
-            show_live_agileforecast,
-            show_live_x2r,
-        )
-        live_external_counts = []
-        for live_forecast in live_external_forecasts:
-            rows = self.filter_forecast_rows_for_plot(
-                live_forecast["rows"],
-                actual_price.index[-1],
-                plot_end,
-                show_overlap,
-            )
-            if not rows:
-                live_external_counts.append({"label": live_forecast["label"], "count": 0})
-                continue
-
-            source = pd.Series(
-                index=pd.to_datetime([row["date_time"] for row in rows]),
-                data=[row["agile_pred"] for row in rows],
-            ).sort_index()
-            if show_export:
-                source = import_agile_to_export_agile(source, region=region)
-            elif raw_day_ahead:
-                source = day_ahead_to_agile(source, reverse=True, region="G")
-            try:
-                source.index = source.index.tz_convert("GB")
-            except TypeError:
-                source.index = source.index.tz_localize("GB")
-
-            created_at = pd.Timestamp(live_forecast["source_created_at"]).tz_convert("GB")
-            live_external_counts.append({"label": live_forecast["label"], "count": len(source)})
-            data.append(
-                go.Scatter(
-                    x=source.index,
-                    y=source,
-                    marker={"symbol": 104, "size": 10},
-                    mode="lines",
-                    line={"color": live_forecast["color"], "width": 2, "dash": "dot"},
-                    name=f"{live_forecast['label']} Live ({created_at.strftime('%d-%b %H:%M')})",
-                    hovertemplate=hover_template_price,
-                )
-            )
 
         if show_generation_and_demand:
             figure = make_subplots(
@@ -1482,9 +1380,6 @@ class GraphFormView(FormView):
                 ]
             },
         )
-        context["live_external_forecasts_enabled"] = _can_use_admin_only_features(self.request)
-        context["live_external_counts"] = live_external_counts
-        context["live_external_errors"] = live_external_errors
 
         return context
 
@@ -1538,17 +1433,6 @@ class V2NavMixin:
             }
         )
         return context
-
-
-class ProductionLoginRequiredMixin:
-    """Require authentication in production (DEBUG=False); transparent in dev."""
-
-    def dispatch(self, request, *args, **kwargs):
-        if not settings.DEBUG and not request.user.is_authenticated:
-            from django.contrib.auth.views import redirect_to_login
-
-            return redirect_to_login(request.get_full_path())
-        return super().dispatch(request, *args, **kwargs)
 
 
 def _stored_external_rows(source, region):
@@ -1919,7 +1803,7 @@ class CostsView(V2NavMixin, TemplateView):
 
     def dispatch(self, request, *args, **kwargs):
         is_dev_host = (Path(settings.BASE_DIR) / "logs" / "uptime_monitor.log").exists()
-        if not is_dev_host and not (request.user.is_authenticated and request.user.is_staff):
+        if not is_dev_host:
             from django.http import HttpResponseNotFound
 
             return HttpResponseNotFound("Not found")

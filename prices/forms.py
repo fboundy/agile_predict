@@ -1,5 +1,4 @@
 from django import forms
-from django.conf import settings
 from crispy_forms.helper import FormHelper
 from crispy_forms.bootstrap import Accordion, AccordionGroup
 from crispy_forms.layout import Submit, Field, Layout
@@ -38,22 +37,7 @@ class ForecastForm(forms.Form):
         required=False,
         help_text="Show Agile Outgoing export prices instead of Agile import prices",
     )
-    show_live_agileforecast = forms.BooleanField(
-        label="Show live AgileForecast",
-        initial=False,
-        required=False,
-    )
-    show_live_x2r = forms.BooleanField(
-        label="Show live X2R",
-        initial=False,
-        required=False,
-    )
-
     def __init__(self, *args, **kwargs):
-        local_realtime_external_forecasts = kwargs.pop(
-            "local_realtime_external_forecasts",
-            getattr(settings, "LOCAL_REALTIME_EXTERNAL_FORECASTS", False),
-        )
         region = kwargs.pop("region", "X").upper()
         super().__init__(*args, **kwargs)
 
@@ -81,16 +65,6 @@ class ForecastForm(forms.Form):
         ]
         if "show_export_pricing" in self.fields:
             option_fields.insert(1, Field("show_export_pricing"))
-        if local_realtime_external_forecasts:
-            option_fields.extend(
-                [
-                    Field("show_live_agileforecast"),
-                    Field("show_live_x2r"),
-                ]
-            )
-        else:
-            self.fields.pop("show_live_agileforecast", None)
-            self.fields.pop("show_live_x2r", None)
 
         self.helper.layout = Layout(
             Accordion(

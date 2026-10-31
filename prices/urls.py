@@ -19,7 +19,6 @@ from .views import (
     LimitationsView,
     ModelDetailV2View,
     ProdHealthView,
-    SiteLoginView,
     StatsV2View,
     StatsView,
     healthz,
@@ -33,7 +32,6 @@ from .views import (
 urlpatterns = [
     path("healthz", healthz, name="healthz"),
     path("robots.txt", robots_txt, name="robots_txt"),
-    path("accounts/login/", SiteLoginView.as_view(), name="login"),
     path("update", run_update, name="run_update"),
     path("update/latest_agile", run_latest_agile, name="run_latest_agile"),
     path("update/status", update_status, name="update_status"),
