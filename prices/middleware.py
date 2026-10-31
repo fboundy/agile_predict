@@ -32,6 +32,37 @@ class HealthCheckMiddleware:
         return self.get_response(request)
 
 
+
+class PublicApiCorsMiddleware:
+    """Add CORS headers to the public read-only JSON API only.
+
+    The /api/ endpoints serve public, unauthenticated, read-only data and
+    use no cookies or credentials, so Access-Control-Allow-Origin: * exposes
+    nothing that is not already public. Scoped to /api/ paths only: admin,
+    account and page responses are untouched. It is placed early in
+    MIDDLEWARE so responses served from ResponseCacheMiddleware still pass
+    through it on the way out.
+    """
+
+    API_PREFIX = "/api/"
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if request.path.startswith(self.API_PREFIX) and request.method == "OPTIONS":
+            response = HttpResponse(status=204)
+            response["Access-Control-Allow-Origin"] = "*"
+            response["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+            response["Access-Control-Allow-Headers"] = "Accept, Content-Type"
+            response["Access-Control-Max-Age"] = "86400"
+            return response
+        response = self.get_response(request)
+        if request.path.startswith(self.API_PREFIX):
+            response["Access-Control-Allow-Origin"] = "*"
+        return response
+
+
 def client_ip(request):
     """Best-effort real client IP behind the fly.io proxy."""
     ip = request.META.get("HTTP_FLY_CLIENT_IP")
