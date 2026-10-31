@@ -5,7 +5,6 @@ from unittest.mock import patch
 
 import pandas as pd
 from django.contrib.auth.models import Group, Permission, User
-from django.core import mail
 from django.core.management import call_command
 from django.test import RequestFactory, TestCase, override_settings
 from django.utils import timezone
@@ -24,7 +23,7 @@ from prices.management.commands.update import Command as UpdateCommand
 from prices.management.commands.update import EXTRA_TREES_REGRESSOR_PARAMS, fit_day_ahead_ensemble, predict_day_ahead_ensemble
 from prices.management.commands.update_worker import maybe_enqueue_catchup
 from prices.models import AgileData, ExternalForecast, ForecastData, Forecasts, PriceHistory, UpdateJob
-from prices.views import GraphFormView, _update_options
+from prices.views import _update_options
 
 
 class HistoryViewTests(TestCase):
@@ -352,72 +351,9 @@ class ExportPricingTests(TestCase):
         self.assertNotIn("show_export_pricing", form.fields)
 
 
-class LocalRealtimeExternalForecastTests(TestCase):
-    @override_settings(LOCAL_REALTIME_EXTERNAL_FORECASTS=False)
-    def test_forecast_form_hides_live_external_options_by_default(self):
-        form = ForecastForm()
-
-        self.assertNotIn("show_live_agileforecast", form.fields)
-        self.assertNotIn("show_live_x2r", form.fields)
-
-    def test_forecast_form_shows_live_external_options_when_enabled(self):
-        form = ForecastForm(local_realtime_external_forecasts=True)
-
-        self.assertIn("show_live_agileforecast", form.fields)
-        self.assertIn("show_live_x2r", form.fields)
-
-    @override_settings(LOCAL_REALTIME_EXTERNAL_FORECASTS=False)
-    @patch("prices.views.fetch_agileforecast")
-    def test_view_does_not_fetch_live_external_forecasts_when_disabled(self, fetch_agileforecast):
-        view = GraphFormView()
-
-        forecasts, errors = view.fetch_live_external_forecasts("G", True, False)
-
-        self.assertEqual(forecasts, [])
-        self.assertEqual(errors, [])
-        fetch_agileforecast.assert_not_called()
-
-    @patch("prices.views.fetch_agileforecast")
-    def test_view_fetches_live_external_forecasts_when_enabled(self, fetch_agileforecast):
-        fetch_agileforecast.return_value = {
-            "name": "Region | G test",
-            "source_created_at": timezone.now(),
-            "rows": [],
-        }
-        user = User.objects.create_user(username="privileged", password="pw")
-        group, _created = Group.objects.get_or_create(name="Privileged Users")
-        user.groups.add(group)
-        request = RequestFactory().get("/")
-        request.user = user
-        view = GraphFormView()
-        view.request = request
-
-        forecasts, errors = view.fetch_live_external_forecasts("G", True, False)
-
-        self.assertEqual(errors, [])
-        self.assertEqual(forecasts[0]["label"], "AgileForecast")
-        fetch_agileforecast.assert_called_once_with("G")
-
-    @patch("prices.views.fetch_agileforecast")
-    def test_view_fetches_live_external_forecasts_for_staff(self, fetch_agileforecast):
-        fetch_agileforecast.return_value = {
-            "name": "Region | G test",
-            "source_created_at": timezone.now(),
-            "rows": [],
-        }
-        request = RequestFactory().get("/")
-        request.user = User.objects.create_user(username="external-staff", password="pw", is_staff=True)
-        view = GraphFormView()
-        view.request = request
-
-        forecasts, errors = view.fetch_live_external_forecasts("G", True, False)
-
-        self.assertEqual(errors, [])
-        self.assertEqual(forecasts[0]["label"], "AgileForecast")
-        fetch_agileforecast.assert_called_once_with("G")
-
-    @patch("prices.views.fetch_x2r")
-    @patch("prices.views.fetch_agileforecast")
+class ExternalForecastOverlayTests(TestCase):
+    @patch("prices.external_forecasts.fetch_x2r")
+    @patch("prices.external_forecasts.fetch_agileforecast")
     def test_ext_forecast_json_serves_stored_data_without_live_call(self, fetch_agileforecast, fetch_x2r):
         """The v2 comparison overlay must read stored data (refreshed by the
         update run) and never make a live external call on the request path."""
@@ -447,54 +383,6 @@ class LocalRealtimeExternalForecastTests(TestCase):
         self.assertEqual(statuses[0]["health"], "ok")
         fetch_agileforecast.assert_not_called()
         fetch_x2r.assert_not_called()
-
-    def test_live_forecast_rows_are_limited_to_plot_date_range(self):
-        now = timezone.now()
-        rows = [
-            {"date_time": now - timedelta(minutes=30), "agile_pred": 1},
-            {"date_time": now + timedelta(minutes=30), "agile_pred": 2},
-            {"date_time": now + timedelta(hours=2), "agile_pred": 3},
-        ]
-        view = GraphFormView()
-
-        filtered = view.filter_forecast_rows_for_plot(
-            rows,
-            actual_end=now,
-            plot_end=now + timedelta(hours=1),
-            show_overlap=False,
-        )
-
-        self.assertEqual([row["agile_pred"] for row in filtered], [2])
-
-
-class RegistrationTests(TestCase):
-    def test_login_page_links_to_registration(self):
-        response = self.client.get("/accounts/login/")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Registered users have access to additional analytics")
-        self.assertContains(response, "Register")
-
-    @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
-    def test_registration_creates_inactive_user_in_users_group_and_emails_admin(self):
-        response = self.client.post(
-            "/accounts/register/",
-            {
-                "username": "newuser",
-                "email": "newuser@example.com",
-                "password1": "Test-password-12345",
-                "password2": "Test-password-12345",
-            },
-        )
-
-        self.assertEqual(response.status_code, 302)
-        user = User.objects.get(username="newuser")
-        self.assertFalse(user.is_active)
-        self.assertTrue(user.groups.filter(name="Users").exists())
-        self.assertEqual(len(mail.outbox), 1)
-        self.assertEqual(mail.outbox[0].to, ["foboundy@gmail.com"])
-        self.assertIn("newuser@example.com", mail.outbox[0].body)
-
 
 class IncrementalBackupAuthTests(TestCase):
     def test_incremental_backup_exports_and_imports_users_groups_and_memberships(self):
@@ -1285,7 +1173,7 @@ class NginxScannerShieldTests(TestCase):
             "/v2/about/", "/v2/health/", "/v2/costs/", "/v2/model/",
             "/webhooks/kofi/", "/webhooks/kofi/summary",
             "/static/css/site.css", "/admin/", "/admin/login/",
-            "/accounts/login/", "/X/",
+            "/X/",
         ]:
             self.assertFalse(self._blocked(path), f"{path} is a real route and must not be shed")
 

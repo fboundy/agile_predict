@@ -104,7 +104,6 @@ class RateLimitMiddleware:
         "/robots",
         "/apple-touch",
         "/.well-known",
-        "/accounts/",
         "/update",
     )
 
