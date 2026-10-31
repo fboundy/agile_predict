@@ -248,6 +248,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "prices.middleware.HealthCheckMiddleware",
+    "prices.middleware.PublicApiCorsMiddleware",
     "prices.middleware.BlocklistMiddleware",
     "prices.middleware.RateLimitMiddleware",
     "django.middleware.security.SecurityMiddleware",
