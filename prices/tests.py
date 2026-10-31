@@ -5,7 +5,6 @@ from unittest.mock import patch
 
 import pandas as pd
 from django.contrib.auth.models import Group, Permission, User
-from django.core import mail
 from django.core.management import call_command
 from django.test import RequestFactory, TestCase, override_settings
 from django.utils import timezone
@@ -465,35 +464,6 @@ class LocalRealtimeExternalForecastTests(TestCase):
         )
 
         self.assertEqual([row["agile_pred"] for row in filtered], [2])
-
-
-class RegistrationTests(TestCase):
-    def test_login_page_links_to_registration(self):
-        response = self.client.get("/accounts/login/")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Registered users have access to additional analytics")
-        self.assertContains(response, "Register")
-
-    @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
-    def test_registration_creates_inactive_user_in_users_group_and_emails_admin(self):
-        response = self.client.post(
-            "/accounts/register/",
-            {
-                "username": "newuser",
-                "email": "newuser@example.com",
-                "password1": "Test-password-12345",
-                "password2": "Test-password-12345",
-            },
-        )
-
-        self.assertEqual(response.status_code, 302)
-        user = User.objects.get(username="newuser")
-        self.assertFalse(user.is_active)
-        self.assertTrue(user.groups.filter(name="Users").exists())
-        self.assertEqual(len(mail.outbox), 1)
-        self.assertEqual(mail.outbox[0].to, ["foboundy@gmail.com"])
-        self.assertIn("newuser@example.com", mail.outbox[0].body)
 
 
 class IncrementalBackupAuthTests(TestCase):

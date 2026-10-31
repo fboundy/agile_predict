@@ -9,11 +9,9 @@ import pandas as pd
 import plotly.graph_objects as go
 from django.conf import settings
 from django.contrib import messages
-from django.contrib.auth.models import Group
 from django.contrib.auth.views import LoginView
 from django.db.models import Count, Sum
 from django.core.cache import cache
-from django.core.mail import send_mail
 from django.http import HttpResponse, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
@@ -30,7 +28,7 @@ from config.settings import GLOBAL_SETTINGS
 from config.utils import day_ahead_to_agile, import_agile_to_export_agile, vat_multiplier, NESO_MIN_FORECAST_ROWS
 
 from .external_forecasts import fetch_agileforecast, fetch_x2r, region_rows_from_g
-from .forms import ForecastForm, RegistrationForm
+from .forms import ForecastForm
 from .models import (
     AgileData,
     ExternalForecast,
@@ -46,7 +44,6 @@ from .models import (
 regions = GLOBAL_SETTINGS["REGIONS"]
 PRIOR_DAYS = 2
 logger = logging.getLogger("prices.web")
-USER_GROUP_NAME = "Users"
 PRIVILEGED_GROUP_NAME = "Privileged Users"
 
 _FEATURE_LABELS = {
@@ -579,44 +576,6 @@ class SiteLoginView(LoginView):
     template_name = "registration/login.html"
     redirect_authenticated_user = True
     next_page = reverse_lazy("graph")
-
-
-class RegisterView(FormView):
-    template_name = "registration/register.html"
-    form_class = RegistrationForm
-    success_url = reverse_lazy("login")
-
-    def dispatch(self, request, *args, **kwargs):
-        if request.user.is_authenticated:
-            return redirect("graph")
-        return super().dispatch(request, *args, **kwargs)
-
-    def form_valid(self, form):
-        user = form.save(commit=False)
-        user.email = form.cleaned_data["email"]
-        user.is_active = False
-        user.save()
-
-        users_group, _created = Group.objects.get_or_create(name=USER_GROUP_NAME)
-        user.groups.add(users_group)
-
-        send_mail(
-            subject="AgilePredict registration request",
-            message=(
-                "A new AgilePredict user has registered and is awaiting approval.\n\n"
-                f"Username: {user.username}\n"
-                f"Email: {user.email}\n"
-            ),
-            from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
-            recipient_list=["foboundy@gmail.com"],
-            fail_silently=False,
-        )
-
-        messages.success(
-            self.request,
-            "Registration submitted. Access will be approved on a case by case basis by the site administrators.",
-        )
-        return super().form_valid(form)
 
 
 class HistoryView(TemplateView):

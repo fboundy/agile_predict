@@ -1,7 +1,5 @@
 from django import forms
 from django.conf import settings
-from django.contrib.auth.forms import UserCreationForm
-from django.contrib.auth.models import User
 from crispy_forms.helper import FormHelper
 from crispy_forms.bootstrap import Accordion, AccordionGroup
 from crispy_forms.layout import Submit, Field, Layout
@@ -108,22 +106,3 @@ class ForecastForm(forms.Form):
             Submit("submit", "Update Chart", css_class="btn btn-light"),
         )
 
-
-class RegistrationForm(UserCreationForm):
-    email = forms.EmailField(required=True)
-
-    class Meta:
-        model = User
-        fields = ("username", "email", "password1", "password2")
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.helper = FormHelper()
-        self.helper.form_method = "post"
-        self.helper.layout = Layout(
-            Field("username"),
-            Field("email"),
-            Field("password1"),
-            Field("password2"),
-            Submit("submit", "Register", css_class="btn btn-primary w-100"),
-        )
