@@ -246,6 +246,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "prices.middleware.ApiCorsMiddleware",
     "prices.middleware.HealthCheckMiddleware",
     "prices.middleware.BlocklistMiddleware",
     "prices.middleware.RateLimitMiddleware",
@@ -261,6 +262,7 @@ MIDDLEWARE = [
     # middleware above still post-process cache hits.
     "prices.middleware.ResponseCacheMiddleware",
 ]
+
 
 ROOT_URLCONF = "config.urls"
 
