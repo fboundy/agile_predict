@@ -223,6 +223,14 @@ class HistoryDateWindowTests(TestCase):
     (v1) and /v2/history/ via HistoryView.get_date_window; HistoryV2View does
     not override it."""
 
+    def setUp(self):
+        from django.core.cache import cache
+
+        # The response cache is file-based and outlives the test run; a version
+        # stamp left by an earlier test would key onto a page cached by a
+        # previous run in the same half-hour slot, skipping the view entirely.
+        cache.delete("rc:data-ver")
+
     def test_window_extends_to_a_future_confirmed_price(self):
         future = timezone.now() + timedelta(hours=20)
         PriceHistory.objects.create(date_time=future, agile=0, day_ahead=100)
@@ -448,6 +456,32 @@ class ExternalForecastTests(TestCase):
         expected = day_ahead_to_agile(day_ahead, region="X").iloc[0]
         self.assertEqual(forecast["name"], "X2R X 2026-05-01T09:00:00Z")
         self.assertAlmostEqual(forecast["rows"][0]["agile_pred"], expected)
+
+    @patch("prices.external_forecasts.requests.get")
+    def test_download_agilelab_stores_future_region_g_slots(self, requests_get):
+        from prices.external_forecasts import download_agilelab_region_g
+
+        def day(*rows):
+            return {"forecast": {"prices": [{"utc": u, "p": p} for u, p in rows]}}
+
+        requests_get.return_value.json.return_value = {
+            "region": "B",
+            "generated_at_utc": "2026-11-05T18:00:00Z",
+            "days": {"tomorrow": day(("2026-11-06T00:00:00Z", 99.0))},  # region B: ignored
+            "regions": {
+                "G": {
+                    "days": {
+                        "today": day(("2026-11-05T17:30:00Z", 1.0), ("2026-11-05T18:30:00Z", 2.0)),
+                        "tomorrow": day(("2026-11-06T00:00:00Z", 3.0)),
+                        "yesterday": None,
+                    }
+                }
+            },
+        }
+
+        self.assertEqual(download_agilelab_region_g(), 2)
+        rows = ExternalForecast.objects.filter(source=ExternalForecast.SOURCE_AGILELAB, region="G").order_by("date_time")
+        self.assertEqual([r.agile_pred for r in rows], [2.0, 3.0])
 
 
 
@@ -688,6 +722,7 @@ class CanonicalCacheKeyTests(TestCase):
     def test_toggles_differ(self):
         self._diff("/v2/X/?gen=1", "/v2/X/?gen=0")
         self._diff("/v2/X/?af=1", "/v2/X/?af=0")
+        self._diff("/v2/X/?al=1", "/v2/X/?al=0")
         self._diff("/v2/X/?overlap=1", "/v2/X/?overlap=0")
 
     def test_different_fc_selection_differs(self):
@@ -720,6 +755,7 @@ class CanonicalCacheKeyTests(TestCase):
         self._diff("/v2/history/?unit_mode=da", "/v2/history/?unit_mode=agile")
         self._diff("/v2/history/?compare_x2r=1", "/v2/history/")
         self._diff("/v2/history/?compare_agileforecast=1", "/v2/history/")
+        self._diff("/v2/history/?compare_agilelab=1", "/v2/history/")
 
     def test_history_does_not_collide_with_chart_params(self):
         # A history URL must never key the same as the chart page's defaults.
