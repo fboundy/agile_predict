@@ -148,6 +148,35 @@ def download_x2r_region_g():
     return count
 
 
+AGILELAB_URL = "https://agile-forecast-engine.thravesrichard.workers.dev/data/latest.json"
+
+
+def download_agilelab_region_g():
+    """AgileLab publishes one feed for all regions: region B at the top level,
+    the rest under ``regions``. Each day carries the forecast issued for it; keep
+    only slots after the feed was generated so already-published days don't get
+    stamped with today's snapshot (that would flatter the accuracy history)."""
+    source = ExternalForecast.SOURCE_AGILELAB
+
+    response = requests.get(AGILELAB_URL, timeout=30)
+    response.raise_for_status()
+    payload = response.json()
+
+    source_created_at = _parse_timestamp(payload["generated_at_utc"])
+    region_feed = payload if payload.get("region") == REGION else payload.get("regions", {}).get(REGION, {})
+    by_time = {}
+    for day in (region_feed.get("days") or {}).values():
+        for row in ((day or {}).get("forecast") or {}).get("prices") or []:
+            date_time = _parse_timestamp(row["utc"])
+            if date_time > source_created_at and row.get("p") is not None:
+                by_time[date_time] = float(row["p"])
+    rows = [{"date_time": t, "agile_pred": p} for t, p in sorted(by_time.items())]
+
+    count = _save_rows(source, REGION, f"AgileLab {REGION} {payload['generated_at_utc']}", source_created_at, rows)
+    logger.info("Downloaded AgileLab region G rows=%s created_at=%s", count, source_created_at)
+    return count
+
+
 def _convert_x2r_region_g_rows_to_national_average(rows):
     if not rows:
         return rows
@@ -232,6 +261,7 @@ def refresh_external_forecasts():
     for source, downloader in [
         (ExternalForecast.SOURCE_AGILEFORECAST, download_agileforecast_region_g),
         (ExternalForecast.SOURCE_X2R, download_x2r_region_g),
+        (ExternalForecast.SOURCE_AGILELAB, download_agilelab_region_g),
     ]:
         try:
             counts[source] = downloader()

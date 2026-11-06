@@ -92,6 +92,17 @@
                         />
                         <label for="compareX2R" class="form-check-label">Compare X2R</label>
                     </div>
+                    <div class="form-check mt-2">
+                        <input
+                            id="compareAgileLab"
+                            name="compare_agilelab"
+                            value="1"
+                            type="checkbox"
+                            class="form-check-input"
+                            {% if compare_agilelab %}checked{% endif %}
+                        />
+                        <label for="compareAgileLab" class="form-check-label">Compare AgileLab</label>
+                    </div>
                 </div>
                 <div class="mb-3">
                     <label for="bucketSelect" class="form-label">Prediction Offset</label>
