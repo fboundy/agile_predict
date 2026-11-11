@@ -393,3 +393,72 @@ figure for the surplus stored with the forecast. No retraining; forecast-time in
   this event it was late.
 * So the evening under-call has two parts: a general one of about £20 that history can remove, and
   the spike size itself, which the margin flags but does not size.
+
+## 12. E4: which change to the model form is worth most? (`modelform.py`)
+
+Walk-forward over two years (3 Oct 2024 – 11 Nov 2026, 36,930 slots, 110 weekly refits). Train on
+everything before T, predict days T+2 to T+9. 25 variants = training window × target × features.
+
+**Read this first.** The inputs are *actual* drivers (perfect weather and demand foresight) and
+the model is LightGBM alone. Earlier offline replays did not reproduce production
+(`MODEL_DYNAMIC_RANGE.md`), so the absolute numbers mean nothing and a win here is only a reason to
+test live. Gains from anything that has to be forecast (transmission wind above all) will shrink.
+
+RMSE, £/MWh. "norm" = target is price ÷ (TTF + 12). Long windows carry a recency weight (a
+year-old row counts half).
+
+| features | 60 d raw | 60 d norm | 365 d raw | 365 d norm | all raw | all norm |
+|---|---|---|---|---|---|---|
+| base (≈ production + continental wind) | **21.1** | 21.1 | 19.4 | 19.0 | 19.0 | 18.7 |
+| + NESO surplus (2 d lead) | 20.6 | 20.6 | 19.1 | 18.3 | 18.5 | 17.9 |
+| + residual demand, one feature | 19.2 | | | | | 17.7 |
+| + transmission wind, raw feature | 20.2 | | | | | 17.8 |
+| + surplus, residual demand, headroom | 18.8 | 19.2 | 17.3 | 17.1 | 17.2 | **16.9** |
+| base without continental wind | 23.1 | | | | | |
+
+The tails, for the variants that matter (reference = 60 d raw base):
+
+| variant | RMSE | weeks won vs reference | low slots caught¹ | spike-day peak error² | spike days caught / false³ | 9 Nov peak (actual 410) |
+|---|---|---|---|---|---|---|
+| 60 d raw base | 21.1 | | 24% | −76 | 44% / 26 | 251 |
+| without continental wind | 23.1 | 24% | 16% | −84 | 31% / 22 | 251 |
+| + NESO surplus | 20.6 | 57% | 18% | −67 | 46% / 22 | 259 |
+| + residual demand | 19.2 | 78% | 31% | −58 | 56% / 23 | 253 |
+| + transmission wind raw | 20.2 | 75% | 24% | −66 | 49% / 24 | 258 |
+| all-history raw base | 19.0 | 78% | 37% | −72 | 51% / 13 | 237 |
+| all-history norm base | 18.7 | 77% | 40% | −73 | 49% / 19 | 293 |
+| all-history norm + residual demand | 17.7 | 84% | 51% | −60 | 56% / 20 | 355 |
+| all-history norm + all three | 16.9 | 86% | 45% | −61 | 49% / 24 | 310 |
+| 365 d raw + all three | 17.3 | 86% | 40% | −57 | 59% / 13 | 251 |
+| average of 60 d and all-history (norm, all three) | 17.3 | 85% | 35% | −58 | 51% / 21 | 267 |
+
+¹ share of slots at £10 or less forecast at £10 or less (1,475 slots). ² mean error of the day's
+peak on the 39 spike days (top 5% of gas-normalised peak). ³ share of spike days forecast above the
+spike threshold / ordinary days forecast above it (of 730).
+
+* **A longer training window is the largest single gain: −8% (one year), −10% (all history)**, and
+  it wins about four weeks in five. It is the best thing here for the low tail (low slots caught
+  24% → 37–40%). This is not what the September trial tested: that widened the *horizons* trained
+  on (`TRAIN_HORIZON_DAYS`), not the calendar window (`max_days`).
+* **Residual demand as one explicit feature: −9% on a 60-day window.** The same information as a
+  raw `bm_wind` column gets −4%. That matches `bm_wind` losing its live trial: 60 days is too little
+  for trees to learn demand − wind − nuclear from separate columns. With all history the two forms
+  are equal (17.7 vs 17.8).
+* **NESO surplus as a feature: −2.5% (60 d) to −4.5% (all history).** It works where §7 said it
+  would (spike-day peak error −76 → −67; 8 Jan 2025 peak 229 → 278 against 318) but far less than
+  an AUC of 0.91 suggests, because a model that sees the drivers already knows most of it. A 4-day
+  lead scores the same overall (20.6) and worse on spikes.
+* **The gas-normalised target is neutral on its own (21.1 → 21.1)** and matters only with a long
+  window: this autumn's RMSE 35.4 → 31.7, 9 Nov peak 237 → 293. Part 1 called it "the strongest
+  result here"; over two years it is the companion to a long window, not a fix by itself.
+* **Averaging a short and a long window is no better than the long one.** Dropped.
+* **Continental wind is worth −9% over two years.** The first multi-season evidence for the
+  candidate now on dev.
+* **Spike size stays out of reach.** No variant catches more than 59% of spike days, and the best
+  cuts the spike-day peak miss from £76 to £55–60. No variant got above £167 for 24 Jun 2026 (£381).
+* The ordering among the top four or five variants is within noise (25 variants, one history).
+  The factor effects above are not.
+
+**The catch for a longer window:** `update.py` deletes stored forecasts older than `max_days` on
+every run, so production holds 60 days and nothing earlier exists to train on. `max_days` is
+already a run option, but raising it only lets the window grow from today.
