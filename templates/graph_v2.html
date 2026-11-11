@@ -9,7 +9,8 @@
   var hasPrefs = PREF_KEYS.some(function(k){ return params.has(k); });
   if (!hasPrefs) {
     var saved = localStorage.getItem(KEY);
-    if (saved) {
+    // Without the apjs cookie nginx would bounce the redirect straight back here: a loop.
+    if (saved && document.cookie.indexOf('apjs=1') !== -1) {
       window.location.replace(window.location.pathname + '?' + saved);
     }
   } else {
