@@ -84,6 +84,8 @@ The ET (price) baseline's tail biases are close to production's, which is reassu
 
 ## 5. Conclusions
 
+> Superseded by §13–14. Kept as written on the first pass; §8 and §12 correct two of its claims.
+
 1. **The lows and the level shift could have been better.** The October review's two
    recommendations are still the right ones:
    * The continental-wind candidate is live on dev. Its effect can't be separated from this
@@ -462,3 +464,69 @@ spike threshold / ordinary days forecast above it (of 730).
 **The catch for a longer window:** `update.py` deletes stored forecasts older than `max_days` on
 every run, so production holds 60 days and nothing earlier exists to train on. `max_days` is
 already a run option, but raising it only lets the window grow from today.
+
+## 13. Answer: could the model have predicted these better?
+
+| what went wrong | could it have been better? | evidence |
+|---|---|---|
+| **The lows of 24–25 Oct** (forecast £88 on slots that settled at £3) | **Yes, and this is the most fixable.** The model ranked the slots correctly and had 173 comparable slots in its window. It can't see residual demand, where the cliff is. | §9b–c, §12 |
+| **Evening peaks about £20 low on ordinary days** | **Yes.** Three winters of history say what an evening peak looks like for a given margin; a 60-day window in autumn doesn't. | §11, §12 |
+| **6 Nov (£317, forecast £250)** | **Partly.** NESO's surplus flagged it from four days out (3.6–4.2 GW). | §7, §11 |
+| **9 Nov (£410, forecast £257)** | **About half.** The surplus only collapsed two days out (5.3 → 3.4 GW). With perfect-foresight drivers the better model forms reach £310–360. | §11, §12 |
+| **The size of the largest spikes** | **No.** Above about 36 GW of residual demand the price has ranged from £101 to £410 between winters. Nothing tested catches more than 59% of spike days. | §6, §12 |
+| **The band** | **Yes.** It held 48% of tight evenings and 19% of the low slots, against a nominal 80%. | §10 |
+
+Two corrections to Part 1:
+
+* Its tail-bias tables overstated the fault. The forecast is flat but close to calibrated (§8a), so
+  the cure is information, not amplitude.
+* The gas-normalised target is not a fix on its own (§12). It is what makes a long window usable.
+
+## 14. Solutions to test, in order
+
+Ranked by evidence ÷ cost. Offline figures are from §12 and will shrink live.
+
+| # | candidate | offline | cost | main risk |
+|---|---|---|---|---|
+| 1 | **Residual demand as one feature**: `demand − bm_wind − nuclear` (`demand` is NESO's ND, already net of embedded generation) | −9% RMSE on a 60-day window; low slots caught 24% → 31%; spike-day peak miss £76 → £58 | One derived column; every input is already stored on every row, so it trains from the existing 60 days at once | `bm_wind` forecast error at 2–4 d. The raw feature lost its live trial; §12 says the explicit form is worth twice as much on 60 days |
+| 2 | **NESO surplus as a feature** (`opmr_national_surplus`, already stored) | −2.5% RMSE; evening peaks on tight days; +£50 on 8 Jan 2025 | Add to a feature set | The stored column was null 18 Sep – 5 Oct, so run `backfill_opmr` first. Trained at 1–2 d lead, applied at up to 14 d, where NESO revises by ±2 GW |
+| 3 | **Keep history, then train on it**: stop deleting old forecasts, train on a year with price ÷ (TTF + 12) as the target and a recency weight | −8 to −10% RMSE; best result for the low tail; 9 Nov peak 251 → 293 before any new feature | Split retention from the training window in `update.py` (today both are `max_days`). Then wait for history to build, or backfill last winter | Fit time and memory on a 1 GB machine with 6× the rows; needs measuring on dev first. A backfill from actuals mixes actual and forecast inputs |
+| 4 | **Make the band depend on the state of the system**: error quantiles by surplus / residual-demand band as well as horizon | Band held 48% of tight evenings, 19% of low slots | Change to `compute_horizon_quantiles` | None to the central forecast. Few events per band in 60 days of holdout |
+| 5 | **Evening floor from history** (§11) | Scored on issued forecasts: evening RMSE 49 → 46, evening bias −22 → 0 | A lookup table refreshed from NESO history | A patch. Redundant if 3 works; use it as the benchmark any candidate must beat |
+| 6 | **Continental wind** (on dev since 30 Oct) | −9% over two years; the wind-shaped error is gone on dev (§8) | None | Already being scored; decide on its own rule |
+
+Not worth testing, with the reason:
+
+* **Stretching the forecast** (affine recalibration, heavier tail weights): slope is 1.04–1.18, best
+  case 1 £/MWh at 2–4 d (§8a).
+* **Carrying the last error forward**: gone by the time a 2–4 d forecast can use it (§8c).
+* **Averaging short and long windows**: no better than the long one (§12).
+* **Using the surplus to size a spike**: it flags the day, not the size (§7, §11).
+* **Curtailment, Scotland/England split**: October review.
+
+### How to test them
+
+The September trial failed to separate candidates because each ran on its own schedule against a
+moving market. So:
+
+1. **Shadow-score in one run.** Have the dev update fit the baseline and each candidate on the same
+   training rows and the same forecast inputs, and store each candidate's prediction beside the
+   baseline's. Differences are then model form and nothing else. Candidates 1, 2 and 1+2 can start
+   together; 3 joins when there is history to train on.
+2. **Fix the scoring rule before the first run.** 2–4 d horizon only (0–1 d is GB60 passthrough).
+   * Primary: all-slot RMSE, paired by target day.
+   * High tail: evening-peak (16–19) MAE on days whose stored surplus is under 6 GW.
+   * Low tail: mean forecast on slots that settle at £20 or less.
+   * False alarms: ordinary days forecast above £300.
+3. **Stop on an event budget, not a date.** At least 10 tight evenings and 5 days with a slot at £20
+   or less. The last four weeks produced 7 and 2, so expect six to ten weeks.
+4. **Pass** = primary no worse than baseline, both tail measures better on more than half the
+   event days, false alarms no higher. Anything else is a fail; no re-scoring on a new metric.
+5. Candidate 4 is scored separately, on coverage of the band in the same event sets.
+
+### Caveats on Part 2
+
+* §12 uses actual drivers and LightGBM alone. §11 is the only test on issued forecasts.
+* Stored forecasts cover 14 Oct – 11 Nov: seven tight evenings, two low days.
+* French wind, radiation and nuclear are in production's feature set and not in the §12 panel.
+* The fixed offset of 12 in price ÷ (TTF + 12) was fitted on the same three winters it is tested on.
