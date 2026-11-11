@@ -312,7 +312,8 @@ well each daily figure ranks them (AUC):
 | weekend | 0.63 |
 | interconnector export capacity, 2 d ahead | 0.56 |
 
-Share of days with a slot at or below zero, by the day's minimum residual demand:
+Share of days with a slot at or below zero, by the day's minimum residual demand (the 981 days
+since Mar 2024 that have continental wind data):
 
 | min residual demand | share | days |
 |---|---|---|
@@ -366,3 +367,29 @@ At 2–4 d:
   evening is at risk". At present it doesn't.
 * Four weeks, one regime: the overall lean (above more often than below) is partly this window's
   level shift.
+
+## 11. E7: a scarcity floor, scored on the forecasts actually issued (`uplift.py`)
+
+The cheapest way to use §7, and the one test here that isn't an offline replay. Fit the typical
+gas-normalised daily peak for a given NESO surplus on the 556 winter days *before* 14 Oct. Then, for
+every stored 2–4 d forecast since, lift the 16:00–19:00 slots so the day's peak is at least that
+figure for the surplus stored with the forecast. No retraining; forecast-time inputs only.
+
+| floor | all-slot RMSE | evening RMSE | evening bias | peak error, surplus < 6 GW (20 run-days) | peak error, the rest (132) |
+|---|---|---|---|---|---|
+| none (as issued) | 44.3 | 49.1 | −22 | −68 | −20 |
+| mean peak for the surplus | 44.0 | 46.3 | 0 | −54 | +5 |
+| median | 43.9 | 46.1 | −1 | −58 | +4 |
+| 75th percentile | 44.5 | 50.6 | +11 | −46 | +17 |
+
+* **It works, but not as a spike catcher.** It lifted 84% of ordinary days: the issued evening
+  peaks were below what three winters say is typical for the margin, by about £20. Removing that
+  takes evening RMSE from 49 to 46 and the ordinary-day peak error from 38 to 28 (MAE).
+* **On the tight days it recovers a fifth of the miss** (−68 → −54). Pushing the floor to the 75th
+  percentile gets a third and costs more elsewhere than it gains.
+* **The surplus for 9 Nov only collapsed at two days out.** The 2–4 d runs carried 5.5 GW on
+  average, not the 3.4 GW published on 7 Nov, so the floor for 9 Nov was £262 against a £410
+  outturn. §7's AUC of 0.91 is for the 2-day figure; at 3–4 days the flag is weaker (0.88) and for
+  this event it was late.
+* So the evening under-call has two parts: a general one of about £20 that history can remove, and
+  the spike size itself, which the margin flags but does not size.
