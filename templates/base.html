@@ -14,6 +14,10 @@
             integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
             crossorigin="anonymous"
         />
+        <script>
+            // GH #137: nginx serves filtered chart URLs only to browsers carrying this cookie; crawlers that don't run JS get the cached bare chart.
+            document.cookie = 'apjs=1; path=/; max-age=31536000; SameSite=Lax';
+        </script>
     </head>
     <body class="bg-body">
         <header>

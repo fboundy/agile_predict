@@ -1225,13 +1225,13 @@ class NginxScannerShieldTests(TestCase):
         for path in ["/", "/v2/X/", "/api/"]:
             self.assertFalse(self._exempt(path))
 
-    CHART_CAPPED = _re.compile(r"^/(?:v2/)?[A-Za-z]/")
+    CHART_CAPPED = _re.compile(r"^/(?:v2/)?[A-Za-z]/|^/v2/$")
 
     def test_chart_cap_covers_charts_but_not_api_or_health(self):
         """GH #137: rotating-IP crawlers filled every worker with chart renders.
         The per-machine chart cap must catch chart pages and must never catch
         the API or the health check, which it exists to keep responsive."""
-        for path in ["/v2/X/", "/v2/G/", "/v2/G/ext-forecast/", "/A/", "/x/"]:
+        for path in ["/v2/X/", "/v2/G/", "/v2/G/ext-forecast/", "/A/", "/x/", "/v2/"]:
             self.assertTrue(self.CHART_CAPPED.search(path), f"{path} should be capped")
         for path in ["/api/", "/api/A/", "/api/accuracy/", "/healthz", "/update",
                      "/v2/history/", "/v2/stats/", "/v2/about/", "/webhooks/kofi/", "/"]:
@@ -1244,7 +1244,7 @@ class NginxScannerShieldTests(TestCase):
         conf = (Path(settings.BASE_DIR) / "deploy" / "nginx.conf").read_text(encoding="utf-8")
         for needle in ["limit_req_zone", "limit_conn_zone", "$is_exploit_probe",
                        "return 403", "$limit_key", "$client_ip",
-                       "zone=charts", "limit_conn charts"]:
+                       "zone=charts", "limit_conn charts", "$cookie_apjs", "return 302 $uri"]:
             self.assertIn(needle, conf, f"nginx.conf lost {needle}")
         self.assertIn("$http_fly_client_ip", conf,
                       "rate limiting must key on the real client IP, not the Fly proxy")
