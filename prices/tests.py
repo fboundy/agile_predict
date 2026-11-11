@@ -20,7 +20,13 @@ from prices.forecast_features import (
 from prices.external_forecasts import fetch_x2r
 from prices.forms import ForecastForm
 from prices.management.commands.update import Command as UpdateCommand
-from prices.management.commands.update import EXTRA_TREES_REGRESSOR_PARAMS, fit_day_ahead_ensemble, predict_day_ahead_ensemble
+from prices.management.commands.update import (
+    EXTRA_TREES_REGRESSOR_PARAMS,
+    SHADOW_EXTRAS,
+    fit_day_ahead_ensemble,
+    predict_day_ahead_ensemble,
+    shadow_predictions,
+)
 from prices.management.commands.update_worker import maybe_enqueue_catchup
 from prices.models import AgileData, ExternalForecast, ForecastData, Forecasts, PriceHistory, UpdateJob
 from prices.views import _update_options
@@ -574,6 +580,29 @@ class UpdateOptionTests(TestCase):
 
         self.assertEqual(len(models), 3)
         self.assertEqual(len(predictions), len(train_X))
+
+    def test_shadow_predictions_add_one_column_per_candidate(self):
+        index = pd.date_range("2026-05-01T22:00:00Z", periods=8, freq="30min")
+        df = pd.DataFrame(
+            index=index,
+            data={
+                "forecast_id": 1,
+                "ag_start": index[0],
+                "ag_end": index[0] + pd.Timedelta(days=1),
+                "days_ago": 1,
+                "demand": range(30, 38),
+                "bm_wind": range(8),
+                "nuclear": 4,
+                "opmr_national_surplus": range(8, 0, -1),
+            },
+        )
+        prices = pd.DataFrame(index=index, data={"day_ahead": range(60, 68)})
+
+        out = shadow_predictions(df, pd.DataFrame(index=[1]), prices, ["demand"], 7, df)
+
+        self.assertEqual(list(out.columns), list(SHADOW_EXTRAS))
+        self.assertEqual(len(out), len(df))
+        self.assertTrue(out.notna().all().all())
 
 
 class GasTtfHistoryTests(TestCase):

@@ -24,10 +24,12 @@ GROUPS = {
     "margin": BASE + ["surplus_L2", "resid", "headroom"],
     "resid": BASE + ["resid"],      # residual demand as one explicit feature
     "bmw": BASE + ["bm_wind"],      # the same information as a raw feature (the form that lost its live trial)
+    "rs": BASE + ["resid", "surplus_L2"],  # candidates 1+2 together, without headroom
 }
 VARIANTS = [(w, t, g) for w in (60, 365, 0) for t in ("raw", "norm") for g in ("base", "sur", "margin")]
 VARIANTS += [(60, "raw", "noeu"), (60, "raw", "sur4"), (0, "norm", "sur4")]
 VARIANTS += [(w, t, g) for w, t in ((60, "raw"), (0, "norm")) for g in ("resid", "bmw")]
+VARIANTS += [(60, "raw", "rs")]
 name = lambda v: f"{v[0] or 'all'}/{v[1]}/{v[2]}"
 
 p = pd.read_pickle(f"{D}/panel.pkl")

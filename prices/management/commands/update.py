@@ -188,6 +188,29 @@ def predict_day_ahead_ensemble(models, features):
     return preds.mean(axis=1)
 
 
+# Shadow candidates (docs/FORECAST_REVIEW_2026_11.md §15): extra features on top of the run's own
+# set, fitted on the same rows and saved beside its prediction. Never used for the published forecast.
+SHADOW_EXTRAS = {
+    "resid": ["resid_demand"],
+    "surplus": ["opmr_national_surplus"],
+    "resid_surplus": ["resid_demand", "opmr_national_surplus"],
+}
+
+
+def shadow_predictions(df, training_forecasts, prices, features, max_days, fc, extras=SHADOW_EXTRAS):
+    """Predict fc with the run's features plus each candidate's extras; one column per candidate."""
+    # demand is NESO's ND, already net of embedded wind and solar
+    df, fc = (d.assign(resid_demand=d["demand"] - d["bm_wind"] - d["nuclear"]) for d in (df, fc))
+    out = pd.DataFrame(index=fc.index)
+    for name, extra in extras.items():
+        cols = list(features) + extra
+        train_X, train_y = build_training_data(df, training_forecasts, prices, cols, max_days)
+        weights = np.maximum(1.0, ((train_y - train_y.mean()) / train_y.std()).abs())
+        models = fit_day_ahead_ensemble(train_X, train_y, weights)
+        out[name] = predict_day_ahead_ensemble(models, latest_prediction_features(fc, cols))
+    return out
+
+
 def _ensemble_shap_values(ensemble_models, features):
     """Average SHAP values across CatBoost and LightGBM (exact TreeExplainer, NaN-safe).
 
@@ -458,6 +481,12 @@ class Command(BaseCommand):
         parser.add_argument(
             "--skip_kde_plot",
             action="store_true",
+        )
+
+        parser.add_argument(
+            "--shadow",
+            action="store_true",
+            help="Also fit the shadow candidates and save their predictions to logs/shadow/ (dev trial).",
         )
 
     def handle(self, *args, **options):
@@ -980,6 +1009,17 @@ class Command(BaseCommand):
                         prediction_features = latest_prediction_features(fc, train_X.columns)
                         fc["day_ahead"] = predict_day_ahead_ensemble(ensemble_models, prediction_features)
                         logger.info("Finished latest forecast prediction")
+
+                        if options.get("shadow"):
+                            try:
+                                _shadow = shadow_predictions(df, ff_train, prices, train_X.columns, max_days, fc)
+                                _shadow.insert(0, "base", fc["day_ahead"])
+                                _shadow["opmr_national_surplus"] = fc["opmr_national_surplus"]
+                                os.makedirs(os.path.join(log_dir, "shadow"), exist_ok=True)
+                                _shadow.to_csv(os.path.join(log_dir, "shadow", new_name.replace(":", "") + ".csv"))
+                                logger.info("Saved shadow candidate predictions (%s)", ", ".join(SHADOW_EXTRAS))
+                            except Exception:
+                                logger.exception("Shadow candidates failed; skipping")
 
                         try:
                             _shap_row_started = time.monotonic()

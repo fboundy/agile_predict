@@ -164,7 +164,7 @@ def _truthy(value):
 def _update_options(request):
     options = {}
 
-    for key in ["debug", "no_day_of_week", "no_ranges", "skip_kde_plot"]:
+    for key in ["debug", "no_day_of_week", "no_ranges", "skip_kde_plot", "shadow"]:
         if key in request.POST or key in request.GET:
             options[key] = _truthy(request.POST.get(key, request.GET.get(key)))
 
