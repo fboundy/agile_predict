@@ -532,3 +532,51 @@ moving market. So:
 * Stored forecasts cover 14 Oct – 11 Nov: seven tight evenings, two low days.
 * French wind, radiation and nuclear are in production's feature set and not in the §12 panel.
 * The fixed offset of 12 in price ÷ (TTF + 12) was fitted on the same three winters it is tested on.
+
+---
+
+# Part 3: testing candidates 1, 2 and 1+2 (11 Nov 2026)
+
+## 15. The test
+
+The owner ruled out the longer window and asked for candidates 1 (residual demand), 2 (NESO surplus)
+and 1+2 to be tested.
+
+### 15.1 Offline: the two together (`modelform.py`, variant `60/raw/rs`)
+
+§12 had no "1+2 and nothing else" variant (its `margin` group also had `headroom`). Added and run on
+the same 36,930 slots, 60-day window, actual drivers, LightGBM alone:
+
+| variant | RMSE | vs base | low slots caught | spike-day peak error | false spike days | peak MAE, surplus < 4 GW | weeks won |
+|---|---|---|---|---|---|---|---|
+| base | 21.08 | | 24% | −76 | 26 | 36.7 | |
+| 2: + surplus | 20.56 | −2.5% | 18% | −67 | 22 | 32.3 | 57% |
+| 1: + residual demand | 19.15 | −9.2% | 31% | −58 | 23 | 33.0 | 78% |
+| 1+2 | 18.99 | −9.9% | 23% | −57 | 19 | 31.9 | 79% |
+
+Residual demand carries nearly all of it. Adding the surplus buys under 1% of RMSE and fewer false
+spike days, and gives back the gain on low slots (31% → 23%). Named-day peaks, 1+2: 8 Jan 2025 287
+(actual 318), 9 Nov 2026 259 (actual 410); no better than either alone.
+
+### 15.2 Live shadow test (running on dev from the 16:15 update, 11 Nov 2026)
+
+* `update --shadow` (`shadow_predictions` in `update.py`): after the run's own fit it refits the
+  ensemble three times, on the run's feature set plus `resid_demand` (= `demand − bm_wind − nuclear`),
+  plus `opmr_national_surplus`, and plus both. Same training rows, same weights, same seeds, same
+  forecast inputs. The published forecast is not touched.
+* Each run writes `logs/shadow/<forecast name>.csv`: `base` (the run's own model output, before the
+  GB60 day-ahead overwrite), `resid`, `surplus`, `resid_surplus`, and the stored surplus.
+* Dev cron passes `shadow=1` (five runs a day, baseline `full_fr_eu`). Off by default, so nothing
+  changes anywhere else.
+* The rule is in `shadow_score.py` and was committed before the first run. 2–4 d lead only:
+
+  | measure | definition | pass |
+  |---|---|---|
+  | primary | RMSE over all slots | no higher than base |
+  | high tail | MAE over 16:00–19:00 on days whose stored surplus is under 6 GW, per day | lower than base on more than half those days |
+  | low tail | MAE on slots that settle at £20 or less, per day | lower than base on more than half those days |
+  | false alarms | (run, day) pairs forecast at £300 or more on a day whose actual maximum is under £300 | no more than base |
+
+  Event budget: 10 tight days and 5 low days. Before that the script prints "so far", not a verdict.
+  A candidate must pass all four. No re-scoring on a new metric.
+
