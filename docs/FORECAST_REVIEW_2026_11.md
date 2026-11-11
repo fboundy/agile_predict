@@ -279,3 +279,90 @@ surplus:
 Seven days under 6 GW, and the forecast barely moved between the 6–8 and 4–6 GW bands while the
 outturn rose £58. These include 6 and 9 Nov, which fall in the `full_fr_eu` era: continental wind
 fixed the daily level and not the scarcity peak.
+
+## 9. E5: the two tails fail for different reasons (`tails.py`)
+
+**(a) High tail: is the spike outside what a 60-day window has seen?** Days whose peak beat the
+highest price of the previous N days (Jul 2023 – Nov 2026):
+
+| window | days tested | above the window's max | of which winter | median excess |
+|---|---|---|---|---|
+| 60 d | 1,169 | 29 (2.5%) | 11 | 7% |
+| 365 d | 864 | 6 (0.7%) | 5 | 11% |
+| 730 d | 499 | 2 (0.4%) | 1 | 8% |
+
+* Gas-normalising the target doesn't change these counts (26 / 6 / 2). Normalising fixes the
+  *level* between years, not the range within a window.
+* Of the 62 spike days (top 5% of gas-normalised peak), only 17 beat the prior 60-day maximum; the
+  median spike day peaked at 0.91 of it. So a tree model *could* have reached most spikes. What a
+  60-day window lacks is not one high price but enough rows like the spike day to learn from:
+  before 9 Nov it held 16 slots at £300+, 6 with residual demand over 33 GW and none over 36 GW.
+* A one-year window cuts out-of-range days by four-fifths.
+
+**(b) Low tail: a cliff in residual demand.** 148 of 1,229 days had a zero or negative slot. How
+well each daily figure ranks them (AUC):
+
+| signal | AUC |
+|---|---|
+| the day's minimum residual demand (actual) | 0.96 |
+| NESO minimum demand forecast, 2 d ahead | 0.84 |
+| GB wind, daily mean | 0.84 |
+| NESO surplus, 2 d ahead | 0.79 |
+| continental wind, daily mean | 0.79 |
+| weekend | 0.63 |
+| interconnector export capacity, 2 d ahead | 0.56 |
+
+Share of days with a slot at or below zero, by the day's minimum residual demand:
+
+| min residual demand | share | days |
+|---|---|---|
+| under 5 GW | 85% | 46 |
+| 5–8 GW | 31% | 197 |
+| 8–11 GW | 2% | 313 |
+| over 11 GW | 0% | 425 |
+
+* Within a residual-demand band, continental wind adds nothing visible (5–8 GW: 38% / 15% / 38%
+  across its terciles). Its value to the model is as a stand-in for what the model can't see.
+* The model can't see residual demand. It has embedded wind and demand as separate inputs, and
+  **transmission wind (`bm_wind`) is not a feature at all**. `bm_wind` as a raw feature lost its
+  live trial; residual demand as one explicit feature has not been tried.
+
+**(c) On 24–25 Oct the model ranked the low slots and missed their level.** 380 slots settled at
+£20 or less (mean £3). At 2–4 d the forecast ranked them almost perfectly (AUC 0.95) but averaged
+£88, and was under £40 on 1% of them. The training window was not short of examples: the 60 days
+before 24 Oct held 173 slots at £20 or less and 307 with residual demand under 8 GW. All of this was
+under the production feature set; there has been no low day since continental wind went in.
+
+**Reading the two together:** the high tail is short of *examples* (early-winter tight days aren't in
+a 60-day window), the low tail is short of a *feature* (the examples are there, the model can't
+place the cliff).
+
+## 10. E6: the published band misses the same slots (`band.py`)
+
+Region G low/high band against outturn, target dates from 14 Oct. The band is the 10th–90th
+percentile of holdout errors by horizon, widened by the weather ensemble, so it should hold at
+least 80%.
+
+| horizon | inside | outturn below | outturn above | mean width (p/kWh) |
+|---|---|---|---|---|
+| 1–2 d | 49% | 20% | 30% | 7.0 |
+| 2–4 d | 65% | 9% | 26% | 19.2 |
+| 4–7 d | 60% | 7% | 33% | 19.5 |
+| 7–15 d | 50% | 8% | 41% | 18.6 |
+
+At 2–4 d:
+
+| slots | inside | below | above | missed by (p/kWh) |
+|---|---|---|---|---|
+| evening peak, NESO surplus under 6 GW (6 days) | 48% | 0% | 52% | 11.8 |
+| evening peak, surplus 6–8 GW | 77% | 0% | 23% | 2.1 |
+| outturn at or under 5p | 19% | 81% | 0% | 6.0 |
+| outturn 15–35p | 84% | 4% | 12% | — |
+
+* The band is about right in the middle and fails at both ends, because its width depends on the
+  horizon and not on the state of the system. Its width on tight evenings (16.9p) is *narrower*
+  than average.
+* Even if the central forecast can't call the size of a spike (§7), the band could say "this
+  evening is at risk". At present it doesn't.
+* Four weeks, one regime: the overall lean (above more often than below) is partly this window's
+  level shift.
