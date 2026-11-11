@@ -490,13 +490,15 @@ Ranked by evidence ÷ cost. Offline figures are from §12 and will shrink live.
 |---|---|---|---|---|
 | 1 | **Residual demand as one feature**: `demand − bm_wind − nuclear` (`demand` is NESO's ND, already net of embedded generation) | −9% RMSE on a 60-day window; low slots caught 24% → 31%; spike-day peak miss £76 → £58 | One derived column; every input is already stored on every row, so it trains from the existing 60 days at once | `bm_wind` forecast error at 2–4 d. The raw feature lost its live trial; §12 says the explicit form is worth twice as much on 60 days |
 | 2 | **NESO surplus as a feature** (`opmr_national_surplus`, already stored) | −2.5% RMSE; evening peaks on tight days; +£50 on 8 Jan 2025 | Add to a feature set | The stored column was null 18 Sep – 5 Oct, so run `backfill_opmr` first. Trained at 1–2 d lead, applied at up to 14 d, where NESO revises by ±2 GW |
-| 3 | **Keep history, then train on it**: stop deleting old forecasts, train on a year with price ÷ (TTF + 12) as the target and a recency weight | −8 to −10% RMSE; best result for the low tail; 9 Nov peak 251 → 293 before any new feature | Split retention from the training window in `update.py` (today both are `max_days`). Then wait for history to build, or backfill last winter | Fit time and memory on a 1 GB machine with 6× the rows; needs measuring on dev first. A backfill from actuals mixes actual and forecast inputs |
 | 4 | **Make the band depend on the state of the system**: error quantiles by surplus / residual-demand band as well as horizon | Band held 48% of tight evenings, 19% of low slots | Change to `compute_horizon_quantiles` | None to the central forecast. Few events per band in 60 days of holdout |
-| 5 | **Evening floor from history** (§11) | Scored on issued forecasts: evening RMSE 49 → 46, evening bias −22 → 0 | A lookup table refreshed from NESO history | A patch. Redundant if 3 works; use it as the benchmark any candidate must beat |
+| 5 | **Evening floor from history** (§11) | Scored on issued forecasts: evening RMSE 49 → 46, evening bias −22 → 0 | A lookup table refreshed from NESO history | A patch; use it as the benchmark any candidate must beat |
 | 6 | **Continental wind** (on dev since 30 Oct) | −9% over two years; the wind-shaped error is gone on dev (§8) | None | Already being scored; decide on its own rule |
 
 Not worth testing, with the reason:
 
+* **A longer training window** (was candidate 3: keep history, train on a year with price ÷ (TTF + 12)):
+  ruled out by the owner on 11 Nov 2026 as impractical. It was the best offline result for the low
+  tail (§12), so the tails now rest on candidates 1 and 2 alone. Numbering above is unchanged.
 * **Stretching the forecast** (affine recalibration, heavier tail weights): slope is 1.04–1.18, best
   case 1 £/MWh at 2–4 d (§8a).
 * **Carrying the last error forward**: gone by the time a 2–4 d forecast can use it (§8c).
@@ -511,8 +513,8 @@ moving market. So:
 
 1. **Shadow-score in one run.** Have the dev update fit the baseline and each candidate on the same
    training rows and the same forecast inputs, and store each candidate's prediction beside the
-   baseline's. Differences are then model form and nothing else. Candidates 1, 2 and 1+2 can start
-   together; 3 joins when there is history to train on.
+   baseline's. Differences are then model form and nothing else. Candidates 1, 2 and 1+2 start
+   together (§15).
 2. **Fix the scoring rule before the first run.** 2–4 d horizon only (0–1 d is GB60 passthrough).
    * Primary: all-slot RMSE, paired by target day.
    * High tail: evening-peak (16–19) MAE on days whose stored surplus is under 6 GW.
