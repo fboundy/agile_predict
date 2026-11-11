@@ -580,3 +580,52 @@ spike days, and gives back the gain on low slots (31% → 23%). Named-day peaks,
   Event budget: 10 tight days and 5 low days. Before that the script prints "so far", not a verdict.
   A candidate must pass all four. No re-scoring on a new metric.
 
+### 15.3 Replay over the forecasts stored on dev (`shadow_replay.py`, scored by `shadow_score.py`)
+
+The live test needs weeks. This is the same code (`shadow_predictions`) run over what dev already
+holds: for each day's training-slot forecast from 12 Oct, train on the forecasts made before it with
+the prices known then, and predict its own stored inputs. Unlike §12 the inputs are the forecasts
+issued at the time, `bm_wind` forecast error included, and the model is the full ensemble.
+
+29 runs, target days 14 Oct – 11 Nov, 2,666 slot forecasts at 2–4 d. Events: 6 tight days (budget
+10), 2 low days (budget 5).
+
+| | RMSE | days won | tight-evening MAE | tight days won | low slots: mean forecast | low-slot MAE | low days won | false alarms |
+|---|---|---|---|---|---|---|---|---|
+| base (`full_fr_eu`) | 35.17 | | 55.1 | | 63.8 | 61.2 | | 2 |
+| 1: + residual demand | 34.31 (−2.4%) | 62% | 49.3 | 5 of 6 | 59.1 | 56.5 | 2 of 2 | 2 |
+| 2: + surplus | 34.41 (−2.2%) | 59% | 52.0 | 3 of 6 | 62.2 | 59.5 | 2 of 2 | 2 |
+| 1+2 | 34.32 (−2.4%) | 59% | 47.4 | 5 of 6 | 57.4 | 54.8 | 2 of 2 | 2 |
+
+Against the rule, so far: 1 passes, 1+2 passes, 2 fails (it wins exactly half the tight days, and the
+rule says more than half). Not a verdict; the event budget is not met.
+
+Per event day, MAE (16:00–19:00 on tight days; slots at £20 or less on low days):
+
+| day | base | 1 | 2 | 1+2 |
+|---|---|---|---|---|
+| 22 Oct (tight) | 14.8 | 11.1 | 15.0 | 11.8 |
+| 23 Oct (tight) | 27.7 | 23.4 | 34.2 | 27.6 |
+| 6 Nov (tight) | 60.1 | 57.2 | 58.3 | 56.9 |
+| 8 Nov (tight) | 15.0 | 18.7 | 17.6 | 19.4 |
+| 9 Nov (tight) | 137.7 | 123.2 | 134.3 | 123.3 |
+| 11 Nov (tight) | 69.4 | 56.7 | 48.0 | 41.0 |
+| 24 Oct (low) | 80.1 | 73.2 | 78.6 | 70.3 |
+| 25 Oct (low) | 57.6 | 53.4 | 55.9 | 51.9 |
+
+Reading:
+
+* **The direction holds on issued forecasts; the size does not.** Residual demand is worth −2.4% here
+  against −9% with actual drivers (§15.1). That gap is the `bm_wind` forecast error §14 named as the
+  main risk.
+* **1 and 1+2 are level on RMSE.** 1+2 is ahead on both tails by £2–4 of MAE, on 6 and 2 days. Too
+  few to choose between them; the live test decides.
+* **2 alone does little** and made 23 Oct worse.
+* **Neither rescues the extremes.** 9 Nov evening is still £123 out (from £138); low slots on 24 Oct
+  are still forecast £70 too high. These features shave about a tenth off the tail errors. With the
+  longer window ruled out, the larger part of the miss stays.
+
+Caveats: the dev DB starts 18 Sep, so the training window grows from about 25 days to 54 here, not
+60. This is a replay, comparable across its own four columns only (MODEL_DYNAMIC_RANGE.md). The
+window includes the days the candidates were chosen on (§8–9), so it flatters them.
+
