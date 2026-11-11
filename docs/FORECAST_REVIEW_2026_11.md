@@ -108,3 +108,97 @@ The ET (price) baseline's tail biases are close to production's, which is reassu
   default-versus-candidate split in `score.py` is not a model comparison.
 * The external snapshots are pruned (newest plus first of each day), so their run counts differ
   from ours. The comparisons use common slots only.
+
+---
+
+# Part 2: deeper review (11 Nov, after the owner asked for more)
+
+Part 1 looked only at four weeks of stored forecasts and one small offline test. Part 2 adds three
+years of actuals, so the questions can be asked against three winters, not 13 half-hours. Each
+experiment below was written up when it finished.
+
+Data built for this part (all in the gitignored `data/`):
+
+* `panel.py`, `panel_gas.py`, `panel_tail.py` → `panel.pkl`: half-hourly settled price, NESO
+  generation mix, TTF and continental wind, **1 Jul 2023 – 11 Nov 2026** (59,010 rows). The NESO mix
+  lags a week, so 5–11 Nov comes from Elexon FUELHH (checked on a 3-week overlap: residual demand
+  corr 0.988, mean difference 0.1 GW).
+* `opmr_hist.py` → `opmr.pkl`: NESO's OPMR margin forecast for every target day **as published 2, 3,
+  4 and 7 days before** (history back to 2021 is on the NESO API).
+* "Residual demand" in Part 2 = generation − wind − solar − nuclear, i.e. what gas, imports,
+  biomass, hydro and storage had to supply. It runs about 5 GW below the Part 1 figure, which
+  didn't subtract nuclear or solar.
+
+**Correction to Part 1, §2 and conclusion 2.** Part 1 said last winter's tight days couldn't be
+tested because the dev DB keeps forecast inputs only from 12 Sep. That was wrong: the actuals are
+public, and the `History` table already holds them to Aug 2026.
+
+## 6. E1: the price curve against residual demand, three winters (`stack.py`)
+
+Median price ÷ TTF by residual-demand band (GW):
+
+| winter | mean TTF | 15–20 | 20–25 | 25–30 | 30–33 | 33–36 | ≥36 | slots ≥36 |
+|---|---|---|---|---|---|---|---|---|
+| 2023/24 | €36 | 2.24 | 2.39 | 2.65 | 2.97 | 3.31 | 3.51 | 45 |
+| 2024/25 | €45 | 2.07 | 2.19 | 2.42 | 2.72 | 3.09 | 5.71 | 136 |
+| 2025/26 | €35 | 2.49 | 2.68 | 2.95 | 3.45 | 4.20 | 8.04 | 24 |
+| 2026/27 so far | €88 | 2.00 | 2.17 | 2.48 | 3.28 | 3.69 | 4.98 | 3 |
+
+* **Below about 33 GW the curve is the same shape every winter once gas is divided out**, within
+  ±12%. So history from earlier winters is usable for the bulk of the curve.
+* **The ratio is not quite the right normalisation.** Within a band, price ≈ £23 + b × TTF, and the
+  £23 doesn't scale with gas (carbon cost and other fixed adders). Dividing by **(TTF + 12)** removes
+  most of the remaining year-to-year spread (20–25 GW band: 1.65–1.93 against 2.17–2.68 for the
+  plain ratio). Part 1's "price ÷ TTF" candidate should be "price ÷ (TTF + c)".
+* **Above about 33 GW the curve is not stable.** The same residual demand gave £101 in 2023/24, £270
+  in 2024/25, £223 in 2025/26 and £410 on 9 Nov. Residual demand alone doesn't set the scarcity
+  price: what matters is how much plant is available on the day.
+* 24 Jun 2026 shows the same thing from the other side: £381 at only 27 GW residual demand
+  (price ÷ TTF = 9.3, the second-highest in three years), in the summer maintenance season.
+* 9 Nov in context: residual demand peaked at 37.1 GW. Each of the last three winters went higher
+  (39.4–39.5 GW). **It was tight for November, but not unprecedented.**
+
+## 7. E2: NESO's own margin forecast flags the spike days (`margin.py`)
+
+NESO publishes a daily "National Surplus" for each of the next 14 days (available plant, including
+forecast wind, minus peak demand and reserve). The app already downloads it and stores it on every
+forecast row as `opmr_national_surplus`. **No feature set uses it.** The model gets
+`dispatchable_capacity` instead, which is the same figure without demand subtracted.
+
+NESO's surplus for 9 Nov, by publication date: 11.0 GW (26 Oct), 8.0 (1 Nov), 6.4 (4 Nov),
+5.3 (5 Nov), **3.4 GW (7 Nov, two days ahead)**. For 6 Nov it was 3.9 GW two days ahead. Those were
+the two lowest values of the four weeks. The model's `dispatchable_capacity` for the same days was
+49.9 and 52.9 GW, in the middle of its range.
+
+Across 1,222 days since July 2023, taking a "spike day" as the top 5% of daily peak ÷ (TTF + 12):
+
+| signal known in advance | AUC for spike days |
+|---|---|
+| **NESO surplus, 2 days ahead** | **0.91** |
+| NESO surplus, 3 / 4 / 7 days ahead | 0.88 / 0.88 / 0.80 |
+| `dispatchable_capacity` (what the model has) | 0.60 |
+| *actual* peak residual demand (not knowable in advance) | 0.83 |
+
+Winter days by 2-day-ahead surplus:
+
+| surplus | days | median peak ÷ (TTF+12) | 90th pct | share setting a new 60-day high |
+|---|---|---|---|---|
+| under 2 GW | 55 | 2.98 | 5.49 | 15% |
+| 2–4 GW | 59 | 2.65 | 3.49 | 3% |
+| 4–6 GW | 90 | 2.46 | 2.94 | 1% |
+| 6–8 GW | 89 | 2.33 | 2.69 | 0% |
+| 8–12 GW | 175 | 2.26 | 2.50 | 0% |
+| over 12 GW | 115 | 2.10 | 2.41 | 0% |
+
+* **A published two-day-ahead number ranks spike days better than the actual residual demand
+  does**, because it includes plant availability. It is the scarcity signal the model is missing.
+* It flags the day, not the size. 9 Nov's peak (4.24 normalised) was above the 90th percentile for
+  its surplus band (3.49).
+* The app computes `dispatchable_capacity` as availability + interconnector import − reserve −
+  constrained plant. NESO's own surplus is availability − peak demand − reserve (checked on five
+  records): interconnectors and constrained plant aren't in it. The note in the data-sources memory
+  had this wrong.
+
+**Incidental:** Yahoo's TTF history endpoint returned only the latest quote on 11 Nov, for any date
+range. The live run only needs the latest value, so forecasts aren't affected, but
+`get_gas_ttf_history` can't backfill at the moment. I haven't checked how long this has been so.
