@@ -25,9 +25,11 @@ for f in sorted(glob.glob(f"{D}/*.csv")):
     lead = (r.index - made).total_seconds() / 86400
     runs.append(r[(lead >= 2) & (lead < 4)].assign(run=made))  # 0-1 d is GB60 passthrough, not the model
 r = pd.concat(runs)
-p = pd.DataFrame(PriceHistory.objects.filter(date_time__gte=r.index.min()).values("date_time", "day_ahead")).set_index("date_time").day_ahead
+p = pd.DataFrame(list(PriceHistory.objects.filter(date_time__gte=r.index.min()).values("date_time", "day_ahead")), columns=["date_time", "day_ahead"]).set_index("date_time").day_ahead
 gbday = lambda i: i.tz_convert("GB").tz_localize(None).normalize()
 r = r.join(p.rename("actual"), how="inner")
+if r.empty:
+    raise SystemExit("nothing scored yet: no 2-4 d target has settled")
 r["day"] = gbday(r.index)
 hour = r.index.tz_convert("GB").hour
 cols = ["base"] + CANDS
@@ -47,7 +49,7 @@ t = pd.DataFrame({
     "false_alarms": r[ordinary].groupby(["run", "day"])[cols].max().ge(ALARM).sum(),
 })
 pd.set_option("display.width", 250)
-print(f"{D}: {r.run.nunique()} runs, target days {r.day.min():%d %b} - {r.day.max():%d %b}, {len(r)} slot forecasts at 2-4 d")
+print(f"{D}: {r.run.nunique()} runs, {r.day.nunique()} target days ({r.day.min():%d %b} - {r.day.max():%d %b}), {len(r)} slot forecasts at 2-4 d")
 print(f"event budget: tight days {len(hi)}/{NEED_TIGHT}, low days {len(lo)}/{NEED_LOW}")
 print(t.round(2).to_string())
 ok = (t.RMSE <= t.RMSE.base) & (t.tight_days_won > 0.5) & (t.low_days_won > 0.5) & (t.false_alarms <= t.false_alarms.base)

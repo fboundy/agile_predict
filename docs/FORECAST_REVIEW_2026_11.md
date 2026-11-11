@@ -579,6 +579,8 @@ spike days, and gives back the gain on low slots (31% → 23%). Named-day peaks,
 
   Event budget: 10 tight days and 5 low days. Before that the script prints "so far", not a verdict.
   A candidate must pass all four. No re-scoring on a new metric.
+* Reminder: `bin/shadow_remind.sh` runs the scorer daily at 12:40 on the dev box and sends one ntfy
+  push when seven target days have been scored (interim) and one when the event budget is met.
 
 ### 15.3 Replay over the forecasts stored on dev (`shadow_replay.py`, scored by `shadow_score.py`)
 
