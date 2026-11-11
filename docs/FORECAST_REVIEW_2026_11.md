@@ -202,3 +202,80 @@ Winter days by 2-day-ahead surplus:
 **Incidental:** Yahoo's TTF history endpoint returned only the latest quote on 11 Nov, for any date
 range. The live run only needs the latest value, so forecasts aren't affected, but
 `get_gas_ttf_history` can't backfill at the moment. I haven't checked how long this has been so.
+
+## 8. E3: what the stored forecasts got wrong, and how (`forensics.py`)
+
+Stored dev forecasts for target dates from 14 Oct, scored against outturn (£/MWh). Dev ran the
+production feature set until 30 Oct 17:33 UTC and `full_fr_eu` (adds continental wind) after.
+
+**(a) The forecast is flat, but it is not mis-scaled.** Regress actual on forecast; a slope above 1
+means stretching the forecast would help.
+
+| horizon | slope | sd(forecast) ÷ sd(actual) | corr | RMSE | RMSE after the best in-sample stretch |
+|---|---|---|---|---|---|
+| 1–2 d | 1.07 | 0.81 | 0.87 | 33.5 | 33.2 |
+| 2–4 d | 1.09 | 0.70 | 0.76 | 44.3 | 43.3 |
+| 4–7 d | 1.04 | 0.64 | 0.67 | 49.2 | 46.9 |
+| 7–15 d | 1.18 | 0.50 | 0.59 | 57.4 | 53.0 |
+
+The forecast has 50–80% of the actual spread, yet the slope is close to 1. That is what an honest
+forecast with limited information looks like: it hedges towards the middle by about the right
+amount. Stretching it (the affine fix from the September trial) buys 1 £/MWh at 2–4 d even with the
+coefficient fitted on the same data. **Part 1's "tail bias" tables overstate the fault**: any
+imperfect forecast is biased low on the highest actuals. The fix has to be more information about
+which days are extreme, not more amplitude.
+
+**(b) Three-quarters of the error is the day's level, not its shape.** 2–4 d MSE 1966 = level 1448
+(74%) + within-day shape 518. The shape error is concentrated at 07:00 (−21) and 15:00–19:00
+(−19 to −25): the peaks are under-called on average, not only on spike days.
+
+**(c) Errors persist for a day, not for three.** Autocorrelation of the daily level error: 0.57 at
+1 day, 0.25 at 2, 0.11 at 3, negative after. Carrying the last known error forward cuts daily RMSE
+34.1 → 27.4 at a 1-day lag, but only 34.4 → 33.0 at 2 days and 34.8 → 34.4 at 3 (in-sample, so
+upper bounds). A 2–4 d forecast can only use errors that are 2+ days old, so **an error-correction
+term is not worth building**.
+
+**(d) What the errors line up with.** Correlation of the 2–4 d error with stored inputs
+(all slots / daily mean / evening peak):
+
+| input | all slots | daily | evening peak |
+|---|---|---|---|
+| continental wind (`eu_wind_cf`) | 0.57 | 0.68 | 0.46 |
+| embedded wind | 0.33 | 0.43 | 0.25 |
+| NESO surplus (stored, unused) | 0.33 | 0.41 | 0.34 |
+| residual demand, derived | −0.33 | −0.36 | −0.30 |
+| `bm_wind` (stored, unused) | 0.28 | 0.37 | 0.27 |
+| demand | −0.23 | −0.22 | −0.26 |
+| gas price | −0.15 | −0.19 | −0.05 |
+| `dispatchable_capacity` | −0.03 | −0.03 | −0.10 |
+
+Positive = forecast too high when the input is high. The model under-reacts to wind in both
+directions, and continental wind is the strongest single line.
+
+Split by era (daily means):
+
+| era | days | continental wind | embedded wind | NESO surplus |
+|---|---|---|---|---|
+| production set (to 30 Oct) | 21 | +0.83 | +0.52 | +0.56 |
+| `full_fr_eu` (from 30 Oct) | 11 | +0.21 | −0.01 | −0.02 |
+
+* Adding continental wind removed most of the wind-shaped error, on 11 days. That is the first
+  live evidence for the October recommendation, and it is thin.
+* **Caution for the NESO surplus:** its correlation with the daily error also vanished once
+  continental wind was in. Generator Availability includes forecast wind, so part of what the
+  surplus knows is wind the model can already see. E4 has to test it *on top of* the wind features.
+
+**(e) But the peaks on tight days were still missed.** Evening-peak (16–19) error at 2–4 d by NESO
+surplus:
+
+| surplus | slots | days | mean error | actual | forecast |
+|---|---|---|---|---|---|
+| under 4 GW | 13 | 1 | −60 | 309 | 249 |
+| 4–6 GW | 181 | 6 | −58 | 315 | 258 |
+| 6–8 GW | 275 | 12 | −9 | 257 | 248 |
+| 8–10 GW | 556 | 19 | −24 | 239 | 214 |
+| over 10 GW | 521 | 15 | −13 | 189 | 176 |
+
+Seven days under 6 GW, and the forecast barely moved between the 6–8 and 4–6 GW bands while the
+outturn rose £58. These include 6 and 9 Nov, which fall in the `full_fr_eu` era: continental wind
+fixed the daily level and not the scarcity peak.
