@@ -25,7 +25,11 @@ from prices.management.commands.update_worker import maybe_enqueue_catchup
 from prices.models import AgileData, ExternalForecast, ForecastData, Forecasts, PriceHistory, UpdateJob
 from prices.views import _update_options
 
+# These classes exercise the classic (v1) history view, which redirects to v2 from V1_SUNSET.
+classic_site_live = patch("prices.views.v1_retired", new=lambda: False)
 
+
+@classic_site_live
 class HistoryViewTests(TestCase):
     def test_history_view_renders_for_region_and_offset(self):
         response = self.client.get("/history/?offset_days=2")
@@ -214,6 +218,7 @@ class HistoryViewTests(TestCase):
         self.assertContains(response, "1 predictions for &lt;1d ahead")
 
 
+@classic_site_live
 class HistoryDateWindowTests(TestCase):
     """The rolling windows (Last Week / 2 Weeks / Month) must run to the end of
     confirmed pricing, not stop dead at "now". Agile prices are published ahead
@@ -1395,3 +1400,31 @@ class ForecastSaveTests(TestCase):
         forecast = Forecasts.objects.create(name="2026-05-01 05:15")
         with self.assertRaises(Exception):
             df_to_Model_bulk(self.frame(forecast, [1.0, None, 3.0]).astype({"agile_pred": object}), AgileData)
+
+
+class V1SunsetTests(TestCase):
+    def test_classic_page_carries_the_switch_off_notice_before_the_sunset(self):
+        with patch("prices.views.v1_retired", return_value=False):
+            response = self.client.get("/about")
+        self.assertContains(response, "switched off on 1 December 2026")
+
+    def test_classic_pages_redirect_to_v2_after_the_sunset(self):
+        with patch("prices.views.v1_retired", return_value=True):
+            for old, new in [
+                ("/G/?days=7", "/v2/G/?days=7"),
+                ("/history/G/?window=last-week", "/v2/history/G/?window=last-week"),
+                ("/history/", "/v2/history/"),
+                ("/stats", "/v2/stats/"),
+                ("/about", "/v2/about/"),
+            ]:
+                response = self.client.get(old)
+                self.assertEqual((response.status_code, response["Location"]), (301, new), old)
+
+    def test_sunset_is_midnight_on_1_december_gb_time(self):
+        from prices.views import V1_SUNSET, v1_retired
+
+        with patch("prices.views.timezone.now", return_value=V1_SUNSET - timedelta(seconds=1)):
+            self.assertFalse(v1_retired())
+        with patch("prices.views.timezone.now", return_value=V1_SUNSET):
+            self.assertTrue(v1_retired())
+

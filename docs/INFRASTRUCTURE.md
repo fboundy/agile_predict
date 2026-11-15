@@ -63,8 +63,9 @@ idle-stop; cost is a fixed per-second rate regardless of utilisation.
 ### Process commands
 
 ```
-web    = gunicorn --bind :8000 --workers 2 --timeout 60 --graceful-timeout 30 \
-                  --max-requests 800 --max-requests-jitter 200 config.wsgi
+web    = deploy/web-entrypoint.sh   # nginx :8000 -> gunicorn (unix socket)
+         gunicorn --workers 3 --timeout 60 --graceful-timeout 30 \
+                  --max-requests 200 --max-requests-jitter 50 config.wsgi
 worker = python manage.py update_worker
 ```
 

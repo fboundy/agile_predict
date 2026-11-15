@@ -43,7 +43,7 @@ console_command = '/code/manage.py shell'
   # whether the proxy worked. Retune after observing nginx-backed behaviour.
   [http_service.concurrency]
     type = 'requests'
-    soft_limit = 4
+    soft_limit = 3  # = gunicorn workers (deploy/web-entrypoint.sh)
     hard_limit = 40
 
   [[http_service.checks]]
