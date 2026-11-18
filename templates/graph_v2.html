@@ -91,6 +91,13 @@
       <h5 class="mb-0">{{ region_name }}{% if not is_raw_day_ahead_region and region != "X" %} <span class="text-body-secondary fw-normal fs-6">(Region {{ region }})</span>{% endif %}</h5>
       {% if summary.forecast_updated %}<div class="text-body-secondary" style="font-size:.8rem">Forecast updated {{ summary.forecast_updated }}</div>{% endif %}
     </div>
+    {# The export choice is remembered per region, so make it impossible to miss. #}
+    {% if show_export %}
+    <div class="alert alert-warning py-1 px-2 mb-0 small" role="status">
+      <strong>Showing Agile Outgoing (export) prices</strong> &middot;
+      <a class="alert-link" href="?days={{ days }}{% if not show_band %}&band=0{% endif %}&export=0{% if show_gen %}&gen=1{% endif %}{% if show_fc_gen %}&fg=1{% endif %}{% if show_dc %}&dc=1{% endif %}{% if show_af %}&af=1{% endif %}{% if show_x2r %}&x2r=1{% endif %}{% if show_al %}&al=1{% endif %}{% if show_overlap %}&overlap=1{% endif %}{% if summary_pos != "above" %}&summary={{ summary_pos }}{% endif %}{% for id in selected_ids %}&fc={{ id }}{% endfor %}">Switch to import</a>
+    </div>
+    {% endif %}
   </div>
 
   {% comment %} ======== Summary cards — rendered above or below the chart, or not at

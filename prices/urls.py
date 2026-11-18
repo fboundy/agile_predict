@@ -27,6 +27,7 @@ from .views import (
     run_update,
     stats_plot,
     update_status,
+    v1_page,
 )
 
 urlpatterns = [
@@ -36,14 +37,15 @@ urlpatterns = [
     path("update/latest_agile", run_latest_agile, name="run_latest_agile"),
     path("update/status", update_status, name="update_status"),
     path("stats/plot/<path:filename>", stats_plot, name="stats_plot"),
-    path("color", ColorView.as_view(), name="color"),
-    path("stats", StatsView.as_view(), name="api_how_to"),
-    path("api_how_to", ApiHowToView.as_view(), name="api_how_to"),
-    path("glossary", GlossaryView.as_view(), name="glossary"),
-    path("about", AboutView.as_view(), name="about"),
-    path("history", HistoryView.as_view(), name="history"),
-    path("history/", HistoryView.as_view(), name="history"),
-    path("history/<str:region>/", HistoryView.as_view(), name="history"),
+    # Classic (v1) pages: they redirect to their v2 equivalent from V1_SUNSET (1 Dec 2026).
+    path("color", v1_page(ColorView.as_view(), "/v2/X/"), name="color"),
+    path("stats", v1_page(StatsView.as_view(), "/v2/stats/"), name="api_how_to"),
+    path("api_how_to", v1_page(ApiHowToView.as_view(), "/v2/api_how_to/"), name="api_how_to"),
+    path("glossary", v1_page(GlossaryView.as_view(), "/v2/about/"), name="glossary"),
+    path("about", v1_page(AboutView.as_view(), "/v2/about/"), name="about"),
+    path("history", v1_page(HistoryView.as_view(), "/v2/history/"), name="history"),
+    path("history/", v1_page(HistoryView.as_view(), "/v2/history/"), name="history"),
+    path("history/<str:region>/", v1_page(HistoryView.as_view(), "/v2/history/{region}/"), name="history"),
     path("v2/", GraphV2View.as_view(), name="graph_v2"),
     path("v2/history/", HistoryV2View.as_view(), name="history_v2"),
     path("v2/history/<str:region>/", HistoryV2View.as_view(), name="history_v2_region"),
@@ -59,6 +61,6 @@ urlpatterns = [
     path("v2/forecasts/", forecast_list_json, name="forecast_list_json"),
     path("v2/<str:region>/ext-forecast/", ext_forecast_json, name="ext_forecast_json"),
     path("v2/<str:region>/", GraphV2View.as_view(), name="graph_v2_region"),
-    path("<str:region>/", GraphFormView.as_view(), name="graph"),
+    path("<str:region>/", v1_page(GraphFormView.as_view(), "/v2/{region}/"), name="graph"),
     path("", RedirectView.as_view(url="/v2/X/", permanent=False)),
 ]

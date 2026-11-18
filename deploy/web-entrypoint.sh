@@ -16,14 +16,16 @@ set -euo pipefail
 SOCKET=/run/gunicorn.sock
 rm -f "$SOCKET"
 
+# 3 workers, recycled every ~200 requests: a worker keeps whatever memory its
+# biggest request needed, and 4 of them outgrew the 1 GB VM (OOM kills, Nov 2026).
 gunicorn \
     --bind "unix:$SOCKET" \
     --umask 0 \
-    --workers "${GUNICORN_WORKERS:-4}" \
+    --workers "${GUNICORN_WORKERS:-3}" \
     --timeout 60 \
     --graceful-timeout 30 \
-    --max-requests 800 \
-    --max-requests-jitter 200 \
+    --max-requests 200 \
+    --max-requests-jitter 50 \
     config.wsgi &
 gunicorn_pid=$!
 

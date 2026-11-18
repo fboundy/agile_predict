@@ -112,9 +112,11 @@
                             </ul>
                             <ul class="navbar-nav ms-auto mb-2 mb-lg-0">
                                 {% if is_v2 %}
+                                {% if not v1_retired %}
                                 <li class="nav-item">
                                     <a class="nav-link" style="font-size:.8rem;opacity:.7" href="{{ classic_url|default:'/' }}">Classic UI</a>
                                 </li>
+                                {% endif %}
                                 {% else %}
                                 <li class="nav-item">
                                     <a class="nav-link" style="font-size:.8rem;opacity:.7" href="/v2{{ request.path }}">Updated UI</a>
@@ -127,6 +129,15 @@
             </div>
         </header>
 
+        {% if not is_v2 %}
+        <div class="container-lg mt-3">
+            <div class="alert alert-warning mb-0" role="alert">
+                <strong>The classic site is being switched off on 1 December 2026.</strong>
+                From then, these pages will redirect to the updated site, which has the same forecasts, history and API.
+                <a href="/v2{{ request.path }}" class="alert-link">Open this page on the updated site</a>.
+            </div>
+        </div>
+        {% endif %}
         <div style="width: 100%; overflow: hidden">{% block content %} {% endblock content %}</div>
 
         <footer class="container-lg py-4">

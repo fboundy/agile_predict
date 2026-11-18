@@ -87,7 +87,6 @@ class AccuracyAPIView(APIView):
 
         forecasts = (
             AgileData.objects.filter(region=region, date_time__gte=data_from)
-            .select_related("forecast")
             .order_by("date_time")
         )
         actual_rows = list(PriceHistory.objects.filter(
@@ -99,30 +98,27 @@ class AccuracyAPIView(APIView):
         else:
             actual_by_date_time = {}
 
-        forecasts = list(forecasts)
-        predicted_export_by_id = {}
+        # Named tuples, not model instances: 30 days of rows as model objects cost a worker ~140 MB.
+        forecasts = list(forecasts.values_list("date_time", "forecast__created_at", "agile_pred", named=True))
+        predicted = [forecast.agile_pred for forecast in forecasts]
         if export and forecasts:
-            converted = import_agile_to_export_agile(
-                pd.Series(index=pd.to_datetime([forecast.date_time for forecast in forecasts]), data=[forecast.agile_pred for forecast in forecasts]),
+            predicted = list(import_agile_to_export_agile(
+                pd.Series(index=pd.to_datetime([forecast.date_time for forecast in forecasts]), data=predicted),
                 region=region,
-            )
-            predicted_export_by_id = {forecast.pk: value for forecast, value in zip(forecasts, converted)}
+            ))
 
-        for forecast in forecasts:
+        for forecast, prediction in zip(forecasts, predicted):
             actual = actual_by_date_time.get(forecast.date_time)
             if actual is None:
                 continue
 
-            lead_hours = (forecast.date_time - forecast.forecast.created_at).total_seconds() / 3600
+            lead_hours = (forecast.date_time - forecast.forecast__created_at).total_seconds() / 3600
             if lead_hours < 0:
                 continue
 
             for label, start_hour, end_hour in self.buckets:
                 if start_hour <= lead_hours and (end_hour is None or lead_hours < end_hour):
-                    predicted = forecast.agile_pred
-                    if export:
-                        predicted = predicted_export_by_id[forecast.pk]
-                    bucket_values[label].append(predicted - actual)
+                    bucket_values[label].append(prediction - actual)
                     date_times.append(forecast.date_time)
                     break
 

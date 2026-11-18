@@ -10,11 +10,12 @@ import plotly.graph_objects as go
 from django.conf import settings
 from django.db.models import Count, Sum
 from django.core.cache import cache
-from django.http import HttpResponse, HttpResponseForbidden, JsonResponse
+from django.http import HttpResponse, HttpResponseForbidden, HttpResponsePermanentRedirect, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils import timezone
+from zoneinfo import ZoneInfo
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
@@ -698,7 +699,7 @@ class HistoryView(TemplateView):
     def build_predicted_series(self, forecast_rows, start_hours, end_hours, value_attr="agile_pred"):
         predicted_by_date_time = {}
         for row in forecast_rows:
-            lead_hours = (row.date_time - row.forecast.created_at).total_seconds() / 3600
+            lead_hours = (row.date_time - row.forecast__created_at).total_seconds() / 3600
             if lead_hours < start_hours or lead_hours >= end_hours:
                 continue
             if row.date_time not in predicted_by_date_time:
@@ -899,17 +900,19 @@ class HistoryView(TemplateView):
             actual = pd.Series(dtype=float)
 
         forecast_value_attr = "day_ahead" if raw_day_ahead else "agile_pred"
+        # Named tuples, not model instances: a 14-day window is ~50k rows, and two
+        # model objects per row (row + its forecast) cost a worker ~150 MB.
         if raw_day_ahead:
             forecast_rows = list(
                 ForecastData.objects.filter(date_time__gte=start, date_time__lte=end)
-                .select_related("forecast")
                 .order_by("date_time", "-forecast__created_at")
+                .values_list("date_time", "forecast__created_at", forecast_value_attr, named=True)
             )
         else:
             forecast_rows = list(
                 AgileData.objects.filter(region=data_region, date_time__gte=start, date_time__lte=end)
-                .select_related("forecast")
                 .order_by("date_time", "-forecast__created_at")
+                .values_list("date_time", "forecast__created_at", forecast_value_attr, named=True)
             )
         predicted = self.build_predicted_series(
             forecast_rows,
@@ -939,7 +942,9 @@ class HistoryView(TemplateView):
                     region="G" if raw_day_ahead else data_region,
                     date_time__gte=start,
                     date_time__lte=end,
-                ).order_by("date_time", "-source_created_at")
+                )
+                .order_by("date_time", "-source_created_at")
+                .values_list("date_time", "source_created_at", "agile_pred", named=True)
             )
 
         # Expose raw data as instance attrs so HistoryV2View can build alternate-unit metrics
@@ -1420,6 +1425,27 @@ class GraphFormView(FormView):
         return self.render_to_response(context=context)
 
 
+# The classic (v1) site is switched off from this moment: its pages redirect to v2.
+V1_SUNSET = datetime(2026, 12, 1, tzinfo=ZoneInfo("Europe/London"))
+
+
+def v1_retired():
+    return timezone.now() >= V1_SUNSET
+
+
+def v1_page(view, v2_url):
+    """A classic page that, from V1_SUNSET, permanently redirects to v2_url (query string kept)."""
+
+    def wrapped(request, *args, **kwargs):
+        if not v1_retired():
+            return view(request, *args, **kwargs)
+        url = v2_url.format(**kwargs)
+        query = request.META.get("QUERY_STRING")
+        return HttpResponsePermanentRedirect(f"{url}?{query}" if query else url)
+
+    return wrapped
+
+
 class V2NavMixin:
     """Injects v2 navigation context so all base.html navbar links stay within /v2/."""
 
@@ -1440,6 +1466,7 @@ class V2NavMixin:
                 "costs_link": "/v2/costs/" if (Path(settings.BASE_DIR) / "logs" / "uptime_monitor.log").exists() else "",
                 "home_link": "/v2/X/",
                 "is_v2": True,
+                "v1_retired": v1_retired(),
                 "classic_url": "/X/",
                 "current_page": self._nav_page,
             }
